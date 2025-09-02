@@ -145,124 +145,220 @@ class MLResearchAssistant:
         return None
     
     def _load_research_template(self) -> str:
-        """Load the comprehensive research plan template for ML topics."""
+        """Load the task decomposition and model architecture analysis template."""
         return """
-You are an expert ML researcher and academic advisor. Generate a comprehensive research plan for the given machine learning topic or project that covers all aspects from theory to deployment.
+You are an expert ML researcher specializing in task decomposition and model architecture analysis. Given a specific machine learning task, provide a comprehensive analysis that decomposes the task into fundamental properties and identifies suitable model architectures.
 
 Structure your response as follows:
 
-# Research Plan: {topic}
+# Task Decomposition & Architecture Analysis: {topic}
 
-## 1. Executive Summary
-- Brief overview of the research area
-- Key objectives and research questions
-- Expected outcomes and impact
-- Theoretical and practical contributions
 
-## 2. Theoretical Foundations
-- Mathematical formulations and core concepts
-- Algorithmic principles and innovations
-- Theoretical analysis and proofs (where applicable)
-- Connections to existing theory
 
-## 3. Background & Literature Review
-- Current state of the field
-- Key papers and researchers to study (provide specific paper titles and authors)
-- Identified research gaps and opportunities
-- Relevant datasets and benchmarks
-- Comparison with existing approaches
+## 2. Task Property Decomposition Framework
+Systematically analyze the given task along multiple dimensions:
 
-## 4. Practical Implementation
-- Programming languages and frameworks to use
-- Code architecture and design patterns
-- Key algorithms to implement
-- Development environment setup
-- Version control and collaboration tools
+### 2.1 Temporal Properties
+- **Time-invariant vs Time-variant**: Does the task require understanding temporal patterns?
+- **Lag-invariant vs Lag-sensitive**: Is the timing/delay between events important?
+- **Sequential vs Non-sequential**: Does order of inputs matter?
+- **Stationary vs Non-stationary**: Do statistical properties change over time?
+- **Short-term vs Long-term dependencies**: What temporal range is relevant?
 
-## 5. Real-World Applications
-- Industry use cases and applications
-- Business value and impact assessment
-- Target users and stakeholders
-- Market analysis and competitive landscape
-- Ethical considerations and limitations
+### 2.2 Input/Output Properties
+- **Fixed-length vs Variable-length**: Are input/output sequences of consistent size?
+- **Uni-modal vs Multi-modal**: Single or multiple types of input data?
+- **Structured vs Unstructured**: Is there inherent structure in the data?
+- **Dense vs Sparse**: Data density characteristics
+- **Continuous vs Discrete**: Nature of the data values
 
-## 6. System Architecture & Deployment
-- System design and architecture
-- Scalability considerations
+### 2.3 Learning Properties
+- **Supervised vs Unsupervised vs Semi-supervised**: Label availability
+- **Online vs Batch learning**: Learning paradigm requirements
+- **Transfer learning potential**: Can pre-trained models be leveraged?
+- **Few-shot vs Many-shot**: Data availability constraints
+- **Incremental vs Static**: Does the model need to adapt over time?
+
+### 2.4 Computational Properties
+- **Real-time vs Offline**: Latency requirements
+- **Memory constraints**: Working memory vs long-term memory needs
+- **Scalability requirements**: How does complexity grow with data?
+- **Interpretability needs**: Black-box vs explainable requirements
+- **Resource constraints**: Computational budget limitations
+
+### 2.5 Domain-Specific Properties
+- **Spatial locality**: Are nearby elements more related?
+- **Hierarchical structure**: Multi-level patterns or representations
+- **Invariance requirements**: Translation, rotation, scale invariance needs
+- **Noise tolerance**: Robustness requirements
+- **Generalization scope**: Domain transfer expectations
+
+## 3. Property-Architecture Mapping Matrix
+Create a systematic mapping between identified task properties and suitable architectures:
+
+### 3.1 Temporal Processing Architectures
+- **Recurrent Neural Networks (RNNs)**
+  - LSTM/GRU for long-term dependencies
+  - Vanilla RNN for simple temporal patterns
+  - Bidirectional variants for full sequence context
+- **Transformer-based Models**
+  - Self-attention for parallel temporal processing
+  - Positional encoding for sequence awareness
+  - Temporal transformers for time series
+- **Convolutional Temporal Models**
+  - 1D CNNs for local temporal patterns
+  - Dilated convolutions for multi-scale temporal features
+  - Temporal convolutional networks (TCNs)
+
+### 3.2 Variable-Length Processing Architectures
+- **Sequence-to-Sequence Models**
+  - Encoder-decoder architectures
+  - Attention mechanisms for alignment
+  - Copy mechanisms for variable output
+- **Dynamic Neural Networks**
+  - Adaptive computation time models
+  - Dynamic routing networks
+  - Variable-depth networks
+
+### 3.3 Multi-Modal and Structured Data Architectures
+- **Graph Neural Networks (GNNs)**
+  - For structured/relational data
+  - Graph attention networks
+  - Temporal graph networks
+- **Fusion Architectures**
+  - Early vs late fusion strategies
+  - Cross-modal attention
+  - Multi-stream architectures
+
+### 3.4 Memory and Context Architectures
+- **Memory-Augmented Networks**
+  - Neural Turing Machines
+  - Differentiable Neural Computers
+  - Memory networks
+- **Hierarchical Models**
+  - Multi-scale processing
+  - Pyramidal networks
+  - Hierarchical attention
+
+## 4. Architecture Selection Methodology
+Provide a systematic approach for choosing optimal architectures:
+
+### 4.1 Property-Driven Selection Process
+1. **Property Identification**: Map task to property checklist
+2. **Constraint Analysis**: Identify hard constraints (computational, data, time)
+3. **Architecture Filtering**: Eliminate incompatible architectures
+4. **Multi-Criteria Evaluation**: Score remaining candidates
+5. **Ensemble Consideration**: Combine complementary architectures
+
+### 4.2 Decision Trees and Flowcharts
+- Create decision trees for architecture selection
+- Provide flowcharts for systematic evaluation
+- Include trade-off analysis frameworks
+
+### 4.3 Evaluation Metrics Framework
+- Task-specific performance metrics
+- Computational efficiency metrics
+- Generalization capability assessment
+- Robustness evaluation criteria
+
+## 5. Literature Review and Existing Approaches
+Survey current research on task decomposition and architecture design:
+
+### 5.1 Theoretical Foundations
+- Key papers on task decomposition in ML
+- Universal approximation theorems for different architectures
+- Inductive biases and their relationship to task properties
+- Meta-learning approaches for architecture selection
+
+### 5.2 Empirical Studies
+- Comparative studies of architectures on similar tasks
+- Ablation studies revealing important properties
+- Architecture search methodologies (NAS)
+- Benchmark datasets and their property profiles
+
+### 5.3 Recent Advances
+- Automated architecture design
+- Property-aware neural architecture search
+- Foundation models and their property coverage
+- Hybrid and modular architectures
+
+## 6. Practical Implementation Framework
+
+### 6.1 Task Analysis Pipeline
+```
+Input Task → Property Extraction → Architecture Mapping → Selection Algorithm → Implementation Plan
+```
+
+### 6.2 Tools and Methodologies
+- Property profiling tools and checklists
+- Architecture comparison frameworks
+- Implementation templates for common patterns
+- Evaluation harnesses for systematic comparison
+
+### 6.3 Code Architecture Patterns
+- Modular design for property-based selection
+- Abstract base classes for different architecture families
+- Configuration-driven architecture instantiation
+- Automated hyperparameter optimization
+
+## 7. Case Studies and Examples
+Provide concrete examples of the decomposition process:
+
+### 7.1 Example Task Decompositions
+- Time series forecasting task breakdown
+- Natural language processing task analysis
+- Computer vision task property mapping
+- Multi-modal learning scenario decomposition
+
+### 7.2 Architecture Selection Examples
+- Step-by-step selection process for each case study
+- Justification for chosen architectures
+- Alternative architectures and trade-offs
+- Performance comparison results
+
+## 8. Experimental Design and Validation
+
+### 8.1 Systematic Evaluation Protocol
+- Controlled experiments across property dimensions
+- Ablation studies for individual properties
+- Cross-validation strategies
+- Statistical significance testing
+
+### 8.2 Benchmarking Framework
+- Property-aware benchmark creation
+- Standardized evaluation metrics
+- Baseline architecture comparisons
+- Reproducibility guidelines
+
+## 9. Future Research Directions
+
+### 9.1 Open Research Questions
+- Automated property identification from task descriptions
+- Dynamic architecture adaptation based on observed properties
+- Property-architecture interaction effects
+- Theoretical bounds on architecture-property matching
+
+### 9.2 Emerging Trends
+- Neural architecture search guided by task properties
+- Meta-learning for architecture selection
+- Compositional architectures
+- Foundation model adaptation strategies
+
+## 10. Tools and Resources
+
+### 10.1 Software Tools
+- Property analysis libraries
+- Architecture search frameworks
+- Visualization tools for property-architecture mapping
+- Benchmark datasets organized by properties
+
+### 10.2 Development Guidelines
+- Best practices for implementing property-aware systems
+- Common pitfalls and how to avoid them
 - Performance optimization strategies
-- Deployment platforms and infrastructure
-- Monitoring and maintenance plans
-- API design and integration
+- Debugging and validation approaches
 
-## 7. Research Methodology & Experimentation
-- Experimental design and validation methods
-- Evaluation metrics and benchmarks
-- Data collection and preprocessing
-- Statistical analysis approach
-- Reproducibility considerations
-
-## 8. Technical Requirements
-- Required skills and knowledge areas
-- Software tools and frameworks
-- Hardware requirements and computational resources
-- Data requirements and sources
-- Budget and resource planning
-
-## 9. Implementation Timeline
-### Phase 1: Foundation & Theory (Weeks 1-4)
-- Literature review and theoretical study
-- Mathematical formulation and analysis
-- Environment setup and tool familiarization
-
-### Phase 2: Prototype Development (Weeks 5-8)
-- Core algorithm implementation
-- Initial proof of concept
-- Basic testing and validation
-
-### Phase 3: Full Implementation (Weeks 9-12)
-- Complete system development
-- Advanced features and optimization
-- Comprehensive testing
-
-### Phase 4: Evaluation & Validation (Weeks 13-16)
-- Extensive experimentation
-- Performance evaluation and comparison
-- Results analysis and interpretation
-
-### Phase 5: Deployment & Documentation (Weeks 17-20)
-- System deployment and integration
-- Documentation and user guides
-- Paper writing and presentation preparation
-
-## 10. Risk Assessment & Mitigation
-- Technical challenges and solutions
-- Resource limitations and alternatives
-- Timeline risks and contingency plans
-- Data availability and quality issues
-
-## 11. Success Metrics & Evaluation
-- Quantitative evaluation criteria
-- Qualitative assessment methods
-- Academic publication goals
-- Industry adoption metrics
-- Long-term impact assessment
-
-## 12. Resources & Next Steps
-- Essential papers and tutorials to study
-- Online courses and learning resources
-- Relevant conferences and journals
-- Open-source implementations to examine
-- Community and collaboration opportunities
-
-Provide specific, actionable recommendations throughout the plan that cover theoretical understanding, practical implementation, real-world applications, and deployment strategies.
-
-## 8. Resources & References
-- Essential papers to read
-- Useful tutorials and courses
-- Relevant conferences and journals
-- Open-source implementations
-
-Provide specific, actionable recommendations throughout the plan.
+Provide specific, actionable analysis that researchers can use to systematically approach any ML task through property decomposition and informed architecture selection.
 """
 
     def generate_research_plan(self, topic: str) -> Dict:
@@ -408,29 +504,29 @@ The plan should be comprehensive enough for both academic research and practical
     def _show_help(self):
         """Show help information."""
         help_text = """
-🔬 ML Research Assistant Commands:
+🔬 ML Task Decomposition & Architecture Analysis:
 
 Available commands:
-- Enter any ML topic or research question to generate a research plan
+- Enter any ML task or problem to generate a decomposition analysis
 - 'exit' - Quit the application
 - 'help' - Show this help message
 
 Examples:
-- "Transformer models for computer vision"
-- "Federated learning privacy preservation"
-- "Graph neural networks for drug discovery"
-- "Self-supervised learning for time series"
+- "Time series forecasting for stock prices"
+- "Real-time object detection in autonomous vehicles"
+- "Multi-modal sentiment analysis from text and images"
+- "Variable-length sequence classification"
+- "Recommendation system with sparse user interactions"
 
-The assistant will generate a comprehensive research plan including:
-✓ Theoretical foundations and mathematical formulations
-✓ Practical implementation with code examples
-✓ Real-world applications and use cases
-✓ Deployment strategies and system architecture
-✓ Literature review guidance
-✓ Experimental design and evaluation
-✓ Timeline and milestones
-✓ Technical requirements
-✓ Success metrics
+The assistant will generate a comprehensive analysis including:
+✓ Task property decomposition (temporal, input/output, learning, computational)
+✓ Property-architecture mapping matrix
+✓ Architecture selection methodology
+✓ Literature review of relevant approaches
+✓ Implementation framework and tools
+✓ Case studies and examples
+✓ Experimental design guidelines
+✓ Future research directions
 """
         print(help_text)
 
@@ -438,26 +534,26 @@ The assistant will generate a comprehensive research plan including:
 def main():
     """Main function to run the ML Research Assistant."""
     parser = argparse.ArgumentParser(
-        description="ML Research Assistant - ChatGPT wrapper for generating ML research plans",
+        description="ML Research Assistant - Task Decomposition & Architecture Analysis tool for generating ML research plans",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python ml_research_assistant.py --topic "Transformer models for time series forecasting"
+  python ml_research_assistant.py --topic "Variable-length sequence classification with temporal dependencies"
   python ml_research_assistant.py --interactive
-  python ml_research_assistant.py --project "Build a recommendation system using graph neural networks"
+  python ml_research_assistant.py --project "Multi-modal sentiment analysis with text and images"
         """
     )
     
     parser.add_argument(
         '--topic', '-t',
         type=str,
-        help='ML research topic to generate a plan for'
+        help='ML task or problem to analyze through property decomposition'
     )
     
     parser.add_argument(
         '--project', '-p',
         type=str,
-        help='ML project description to generate a research plan for'
+        help='ML project description to decompose and analyze for architecture selection'
     )
     
     parser.add_argument(

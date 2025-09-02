@@ -20,8 +20,18 @@ from __future__ import annotations
 import re
 import json
 import math
+import os
 from dataclasses import dataclass, asdict
 from typing import List, Dict, Any, Iterable, Tuple
+
+# Load environment variables
+try:
+    from dotenv import load_dotenv
+    # Load from env.example first, then .env if it exists
+    load_dotenv('env.example')
+    load_dotenv()  # This will override with .env if present
+except ImportError:
+    pass  # dotenv not available, will rely on system environment variables
 
 
 # -------------------------------
@@ -937,6 +947,47 @@ class ModelSuggester:
 
 
 # -------------------------------
+# LLM-based arXiv query summarizer
+# -------------------------------
+def generate_arxiv_query_summary(original_query: str, detected_props: list[str]) -> str:
+    """
+    Combines original query with detected properties to produce a concise arXiv search string.
+    Uses a lightweight LLM call (can be replaced with OpenAI API or local model inference).
+    """
+    import openai
+
+    # Combine the query and properties
+    context_text = f"Original query: {original_query}\nDetected properties: {', '.join(detected_props)}"
+    
+    # Use the exact format that works with LiteLLM proxy
+    model = os.getenv('DEFAULT_MODEL', 'gemini/gemini-2.5-flash')  # dynamically selected
+    api_key = os.getenv('OPENAI_API_KEY')  # load from env
+    base_url = os.getenv('BASE_URL', 'https://agents.aetherraid.dev')  # load from config
+    
+    # Create the prompt content
+    content = f"Create a concise arXiv search string (5-8 keywords) for this research query:\n\n{context_text}\n\nRespond with only the search keywords, no explanation."
+    
+    client = openai.OpenAI(
+        api_key=api_key,
+        base_url=base_url
+    )
+    
+    # Request sent to model set on litellm proxy - using your exact format
+    response = client.chat.completions.create(
+        model=model,
+        messages=[{"content": content, "role": "user"}]
+    )
+    
+    # Get the response content
+    summary = response.choices[0].message.content
+    
+    # Debug output
+    print(f"DEBUG: LLM Response: '{summary}'")
+    
+    return summary
+
+
+# -------------------------------
 # Orchestration
 # -------------------------------
 class DecomposerTool:
@@ -947,6 +998,15 @@ class DecomposerTool:
     def analyze(self, query: str) -> Dict[str, Any]:
         props = self.extractor.extract(query)
         suggestions = self.suggester.suggest(props, query)
+
+        # Generate arXiv query summary
+        detected_prop_names = [p.name for p in props if p.confidence >= 0.5]
+        arxiv_summary = None
+        try:
+            if os.getenv('OPENAI_API_KEY'):
+                arxiv_summary = generate_arxiv_query_summary(query, detected_prop_names)
+        except Exception as e:
+            print(f"Warning: Failed to generate arXiv summary: {e}")
 
         # Prepare minimal clarifiers for common gaps
         names = {p.name for p in props}
@@ -978,6 +1038,7 @@ class DecomposerTool:
         return {
             "detected_properties": [p.to_dict() for p in props],
             "suggested_models": [s.to_dict() for s in suggestions],
+            "arxiv_query_summary": arxiv_summary,
             "missing_or_ambiguous": missing,
             "analysis_summary": self._generate_analysis_summary(props, suggestions),
         }
@@ -1041,13 +1102,13 @@ class DecomposerTool:
 
 if __name__ == "__main__":
     demo_query = (
-   # "I want to train a multilingual sentiment classifier for clinical notes, where each document can be very short or very long, and I need the model to generalize well in few-shot scenarios with limited labeled data.")
-  # "I am interested in detecting anomalies in dynamic social networks, where nodes and edges appear or disappear over time, and the model should capture temporal graph structure as well as sudden changes."
+  #"I want to train a multilingual sentiment classifier for clinical notes, where each document can be very short or very long, and I need the model to generalize well in few-shot scenarios with limited labeled data."
+  #"I am interested in detecting anomalies in dynamic social networks, where nodes and edges appear or disappear over time, and the model should capture temporal graph structure as well as sudden changes."
   
-  #"I need to build an object detection system for autonomous vehicles that can process video frames in real-time with high accuracy. The model should be lightweight enough to run on edge devices and handle varying lighting conditions."
+  "Can you help me design a multilingual sentiment classifier for clinical notes that works well with limited labeled data?"
   #"Can you recommend approaches for predicting stock prices using both historical price data and news sentiment? The sequences have different lengths and I need the model to be interpretable for regulatory compliance."
   #"Need GDPR-compliant model that can be audited and doesn't store personal information."
-  "I need to implement a variational inference algorithm for Dirichlet process mixture models with stick-breaking construction for clustering non-parametric data."
+  #"hi"
     )
 
     tool = DecomposerTool()
@@ -1055,6 +1116,12 @@ if __name__ == "__main__":
 
     print("\n=== Research Query ===")
     print(demo_query)
+
+    print("\n=== arXiv Search Summary ===")
+    if result["arxiv_query_summary"]:
+        print(f"Suggested arXiv search: {result['arxiv_query_summary']}")
+    else:
+        print("(arXiv summary not available - check OpenAI API key)")
 
     print("\n=== Detected Properties ===")
     for prop in result["detected_properties"]:
