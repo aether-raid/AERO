@@ -81,6 +81,35 @@ class PropertyHit:
         }
 
 
+@dataclass
+class PropertyDefinition:
+    """Enhanced property definition with semantic capabilities."""
+    name: str
+    description: str
+    keywords: List[str]
+    base_score: float
+    semantic_terms: List[str]  # Terms for semantic similarity matching
+    domain: str = "general"  # Domain categorization
+    parent_properties: List[str] = None  # Inheritance relationships
+    conflicts_with: List[str] = None  # Conflicting properties
+    boosts: List[str] = None  # Properties this one boosts
+    
+    def __post_init__(self):
+        if self.parent_properties is None:
+            self.parent_properties = []
+        if self.conflicts_with is None:
+            self.conflicts_with = []
+        if self.boosts is None:
+            self.boosts = []
+
+
+
+
+
+
+
+
+
 # -------------------------------
 # Ontology
 # -------------------------------
@@ -425,36 +454,11 @@ ONTOLOGY: Dict[str, Dict[str, Any]] = {
     },
 }
 
-# Shape regex patterns (captures common notations like (T, C), (B, T, C))
-SHAPE_PATTERNS = [
-    re.compile(r"\(([^\)]*)\)")  # naive but effective for common specs
-]
 
 
-# -------------------------------
-# Enhanced Property System for PropertyExtractor2
-# -------------------------------
 
-@dataclass
-class PropertyDefinition:
-    """Enhanced property definition with semantic capabilities."""
-    name: str
-    description: str
-    keywords: List[str]
-    base_score: float
-    semantic_terms: List[str]  # Terms for semantic similarity matching
-    domain: str = "general"  # Domain categorization
-    parent_properties: List[str] = None  # Inheritance relationships
-    conflicts_with: List[str] = None  # Conflicting properties
-    boosts: List[str] = None  # Properties this one boosts
-    
-    def __post_init__(self):
-        if self.parent_properties is None:
-            self.parent_properties = []
-        if self.conflicts_with is None:
-            self.conflicts_with = []
-        if self.boosts is None:
-            self.boosts = []
+
+
 
 
 class SemanticMatcher:
@@ -719,301 +723,7 @@ class PropertyRegistry:
             self.register_property(prop)
 
 
-# -------------------------------
-# Extraction engine
-# -------------------------------
-class PropertyExtractor:
-    def __init__(self, ontology: Dict[str, Dict[str, Any]] | None = None):
-        self.ontology = ontology or ONTOLOGY
 
-    def extract(self, text: str) -> List[PropertyHit]:
-        text_norm = self._normalize(text)
-        hits: Dict[str, PropertyHit] = {}
-
-        # 1) Keyword/rule hits with case-insensitive matching
-        for prop, spec in self.ontology.items():
-            for patt in spec.get("keywords", []):
-                for m in re.finditer(patt, text_norm, flags=re.IGNORECASE | re.MULTILINE):
-                    snippet = self._context_snippet(text_norm, m.start(), m.end())
-                    self._add_hit(hits, prop, Evidence(snippet=snippet, source=f"keyword:{patt}", score=spec.get("score", 0.5)))
-
-        # 2) Fuzzy semantic matching for better coverage
-        self._apply_fuzzy_matching(text_norm, hits)
-
-        # 3) Shape parsing augmentations
-        shape_info = self._parse_shapes(text_norm)
-        for ev in shape_info:
-            self._add_hit(hits, ev[0], Evidence(snippet=ev[1], source=ev[2], score=ev[3]))
-
-        # 4) Enhanced heuristics
-        self._apply_enhanced_heuristics(text_norm, hits)
-
-        # 5) (Optional) LLM enricher (stub – returns [])
-        for prop, msg, score in self.llm_enricher(text_norm):
-            self._add_hit(hits, prop, Evidence(snippet=msg, source="llm", score=score))
-
-        # 6) Post-processing: resolve conflicts and boost related properties
-        self._post_process_hits(hits)
-
-        # Sort by confidence
-        out = list(hits.values())
-        out.sort(key=lambda h: h.confidence, reverse=True)
-        return out
-
-    # ---------------------------
-    # Helpers
-    # ---------------------------
-    def _normalize(self, text: str) -> str:
-        """Enhanced text normalization with better preprocessing."""
-        # Basic canonicalization
-        text = re.sub(r"\s+", " ", text.strip())
-        
-        # Handle common abbreviations and expansions
-        abbreviations = {
-            r'\bML\b': 'machine learning',
-            r'\bAI\b': 'artificial intelligence',
-            r'\bDL\b': 'deep learning',
-            r'\bNN\b': 'neural network',
-            r'\bCNN\b': 'convolutional neural network',
-            r'\bRNN\b': 'recurrent neural network',
-            r'\bLSTM\b': 'long short term memory',
-            r'\bGRU\b': 'gated recurrent unit',
-            r'\bVAE\b': 'variational autoencoder',
-            r'\bGAN\b': 'generative adversarial network',
-        }
-        
-        for abbrev, expansion in abbreviations.items():
-            abbrev_clean = abbrev.strip('\\b')
-            text = re.sub(abbrev, f"{expansion} ({abbrev_clean})", text, flags=re.I)
-        
-        return text
-
-    def _context_snippet(self, text: str, start: int, end: int, radius: int = 40) -> str:
-        s = max(0, start - radius)
-        e = min(len(text), end + radius)
-        return text[s:e]
-
-    def _add_hit(self, hits: Dict[str, PropertyHit], prop: str, ev: Evidence):
-        if prop not in hits:
-            hits[prop] = PropertyHit(name=prop, evidence=[ev])
-        else:
-            hits[prop].evidence.append(ev)
-
-    def _apply_enhanced_heuristics(self, text: str, hits: Dict[str, PropertyHit]):
-        """Apply enhanced heuristic rules for better detection."""
-        
-        # Enhanced VAE/AE detection
-        if re.search(r"\b(VAE|variational\s+autoencoder|autoencoder|AE)\b", text, re.I):
-            self._add_hit(hits, "reconstruction_objective", Evidence("VAE/AE implies reconstruction", "heuristic:vae", 0.6))
-            self._add_hit(hits, "latent_embedding_required", Evidence("VAE/AE implies latent z", "heuristic:vae", 0.7))
-        
-        # Activity recognition heuristics
-        if re.search(r"(human\s+)?activity\s+(recognition|classification|detection)", text, re.I):
-            self._add_hit(hits, "classification_objective", Evidence("Activity recognition is classification", "heuristic:activity", 0.8))
-            self._add_hit(hits, "temporal_structure", Evidence("Activity data is temporal", "heuristic:activity", 0.7))
-        
-        # Sensor data heuristics
-        if re.search(r"wearable|sensor|accelerometer|gyroscope|IMU", text, re.I):
-            self._add_hit(hits, "sensor_data", Evidence("Mentions sensor/wearable devices", "heuristic:sensor", 0.8))
-            self._add_hit(hits, "temporal_structure", Evidence("Sensor data is temporal", "heuristic:sensor", 0.6))
-        
-        # Timing/shift invariance from context
-        if re.search(r"(timing\s+)?shifts?.+(shouldn't|should\s+not|don't|doesn't).+(change|affect|impact)", text, re.I):
-            self._add_hit(hits, "invariance_requirements", Evidence("Explicitly mentions shift invariance needed", "heuristic:shift-invariant", 0.9))
-        
-        # Variable length from context clues
-        if re.search(r"(users?|recordings?|samples?).+(different|varying|variable).+(length|size|duration)", text, re.I):
-            self._add_hit(hits, "variable_length_sequences", Evidence("Different lengths mentioned", "heuristic:var-length", 0.8))
-        
-        # Real-time needs from context
-        if re.search(r"(real[- ]time|streaming|online|live|immediate)", text, re.I):
-            self._add_hit(hits, "real_time_constraint", Evidence("Real-time processing mentioned", "heuristic:realtime", 0.7))
-        
-        # Question-asking patterns suggest need for model recommendation
-        if re.search(r"(which|what).+(model|approach|method|algorithm).+(work|best|suitable|recommend)", text, re.I):
-            self._add_hit(hits, "model_selection_query", Evidence("Asking for model recommendations", "heuristic:model-query", 0.6))
-        
-        # Performance requirements from context
-        if re.search(r"(high|maximum|best|optimal).+(accuracy|performance|precision|recall)", text, re.I):
-            self._add_hit(hits, "high_accuracy_required", Evidence("High performance requirements", "heuristic:performance", 0.7))
-        
-        # Interpretability needs
-        if re.search(r"(understand|explain|interpret).+(model|decision|prediction)", text, re.I):
-            self._add_hit(hits, "interpretability_required", Evidence("Interpretability mentioned", "heuristic:interpret", 0.7))
-        
-        # Data scarcity indicators
-        if re.search(r"(limited|small|few|scarce).+(data|samples|examples|labels)", text, re.I):
-            self._add_hit(hits, "few_shot_learning", Evidence("Limited data mentioned", "heuristic:few-shot", 0.7))
-        
-        # Contextual enhancement for better detection
-        self._apply_contextual_enhancement(text, hits)
-        
-        # Text/NLP specific heuristics
-        if re.search(r"(sentiment|emotion|opinion|text|document|clinical notes)", text, re.I):
-            self._add_hit(hits, "text_data", Evidence("Text/NLP task detected", "heuristic:text", 0.8))
-        
-        # Multilingual detection
-        if re.search(r"multilingual|multi[- ]language|cross[- ]lingual", text, re.I):
-            self._add_hit(hits, "multilingual_requirement", Evidence("Multilingual requirement detected", "heuristic:multilingual", 0.8))
-        
-        # Variable document length
-        if re.search(r"(very\s+short|very\s+long|variable.+length|different.+length).+(document|text|note)", text, re.I):
-            self._add_hit(hits, "variable_document_length", Evidence("Variable document length mentioned", "heuristic:var-doc-length", 0.8))
-
-    def _apply_contextual_enhancement(self, text: str, hits: Dict[str, PropertyHit]):
-        """Apply contextual rules that consider word proximity and sentence structure."""
-        
-        # Split into sentences for better context analysis
-        sentences = re.split(r'[.!?]+', text)
-        
-        for sentence in sentences:
-            sentence = sentence.strip()
-            if not sentence:
-                continue
-            
-            # Detect classification + temporal patterns in same sentence
-            if (re.search(r"classif|predict|recogni", sentence, re.I) and 
-                re.search(r"time|temporal|sequenc", sentence, re.I)):
-                self._add_hit(hits, "temporal_classification", Evidence(
-                    f"Temporal classification in: {sentence[:60]}...", 
-                    "contextual:temporal-classification", 0.8))
-            
-            # Detect performance concerns with specific metrics
-            if re.search(r"(accuracy|precision|recall|f1).+\d+%", sentence, re.I):
-                self._add_hit(hits, "specific_performance_target", Evidence(
-                    f"Specific performance target: {sentence[:60]}...", 
-                    "contextual:performance-target", 0.8))
-            
-            # Detect data preprocessing needs
-            if re.search(r"(preprocess|normaliz|filter|clean).+(data|signal)", sentence, re.I):
-                self._add_hit(hits, "preprocessing_required", Evidence(
-                    f"Data preprocessing mentioned: {sentence[:60]}...", 
-                    "contextual:preprocessing", 0.7))
-        
-        # Cross-sentence context analysis
-        text_lower = text.lower()
-        
-        # Detect user study or experimental setup
-        if re.search(r"users?.+(participat|study|experiment|trial)", text_lower):
-            self._add_hit(hits, "user_study_context", Evidence(
-                "User study context detected", "contextual:user-study", 0.6))
-        
-        # Detect comparison request
-        if re.search(r"compar(e|ison).+(model|approach|method)", text_lower):
-            self._add_hit(hits, "model_comparison_request", Evidence(
-                "Model comparison requested", "contextual:comparison", 0.7))
-
-    def _apply_fuzzy_matching(self, text: str, hits: Dict[str, PropertyHit]):
-        """Apply fuzzy/semantic matching for better property detection."""
-        
-        # Common synonyms and related terms
-        semantic_groups = {
-            "classification_objective": [
-                "identify", "distinguish", "categorize", "sort", "group", 
-                "separate", "differentiate", "detect", "recognize"
-            ],
-            "temporal_structure": [
-                "timeline", "chronology", "sequential", "ordered", "series",
-                "progression", "temporal", "time-based"
-            ],
-            "sensor_data": [
-                "device", "measurement", "signal", "reading", "monitoring",
-                "tracking", "sensing", "instrumentation"
-            ],
-            "invariance_requirements": [
-                "robust", "stable", "consistent", "unaffected", "immune",
-                "tolerant", "insensitive", "invariant"
-            ]
-        }
-        
-        text_words = set(re.findall(r'\b\w+\b', text.lower()))
-        
-        for prop, synonyms in semantic_groups.items():
-            matches = text_words.intersection(set(synonyms))
-            if matches:
-                match_count = len(matches)
-                confidence = min(0.4 + 0.1 * match_count, 0.7)  # Scale with number of matches
-                self._add_hit(hits, prop, Evidence(
-                    f"Semantic matches: {', '.join(matches)}", 
-                    "semantic:fuzzy-match", confidence))
-
-    def _post_process_hits(self, hits: Dict[str, PropertyHit]):
-        """Post-process hits to resolve conflicts and boost related properties."""
-        
-        # Property relationships and boosts
-        property_relationships = {
-            "classification_objective": {
-                "boosts": ["temporal_structure", "sensor_data"],
-                "conflicts": ["reconstruction_objective"],
-                "boost_factor": 0.1
-            },
-            "sensor_data": {
-                "boosts": ["temporal_structure", "variable_length_sequences"],
-                "boost_factor": 0.15
-            },
-            "variable_length_sequences": {
-                "boosts": ["temporal_structure"],
-                "boost_factor": 0.1
-            }
-        }
-        
-        present_props = set(hits.keys())
-        
-        for prop, relations in property_relationships.items():
-            if prop in present_props:
-                # Boost related properties
-                for boost_prop in relations.get("boosts", []):
-                    if boost_prop in present_props:
-                        boost_factor = relations.get("boost_factor", 0.1)
-                        self._add_hit(hits, boost_prop, Evidence(
-                            f"Boosted by presence of {prop}",
-                            f"boost:{prop}", boost_factor))
-                
-                # Handle conflicts (reduce confidence)
-                for conflict_prop in relations.get("conflicts", []):
-                    if conflict_prop in present_props:
-                        # Add evidence of conflict for transparency
-                        self._add_hit(hits, conflict_prop, Evidence(
-                            f"Potential conflict with {prop}",
-                            f"conflict:{prop}", -0.1))
-
-    def _parse_shapes(self, text: str) -> List[Tuple[str, str, str, float]]:
-        """Return list of (property, snippet, source, score)."""
-        emissions: List[Tuple[str, str, str, float]] = []
-
-        for patt in SHAPE_PATTERNS:
-            for m in patt.finditer(text):
-                shape = m.group(1)
-                snippet = self._context_snippet(text, m.start(), m.end())
-                dims = [d.strip() for d in shape.split(',')]
-                # Look for T, C naming patterns
-                if any(d == 'T' for d in dims):
-                    emissions.append(("temporal_structure", snippet, "regex:shape:T", 0.6))
-                if any(d == 'C' for d in dims):
-                    emissions.append(("fixed_channel_count", snippet, "regex:shape:C", 0.4))
-
-                # If text mentions that T is variable/unfixed near the shape
-                window = text[max(0, m.start()-120):min(len(text), m.end()+120)]
-                if re.search(r"T\s+(is|can be|may be)\s+(unfixed|variable|arbitrary)", window, re.I):
-                    emissions.append(("variable_length_sequences", window, "regex:shape:T-variable", 0.9))
-
-                # If output shape equals input shape explicitly
-                if re.search(r"output\s+of\s+shape\s*\(\s*T\s*,\s*C\s*\)\s*.*(preserve|same|match).*\b(T|C)\b", window, re.I):
-                    emissions.append(("shape_preserving_seq2seq", window, "regex:shape:io-match", 0.8))
-
-        # Generic phrases for IO shape match
-        io_match = re.search(r"output\s+.*\b(shape|dimensions?)\b.*(same|match|preserv)", text, re.I)
-        if io_match:
-            emissions.append(("shape_preserving_seq2seq", self._context_snippet(text, io_match.start(), io_match.end()), "regex:io-same-shape", 0.6))
-
-        return emissions
-
-    def llm_enricher(self, text: str) -> Iterable[Tuple[str, str, float]]:
-        """Hook for semantic enrichment via an LLM.
-        Implement by calling your provider and yielding (property, rationale, score).
-        Default: no-op.
-        """
-        return []
 
 
 # -------------------------------
@@ -1364,318 +1074,21 @@ class PropertyExtractor2:
         }
 
 
-# -------------------------------
-# Model suggestion rules
-# -------------------------------
-@dataclass
-class Suggestion:
-    name: str
-    rationale: str
-    notes: List[str]
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {"name": self.name, "rationale": self.rationale, "notes": self.notes}
 
 
-class ModelSuggester:
-    def __init__(self):
-        pass
 
-    def suggest(self, props: List[PropertyHit], original_text: str = "") -> List[Suggestion]:
-        names = {p.name for p in props if p.confidence >= 0.5}
-        suggestions: List[Suggestion] = []
 
-        def has(*need: str) -> bool:
-            return all(n in names for n in need)
 
-        def has_any(*options: str) -> bool:
-            return any(n in names for n in options)
-
-        # Enhanced suggestions based on detected properties
-        
-        # Few-shot learning scenarios
-        if has("few_shot_learning", "classification_objective"):
-            suggestions.append(Suggestion(
-                name="Pre-trained Transformer + Few-shot Fine-tuning",
-                rationale="Pre-trained models like BERT/RoBERTa provide strong representations for few-shot scenarios.",
-                notes=[
-                    "Use domain-adaptive pre-training if possible",
-                    "Gradient-based meta-learning (MAML) for fast adaptation",
-                    "Prototypical networks or matching networks for few-shot classification",
-                    "Data augmentation and regularization crucial with limited data",
-                ]
-            ))
-            suggestions.append(Suggestion(
-                name="Siamese/Triplet Networks",
-                rationale="Learn similarity metrics that generalize well with few examples per class.",
-                notes=[
-                    "Contrastive learning with positive/negative pairs",
-                    "Metric learning for robust embeddings",
-                    "Works well with limited labeled data",
-                ]
-            ))
-
-        # Text classification with variable length documents
-        if has("text_data", "classification_objective", "variable_document_length"):
-            suggestions.append(Suggestion(
-                name="Hierarchical Attention Networks",
-                rationale="Handle variable-length documents with word and sentence-level attention mechanisms.",
-                notes=[
-                    "Word-level and sentence-level encoders",
-                    "Attention weights provide interpretability",
-                    "Good for documents with varying structure",
-                ]
-            ))
-
-        # Clinical text processing
-        if "clinical" in original_text.lower() and has("text_data", "classification_objective"):
-            suggestions.append(Suggestion(
-                name="Domain-Adapted BERT (ClinicalBERT)",
-                rationale="Pre-trained on clinical text, understands medical terminology and context.",
-                notes=[
-                    "Use BioBERT, ClinicalBERT, or similar domain models",
-                    "Fine-tune on your specific clinical domain",
-                    "Consider medical entity recognition preprocessing",
-                ]
-            ))
-
-        # Multilingual text classification
-        if has("multilingual_requirement", "classification_objective"):
-            suggestions.append(Suggestion(
-                name="Multilingual BERT (mBERT) or XLM-R",
-                rationale="Pre-trained on multiple languages, strong cross-lingual transfer capabilities.",
-                notes=[
-                    "Fine-tune on target languages/domains",
-                    "Consider language-specific adaptation layers",
-                    "Use cross-lingual data augmentation",
-                ]
-            ))
-
-        # Activity classification with sensor data
-        if has("classification_objective", "sensor_data", "temporal_structure"):
-            suggestions.append(Suggestion(
-                name="CNN-LSTM for Activity Recognition",
-                rationale="CNNs extract local features from sensor data, LSTMs capture temporal dependencies for classification.",
-                notes=[
-                    "1D CNNs for multi-channel sensor signals",
-                    "Bidirectional LSTM for full sequence context",
-                    "Add dropout for regularization with wearable data",
-                    "Consider data augmentation (time warping, noise injection)",
-                ]
-            ))
-            suggestions.append(Suggestion(
-                name="Transformer for Activity Classification",
-                rationale="Self-attention captures long-range temporal dependencies in sensor sequences.",
-                notes=[
-                    "Positional encoding for temporal ordering",
-                    "Classification token or global average pooling",
-                    "Pre-training on large sensor datasets if available",
-                ]
-            ))
-
-        # Variable length sequences with classification
-        if has("variable_length_sequences", "classification_objective"):
-            suggestions.append(Suggestion(
-                name="RNN/GRU with Masking",
-                rationale="Handles variable-length sequences naturally with attention masking for classification.",
-                notes=[
-                    "Pack padded sequences for efficiency",
-                    "Use sequence masks to ignore padding",
-                    "Consider sequence-to-one classification head",
-                ]
-            ))
-
-        # Invariance requirements
-        if has("invariance_requirements"):
-            suggestions.append(Suggestion(
-                name="Time-Invariant Features + Classifier",
-                rationale="Extract shift-invariant features before classification to handle timing variations.",
-                notes=[
-                    "Use 1D convolutions with stride for downsampling",
-                    "Add data augmentation with random time shifts",
-                    "Consider spectral features (FFT) for shift invariance",
-                    "Use attention mechanisms that focus on relative patterns",
-                ]
-            ))
-
-        # Original VAE suggestions (keeping existing logic)
-        if has("variable_length_sequences", "temporal_structure", "reconstruction_objective", "latent_embedding_required"):
-            suggestions.append(Suggestion(
-                name="Sequence VAE (RNN/GRU/LSTM)",
-                rationale="Handles variable-length temporal inputs with masking/padding; VAE provides latent z and reconstruction.",
-                notes=[
-                    "Use padding + attention mask for batching variable T",
-                    "Pack padded sequences (PyTorch) or RaggedTensors (TF)",
-                    "Loss: recon (MSE/MAE) + KL; consider KL annealing",
-                ]
-            ))
-            suggestions.append(Suggestion(
-                name="Temporal Convolutional AE / TCN-VAE",
-                rationale="Causal, dilation-based convolutions capture long context without recurrence; good for seq2seq reconstruction.",
-                notes=[
-                    "Maintain output length via same-padding",
-                    "Stack dilated residual blocks",
-                    "Combine with VAE bottleneck for z",
-                ]
-            ))
-            suggestions.append(Suggestion(
-                name="Transformer VAE (masked)",
-                rationale="Self-attention with masks handles variable T; decoder reconstructs per time step; VAE head yields z.",
-                notes=[
-                    "Use causal mask if autoregressive, otherwise full mask",
-                    "Positional encodings; tie input/output embeddings if discrete",
-                    "Efficient attn (Performer/Flash) if T large",
-                ]
-            ))
-
-        # If only reconstruction + latent, still suggest generic AE/VAE
-        elif has("reconstruction_objective", "latent_embedding_required"):
-            suggestions.append(Suggestion(
-                name="Vanilla VAE / Denoising AE",
-                rationale="Reconstruction with latent z; choose encoder/decoder per data type (1D, 2D, 3D).",
-                notes=[
-                    "Match conv1d/2d/3d to data domain",
-                    "Consider DAE if noise robustness is required",
-                ]
-            ))
-
-        # Add cross-cutting suggestions
-        if "shape_preserving_seq2seq" in names:
-            suggestions.append(Suggestion(
-                name="Shape-preserving decoder head",
-                rationale="Ensure output has same (T, C) as input.",
-                notes=[
-                    "Use same-padding and per-step projection to C",
-                    "Avoid pooling layers that change T unless upsampled",
-                ]
-            ))
-
-        if "noise_robustness" in names:
-            suggestions.append(Suggestion(
-                name="Denoising objective",
-                rationale="Explicitly model noise with input corruption + reconstruction.",
-                notes=[
-                    "Gaussian/Masking noise on inputs",
-                    "Add spectral loss if frequency content matters",
-                ]
-            ))
-
-        # Real-time constraints
-        if "real_time_constraint" in names:
-            suggestions.append(Suggestion(
-                name="Lightweight Architecture",
-                rationale="Optimize for inference speed and model size.",
-                notes=[
-                    "Use depthwise separable convolutions",
-                    "Model quantization and pruning",
-                    "Knowledge distillation from larger models",
-                    "Consider MobileNet-style architectures",
-                ]
-            ))
-
-        return suggestions
 
 
 # -------------------------------
-# Orchestration
+# Enhanced Orchestration - DecomposerTool2 (No Model Suggestions)
 # -------------------------------
-class DecomposerTool:
-    def __init__(self):
-        self.extractor = PropertyExtractor()
-        self.suggester = ModelSuggester()
 
-    def analyze(self, query: str) -> Dict[str, Any]:
-        props = self.extractor.extract(query)
-        suggestions = self.suggester.suggest(props, query)
 
-        # Prepare minimal clarifiers for common gaps
-        names = {p.name for p in props}
-        missing = []
-        
-        # More comprehensive gap detection
-        if "noise_robustness" not in names and not any("noise" in p.name for p in props):
-            missing.append({"name": "noise_robustness", "ask": "Are inputs noisy / do you need denoising?"})
-        if "invariance_requirements" not in names and not any("invariant" in p.name for p in props):
-            missing.append({"name": "invariance_requirements", "ask": "Should the model be shift/lag/scale invariant?"})
-        if "real_time_constraint" not in names and not any("real_time" in p.name for p in props):
-            missing.append({"name": "real_time_constraint", "ask": "Is there a latency or on-device constraint?"})
-        
-        # Check for conflicting or unclear objectives
-        has_reconstruction = any("reconstruction" in p.name for p in props)
-        has_classification = any("classification" in p.name for p in props)
-        
-        if not has_reconstruction and not has_classification:
-            missing.append({"name": "task_objective", "ask": "What is the main task: classification, reconstruction, generation, or other?"})
-        
-        # Check for data specificity
-        if not any(p.name in ["sensor_data", "multimodal_data"] for p in props):
-            missing.append({"name": "data_type", "ask": "What type of data are you working with (sensor, text, image, audio, etc.)?"})
-        
-        # Performance requirements
-        if not any("constraint" in p.name or "real_time" in p.name for p in props):
-            missing.append({"name": "performance_requirements", "ask": "Are there specific performance requirements (accuracy, speed, memory)?"})
 
-        return {
-            "detected_properties": [p.to_dict() for p in props],
-            "suggested_models": [s.to_dict() for s in suggestions],
-            "missing_or_ambiguous": missing,
-            "analysis_summary": self._generate_analysis_summary(props, suggestions),
-        }
 
-    def _generate_analysis_summary(self, props: List[PropertyHit], suggestions: List[Suggestion]) -> Dict[str, Any]:
-        """Generate a high-level summary of the analysis."""
-        high_conf_props = [p for p in props if p.confidence >= 0.7]
-        medium_conf_props = [p for p in props if 0.4 <= p.confidence < 0.7]
-        
-        # Determine primary task type
-        task_type = "Unknown"
-        if any("classification" in p.name for p in high_conf_props):
-            task_type = "Classification"
-        elif any("reconstruction" in p.name for p in high_conf_props):
-            task_type = "Reconstruction/Autoencoder"
-        elif any("generation" in p.name for p in high_conf_props):
-            task_type = "Generation"
-        
-        # Determine data complexity
-        complexity_factors = []
-        if any("variable_length" in p.name for p in props):
-            complexity_factors.append("Variable-length sequences")
-        if any("multimodal" in p.name for p in props):
-            complexity_factors.append("Multimodal data")
-        if any("invariance" in p.name for p in props):
-            complexity_factors.append("Invariance requirements")
-        if any("real_time" in p.name for p in props):
-            complexity_factors.append("Real-time constraints")
-        
-        return {
-            "primary_task_type": task_type,
-            "complexity_factors": complexity_factors,
-            "high_confidence_properties": len(high_conf_props),
-            "medium_confidence_properties": len(medium_conf_props),
-            "total_suggestions": len(suggestions),
-            "recommended_next_steps": self._get_next_steps(high_conf_props, suggestions),
-        }
 
-    def _get_next_steps(self, high_conf_props: List[PropertyHit], suggestions: List[Suggestion]) -> List[str]:
-        """Generate actionable next steps based on analysis."""
-        steps = []
-        
-        if len(high_conf_props) < 3:
-            steps.append("Clarify task requirements - provide more specific details about your use case")
-        
-        if suggestions:
-            steps.append(f"Evaluate the top {min(3, len(suggestions))} suggested model architectures")
-            steps.append("Implement a baseline model first, then iterate with more complex architectures")
-        
-        if any("sensor" in p.name for p in high_conf_props):
-            steps.append("Consider data preprocessing: normalization, filtering, feature engineering")
-        
-        if any("variable_length" in p.name for p in high_conf_props):
-            steps.append("Design batching strategy for variable-length sequences")
-        
-        steps.append("Define evaluation metrics and validation strategy")
-        
-        return steps
 
 
 # -------------------------------
@@ -1695,7 +1108,6 @@ class DecomposerTool2:
     
     def __init__(self, use_semantic_matching: bool = True):
         self.extractor = PropertyExtractor2(use_semantic_matching=use_semantic_matching)
-        self.suggester = ModelSuggester()  # Reuse existing suggester for now
     
     def analyze(self, query: str, domain_focus: Optional[str] = None) -> Dict[str, Any]:
         """
@@ -1707,9 +1119,6 @@ class DecomposerTool2:
         """
         # Extract properties with optional domain focus
         props = self.extractor.extract(query, domain_focus=domain_focus)
-        
-        # Generate model suggestions
-        suggestions = self.suggester.suggest(props, query)
         
         # Domain analysis
         domain_scores = self.extractor.get_domain_analysis(query)
@@ -1725,12 +1134,11 @@ class DecomposerTool2:
         
         return {
             "detected_properties": [p.to_dict() for p in props],
-            "suggested_models": [s.to_dict() for s in suggestions],
             "missing_or_ambiguous": missing,
             "domain_analysis": domain_scores,
             "missing_property_suggestions": missing_suggestions,
             "confidence_explanations": confidence_explanations,
-            "analysis_summary": self._generate_enhanced_summary(props, suggestions, domain_scores),
+            "analysis_summary": self._generate_enhanced_summary(props, domain_scores),
             "query_metadata": self._extract_query_metadata(query)
         }
     
@@ -1772,7 +1180,7 @@ class DecomposerTool2:
         
         return missing
     
-    def _generate_enhanced_summary(self, props: List[PropertyHit], suggestions: List[Suggestion],
+    def _generate_enhanced_summary(self, props: List[PropertyHit],
                                  domain_scores: Dict[str, float]) -> Dict[str, Any]:
         """Generate enhanced analysis summary."""
         high_conf_props = [p for p in props if p.confidence >= 0.7]
@@ -1798,8 +1206,7 @@ class DecomposerTool2:
             "research_stage": research_stage,
             "high_confidence_properties": len(high_conf_props),
             "medium_confidence_properties": len(medium_conf_props),
-            "total_suggestions": len(suggestions),
-            "recommended_next_steps": self._get_enhanced_next_steps(high_conf_props, suggestions, primary_domain),
+            "recommended_next_steps": self._get_enhanced_next_steps(high_conf_props, primary_domain),
             "uncertainty_assessment": self._assess_uncertainty(props)
         }
     
@@ -1895,15 +1302,14 @@ class DecomposerTool2:
         }
     
     def _get_enhanced_next_steps(self, high_conf_props: List[PropertyHit], 
-                               suggestions: List[Suggestion], primary_domain: str) -> List[str]:
+                               primary_domain: str) -> List[str]:
         """Generate enhanced next steps."""
         steps = []
         
         if len(high_conf_props) < 3:
             steps.append(f"Clarify {primary_domain} task requirements - provide more specific details")
         
-        if suggestions:
-            steps.append(f"Evaluate the top {min(3, len(suggestions))} suggested architectures")
+        steps.append("Review detected properties and confidence scores for accuracy")
         
         # Domain-specific steps
         if primary_domain == "nlp":
@@ -1931,52 +1337,22 @@ class DecomposerTool2:
 
 
 
+
+
+
+
+
 if __name__ == "__main__":
-    # Test queries to demonstrate improvements
-    test_queries = [
-        "I need to implement a variational inference algorithm for Dirichlet process mixture models with stick-breaking construction for clustering non-parametric data.",
-        "I want to build a real-time object detection system for autonomous vehicles using transformer architecture with edge deployment constraints.",
-        "Can you help me design a multilingual sentiment classifier for clinical notes that works well with limited labeled data?",
-        "I'm working on anomaly detection in dynamic social networks where nodes and edges chasnge over time.",
-        "I'm working on photoplethysmography signal analysis for atrial fibrillation detection in wearable devices with motion artifacts",
-        "How do I implement mixture-of-experts with sparse upcycling for large language models using parameter-efficient fine-tuning?"
-    ]
-    
-    # Choose a test query
-    demo_query = test_queries[1]  # Transformer + vision + real-time query
-    
-    print("=" * 80)
-    print("PropertyExtractor vs PropertyExtractor2 Comparison")
-    print("=" * 80)
-    print(f"\nTest Query: {demo_query}")
-    
-    # Test original PropertyExtractor
-    print("\n" + "="*50)
-    print("ORIGINAL PropertyExtractor Results")
-    print("="*50)
-    
-    original_tool = DecomposerTool()
-    original_result = original_tool.analyze(demo_query)
-    
-    print(f"\nDetected Properties ({len(original_result['detected_properties'])}):")
-    for prop in original_result["detected_properties"][:8]:  # Top 8
-        print(f"  • {prop['name']} (confidence: {prop['confidence']})")
-        if prop['evidence']:
-            print(f"    └─ {prop['evidence'][0]['source']}: {prop['evidence'][0]['snippet'][:60]}...")
-    
-    print(f"\nModel Suggestions ({len(original_result['suggested_models'])}):")
-    for suggestion in original_result["suggested_models"][:3]:  # Top 3
-        print(f"  • {suggestion['name']}")
-        print(f"    └─ {suggestion['rationale']}")
-    
-    # Test enhanced PropertyExtractor2
-    print("\n" + "="*50)
+      # Test enhanced PropertyExtractor2
+
+    demo_query =   "I want to build a real-time object detection system for autonomous vehicles using transformer architecture with edge deployment constraints."
     print("ENHANCED PropertyExtractor2 Results")
     print("="*50)
     
     try:
         enhanced_tool = DecomposerTool2(use_semantic_matching=True)
         enhanced_result = enhanced_tool.analyze(demo_query)
+        
         
         print(f"\nDetected Properties ({len(enhanced_result['detected_properties'])}):")
         for prop in enhanced_result["detected_properties"][:8]:  # Top 8
