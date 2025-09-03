@@ -470,6 +470,96 @@ class MLResearcherTool:
                 "original_query": search_query
             }
     
+    def suggest_models_from_arxiv(self, prompt: str, arxiv_results: Dict[str, Any], detected_categories: List[PropertyHit], detailed_analysis: Dict[str, Any]) -> Dict[str, Any]:
+        """Use LLM to suggest suitable models based on arXiv search results and analysis."""
+        
+        print(f"\n🤖 Step 5: Analyzing papers and suggesting suitable models...")
+        
+        # Prepare evidence from arXiv papers
+        papers_evidence = ""
+        if arxiv_results.get("search_successful") and arxiv_results.get("papers"):
+            papers_evidence = "\n--- arXiv Papers Found ---\n"
+            for i, paper in enumerate(arxiv_results["papers"][:3], 1):  # Use top 3 papers
+                papers_evidence += f"""
+Paper {i}: {paper["title"]}
+Published: {paper["published"]}
+URL: {paper["url"]}
+---
+"""
+        else:
+            papers_evidence = "\n--- No arXiv Papers Found ---\nNo relevant papers were found in the search, so recommendations will be based on general ML knowledge.\n"
+        
+        # Prepare detected categories
+        categories_text = ", ".join([prop.name for prop in detected_categories])
+        
+        # Create comprehensive prompt for model suggestion
+        content = f"""
+You are an expert machine learning researcher and architect. Based on the following comprehensive analysis, suggest the most suitable machine learning models/architectures for this task and provide detailed justification.
+
+## Original Task
+{prompt}
+
+## Detected ML Categories
+{categories_text}
+
+## Detailed Analysis Summary
+{detailed_analysis.get('llm_analysis', 'Analysis not available')[:1000]}...
+
+## Evidence from Recent Research Papers
+{papers_evidence}
+
+## Your Task
+Based on ALL the evidence above (task requirements, detected categories, detailed analysis, and recent research papers), provide:
+
+1. **Top 3 Recommended Models/Architectures** - List the most suitable models in order of preference
+2. **Detailed Justification** - For each model, explain:
+   - Why it's suitable for this specific task
+   - How it addresses the detected categories/requirements
+   - Evidence from the research papers (if available) that supports this choice
+   - Specific advantages and potential limitations
+3. **Implementation Considerations** - Practical advice for each model:
+   - Key hyperparameters to tune
+   - Training considerations
+   - Expected performance characteristics
+4. **Alternative Approaches** - Brief mention of other viable options and when they might be preferred
+
+Format your response as a structured analysis that clearly connects your recommendations to the evidence provided.
+"""
+
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[{"content": content, "role": "user"}]
+            )
+            
+            model_suggestions = response.choices[0].message.content
+            
+            # Print readable summary
+            print("✅ Model suggestions generated")
+            print("\n" + "=" * 80)
+            print("🎯 RECOMMENDED MODELS AND JUSTIFICATION")
+            print("=" * 80)
+            print(model_suggestions)
+            print("=" * 80)
+            
+            return {
+                "suggestions_successful": True,
+                "model_suggestions": model_suggestions,
+                "model_used": self.model,
+                "tokens_used": response.usage.total_tokens if response.usage else "unknown",
+                "papers_analyzed": len(arxiv_results.get("papers", [])),
+                "categories_considered": len(detected_categories)
+            }
+        
+        except Exception as e:
+            error_msg = f"Model suggestion failed: {str(e)}"
+            print(f"❌ {error_msg}")
+            return {
+                "suggestions_successful": False,
+                "error": error_msg,
+                "model_suggestions": None
+            }
+    
     def analyze_research_task(self, prompt: str) -> Dict[str, Any]:
         """Main method to analyze a research task."""
         print(f"🔍 Analyzing research task: {prompt}")
@@ -560,6 +650,9 @@ class MLResearcherTool:
         print("\n📖 Step 4: Searching arXiv for relevant papers...")
         arxiv_results = self.search_arxiv(arxiv_search_query, max_results=5)
         
+        # Step 5: Suggest models based on all evidence
+        model_suggestions = self.suggest_models_from_arxiv(prompt, arxiv_results, llm_properties, llm_analysis)
+        
         # Compile results
         results = {
             "original_prompt": prompt,
@@ -567,12 +660,14 @@ class MLResearcherTool:
             "detailed_analysis": llm_analysis,
             "arxiv_search_query": arxiv_search_query,
             "arxiv_results": arxiv_results,
+            "model_suggestions": model_suggestions,
             "summary": {
                 "total_categories_detected": len(llm_properties),
                 "high_confidence_categories": len([p for p in llm_properties if p.confidence > 0.7]),
                 "detailed_analysis_successful": "error" not in llm_analysis,
                 "arxiv_search_successful": arxiv_results.get("search_successful", False),
-                "papers_found": arxiv_results.get("papers_returned", 0)
+                "papers_found": arxiv_results.get("papers_returned", 0),
+                "model_suggestions_successful": model_suggestions.get("suggestions_successful", False)
             }
         }
         
