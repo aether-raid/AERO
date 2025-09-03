@@ -20,12 +20,18 @@ from __future__ import annotations
 import re
 import json
 import math
-import numpy as np
+import os
 from dataclasses import dataclass, asdict
-from typing import List, Dict, Any, Iterable, Tuple, Optional, Set
-from abc import ABC, abstractmethod
-import functools
-from collections import defaultdict
+from typing import List, Dict, Any, Iterable, Tuple
+
+# Load environment variables
+try:
+    from dotenv import load_dotenv
+    # Load from env.example first, then .env if it exists
+    load_dotenv('env.example')
+    load_dotenv()  # This will override with .env if present
+except ImportError:
+    pass  # dotenv not available, will rely on system environment variables
 
 
 # -------------------------------
@@ -1577,6 +1583,47 @@ class ModelSuggester:
 
 
 # -------------------------------
+# LLM-based arXiv query summarizer
+# -------------------------------
+def generate_arxiv_query_summary(original_query: str, detected_props: list[str]) -> str:
+    """
+    Combines original query with detected properties to produce a concise arXiv search string.
+    Uses a lightweight LLM call (can be replaced with OpenAI API or local model inference).
+    """
+    import openai
+
+    # Combine the query and properties
+    context_text = f"Original query: {original_query}\nDetected properties: {', '.join(detected_props)}"
+    
+    # Use the exact format that works with LiteLLM proxy
+    model = os.getenv('DEFAULT_MODEL', 'gemini/gemini-2.5-flash')  # dynamically selected
+    api_key = os.getenv('OPENAI_API_KEY')  # load from env
+    base_url = os.getenv('BASE_URL', 'https://agents.aetherraid.dev')  # load from config
+    
+    # Create the prompt content
+    content = f"Create a concise arXiv search string (5-8 keywords) for this research query:\n\n{context_text}\n\nRespond with only the search keywords, no explanation."
+    
+    client = openai.OpenAI(
+        api_key=api_key,
+        base_url=base_url
+    )
+    
+    # Request sent to model set on litellm proxy - using your exact format
+    response = client.chat.completions.create(
+        model=model,
+        messages=[{"content": content, "role": "user"}]
+    )
+    
+    # Get the response content
+    summary = response.choices[0].message.content
+    
+    # Debug output
+    print(f"DEBUG: LLM Response: '{summary}'")
+    
+    return summary
+
+
+# -------------------------------
 # Orchestration
 # -------------------------------
 class DecomposerTool:
@@ -1587,6 +1634,15 @@ class DecomposerTool:
     def analyze(self, query: str) -> Dict[str, Any]:
         props = self.extractor.extract(query)
         suggestions = self.suggester.suggest(props, query)
+
+        # Generate arXiv query summary
+        detected_prop_names = [p.name for p in props if p.confidence >= 0.5]
+        arxiv_summary = None
+        try:
+            if os.getenv('OPENAI_API_KEY'):
+                arxiv_summary = generate_arxiv_query_summary(query, detected_prop_names)
+        except Exception as e:
+            print(f"Warning: Failed to generate arXiv summary: {e}")
 
         # Prepare minimal clarifiers for common gaps
         names = {p.name for p in props}
@@ -1618,6 +1674,7 @@ class DecomposerTool:
         return {
             "detected_properties": [p.to_dict() for p in props],
             "suggested_models": [s.to_dict() for s in suggestions],
+            "arxiv_query_summary": arxiv_summary,
             "missing_or_ambiguous": missing,
             "analysis_summary": self._generate_analysis_summary(props, suggestions),
         }
@@ -1678,354 +1735,49 @@ class DecomposerTool:
         return steps
 
 
-# -------------------------------
-# Enhanced Orchestration - DecomposerTool2
-# -------------------------------
-
-class DecomposerTool2:
-    """
-    Enhanced decomposer tool using PropertyExtractor2 with semantic capabilities.
-    
-    Improvements:
-    - Semantic understanding of queries
-    - Domain-aware analysis
-    - Enhanced confidence explanations
-    - Better gap detection and suggestions
-    """
-    
-    def __init__(self, use_semantic_matching: bool = True):
-        self.extractor = PropertyExtractor2(use_semantic_matching=use_semantic_matching)
-        self.suggester = ModelSuggester()  # Reuse existing suggester for now
-    
-    def analyze(self, query: str, domain_focus: Optional[str] = None) -> Dict[str, Any]:
-        """
-        Analyze query with enhanced semantic understanding.
-        
-        Args:
-            query: Input research query
-            domain_focus: Optional domain focus (e.g., 'nlp', 'vision', 'sensor')
-        """
-        # Extract properties with optional domain focus
-        props = self.extractor.extract(query, domain_focus=domain_focus)
-        
-        # Generate model suggestions
-        suggestions = self.suggester.suggest(props, query)
-        
-        # Domain analysis
-        domain_scores = self.extractor.get_domain_analysis(query)
-        
-        # Enhanced gap detection
-        missing_suggestions = self.extractor.suggest_missing_properties(props)
-        missing = self._detect_enhanced_gaps(props, query, domain_scores)
-        
-        # Confidence explanations
-        confidence_explanations = {}
-        for prop in props[:5]:  # Top 5 properties
-            confidence_explanations[prop.name] = self.extractor.explain_confidence(prop)
-        
-        return {
-            "detected_properties": [p.to_dict() for p in props],
-            "suggested_models": [s.to_dict() for s in suggestions],
-            "missing_or_ambiguous": missing,
-            "domain_analysis": domain_scores,
-            "missing_property_suggestions": missing_suggestions,
-            "confidence_explanations": confidence_explanations,
-            "analysis_summary": self._generate_enhanced_summary(props, suggestions, domain_scores),
-            "query_metadata": self._extract_query_metadata(query)
-        }
-    
-    def _detect_enhanced_gaps(self, props: List[PropertyHit], query: str, 
-                            domain_scores: Dict[str, float]) -> List[Dict[str, str]]:
-        """Enhanced gap detection with domain awareness."""
-        missing = []
-        prop_names = {p.name for p in props}
-        
-        # Domain-specific gap detection
-        top_domain = max(domain_scores.items(), key=lambda x: x[1])[0] if domain_scores else None
-        
-        if top_domain == "nlp":
-            if "text_data" not in prop_names:
-                missing.append({"name": "text_data", "ask": "What type of text data are you working with?"})
-            if not any("multilingual" in name for name in prop_names):
-                missing.append({"name": "language_requirements", "ask": "Do you need multilingual support?"})
-        
-        elif top_domain == "vision":
-            if "computer_vision" not in prop_names:
-                missing.append({"name": "vision_task", "ask": "What specific computer vision task (detection, segmentation, classification)?"})
-            if not any("real_time" in name for name in prop_names):
-                missing.append({"name": "performance_requirements", "ask": "Are there real-time processing requirements?"})
-        
-        elif top_domain == "sensor":
-            if not any("temporal" in name for name in prop_names):
-                missing.append({"name": "temporal_aspects", "ask": "How important are temporal relationships in your data?"})
-        
-        # General gaps
-        if not any(name.endswith("_objective") for name in prop_names):
-            missing.append({"name": "task_objective", "ask": "What is the primary learning objective?"})
-        
-        if not any("constraint" in name or "requirement" in name for name in prop_names):
-            missing.append({"name": "constraints", "ask": "Are there performance, resource, or ethical constraints?"})
-        
-        # Data characteristics
-        if not any("data" in name for name in prop_names):
-            missing.append({"name": "data_characteristics", "ask": "What are the key characteristics of your data?"})
-        
-        return missing
-    
-    def _generate_enhanced_summary(self, props: List[PropertyHit], suggestions: List[Suggestion],
-                                 domain_scores: Dict[str, float]) -> Dict[str, Any]:
-        """Generate enhanced analysis summary."""
-        high_conf_props = [p for p in props if p.confidence >= 0.7]
-        medium_conf_props = [p for p in props if 0.4 <= p.confidence < 0.7]
-        
-        # Determine primary task type with better logic
-        task_type = self._infer_task_type(high_conf_props)
-        
-        # Identify primary domain
-        primary_domain = max(domain_scores.items(), key=lambda x: x[1])[0] if domain_scores else "general"
-        
-        # Complexity assessment
-        complexity_factors = self._assess_complexity(props)
-        
-        # Research stage inference
-        research_stage = self._infer_research_stage(props)
-        
-        return {
-            "primary_task_type": task_type,
-            "primary_domain": primary_domain,
-            "domain_confidence": domain_scores.get(primary_domain, 0.0),
-            "complexity_factors": complexity_factors,
-            "research_stage": research_stage,
-            "high_confidence_properties": len(high_conf_props),
-            "medium_confidence_properties": len(medium_conf_props),
-            "total_suggestions": len(suggestions),
-            "recommended_next_steps": self._get_enhanced_next_steps(high_conf_props, suggestions, primary_domain),
-            "uncertainty_assessment": self._assess_uncertainty(props)
-        }
-    
-    def _infer_task_type(self, high_conf_props: List[PropertyHit]) -> str:
-        """Infer task type with enhanced logic."""
-        prop_names = {p.name for p in high_conf_props}
-        
-        if any("classification" in name for name in prop_names):
-            if any("text" in name for name in prop_names):
-                return "Text Classification"
-            elif any("vision" in name or "image" in name for name in prop_names):
-                return "Image Classification"
-            elif any("sensor" in name for name in prop_names):
-                return "Sensor Classification"
-            else:
-                return "Classification"
-        
-        elif any("reconstruction" in name for name in prop_names):
-            return "Reconstruction/Autoencoder"
-        elif any("generation" in name for name in prop_names):
-            return "Generation"
-        elif any("detection" in name for name in prop_names):
-            return "Detection/Recognition"
-        elif any("graph" in name for name in prop_names):
-            return "Graph Learning"
-        else:
-            return "General ML Task"
-    
-    def _assess_complexity(self, props: List[PropertyHit]) -> List[str]:
-        """Assess problem complexity factors."""
-        complexity_factors = []
-        prop_names = {p.name for p in props}
-        
-        if any("variable_length" in name for name in prop_names):
-            complexity_factors.append("Variable-length inputs")
-        if any("multimodal" in name for name in prop_names):
-            complexity_factors.append("Multimodal data fusion")
-        if any("real_time" in name for name in prop_names):
-            complexity_factors.append("Real-time constraints")
-        if any("federated" in name for name in prop_names):
-            complexity_factors.append("Distributed learning")
-        if any("fairness" in name or "bias" in name for name in prop_names):
-            complexity_factors.append("Fairness considerations")
-        if any("few_shot" in name for name in prop_names):
-            complexity_factors.append("Limited data regime")
-        
-        return complexity_factors
-    
-    def _infer_research_stage(self, props: List[PropertyHit]) -> str:
-        """Infer research/development stage."""
-        prop_names = {p.name for p in props}
-        
-        if any("exploration" in name or "research" in name for name in prop_names):
-            return "Exploration"
-        elif any("optimization" in name or "hyperparameter" in name for name in prop_names):
-            return "Optimization"
-        elif any("deployment" in name or "production" in name for name in prop_names):
-            return "Deployment"
-        elif any("comparison" in name or "benchmark" in name for name in prop_names):
-            return "Evaluation"
-        else:
-            return "Development"
-    
-    def _assess_uncertainty(self, props: List[PropertyHit]) -> Dict[str, Any]:
-        """Assess uncertainty in property detection."""
-        if not props:
-            return {"level": "high", "reason": "no_properties_detected"}
-        
-        confidence_scores = [p.confidence for p in props]
-        avg_confidence = sum(confidence_scores) / len(confidence_scores)
-        max_confidence = max(confidence_scores)
-        confidence_variance = sum((c - avg_confidence)**2 for c in confidence_scores) / len(confidence_scores)
-        
-        if max_confidence < 0.5:
-            level = "high"
-            reason = "low_confidence_scores"
-        elif avg_confidence < 0.6:
-            level = "medium-high"
-            reason = "moderate_confidence"
-        elif confidence_variance > 0.1:
-            level = "medium"
-            reason = "high_variance"
-        else:
-            level = "low"
-            reason = "consistent_high_confidence"
-        
-        return {
-            "level": level,
-            "reason": reason,
-            "average_confidence": round(avg_confidence, 3),
-            "max_confidence": round(max_confidence, 3),
-            "confidence_variance": round(confidence_variance, 3)
-        }
-    
-    def _get_enhanced_next_steps(self, high_conf_props: List[PropertyHit], 
-                               suggestions: List[Suggestion], primary_domain: str) -> List[str]:
-        """Generate enhanced next steps."""
-        steps = []
-        
-        if len(high_conf_props) < 3:
-            steps.append(f"Clarify {primary_domain} task requirements - provide more specific details")
-        
-        if suggestions:
-            steps.append(f"Evaluate the top {min(3, len(suggestions))} suggested architectures")
-        
-        # Domain-specific steps
-        if primary_domain == "nlp":
-            steps.append("Consider text preprocessing: tokenization, normalization, handling of special characters")
-        elif primary_domain == "vision":
-            steps.append("Consider image preprocessing: normalization, augmentation, resolution requirements")
-        elif primary_domain == "sensor":
-            steps.append("Consider signal processing: filtering, feature extraction, temporal alignment")
-        
-        steps.append("Design evaluation metrics and validation strategy")
-        steps.append("Consider data quality and labeling requirements")
-        
-        return steps
-    
-    def _extract_query_metadata(self, query: str) -> Dict[str, Any]:
-        """Extract metadata about the query itself."""
-        return {
-            "length": len(query),
-            "word_count": len(query.split()),
-            "has_technical_terms": bool(re.search(r'\b(algorithm|model|architecture|neural|learning)\b', query, re.I)),
-            "has_performance_metrics": bool(re.search(r'\b(accuracy|precision|recall|F1|AUC|loss)\b', query, re.I)),
-            "has_constraints": bool(re.search(r'\b(real[- ]time|latency|memory|budget|constraint)\b', query, re.I)),
-            "question_type": "recommendation" if re.search(r'\b(which|what|how|recommend|suggest|best)\b', query, re.I) else "implementation"
-        }
-
-
 
 if __name__ == "__main__":
-    # Test queries to demonstrate improvements
-    test_queries = [
-        "I need to implement a variational inference algorithm for Dirichlet process mixture models with stick-breaking construction for clustering non-parametric data.",
-        "I want to build a real-time object detection system for autonomous vehicles using transformer architecture with edge deployment constraints.",
-        "Can you help me design a multilingual sentiment classifier for clinical notes that works well with limited labeled data?",
-        "I'm working on anomaly detection in dynamic social networks where nodes and edges chasnge over time.",
-        "I'm working on photoplethysmography signal analysis for atrial fibrillation detection in wearable devices with motion artifacts",
-        "How do I implement mixture-of-experts with sparse upcycling for large language models using parameter-efficient fine-tuning?"
-    ]
-    
-    # Choose a test query
-    demo_query = test_queries[1]  # Transformer + vision + real-time query
-    
-    print("=" * 80)
-    print("PropertyExtractor vs PropertyExtractor2 Comparison")
-    print("=" * 80)
-    print(f"\nTest Query: {demo_query}")
-    
-    # Test original PropertyExtractor
-    print("\n" + "="*50)
-    print("ORIGINAL PropertyExtractor Results")
-    print("="*50)
-    
-    original_tool = DecomposerTool()
-    original_result = original_tool.analyze(demo_query)
-    
-    print(f"\nDetected Properties ({len(original_result['detected_properties'])}):")
-    for prop in original_result["detected_properties"][:8]:  # Top 8
-        print(f"  • {prop['name']} (confidence: {prop['confidence']})")
-        if prop['evidence']:
-            print(f"    └─ {prop['evidence'][0]['source']}: {prop['evidence'][0]['snippet'][:60]}...")
-    
-    print(f"\nModel Suggestions ({len(original_result['suggested_models'])}):")
-    for suggestion in original_result["suggested_models"][:3]:  # Top 3
-        print(f"  • {suggestion['name']}")
-        print(f"    └─ {suggestion['rationale']}")
-    
-    # Test enhanced PropertyExtractor2
-    print("\n" + "="*50)
-    print("ENHANCED PropertyExtractor2 Results")
-    print("="*50)
-    
-    try:
-        enhanced_tool = DecomposerTool2(use_semantic_matching=True)
-        enhanced_result = enhanced_tool.analyze(demo_query)
-        
-        print(f"\nDetected Properties ({len(enhanced_result['detected_properties'])}):")
-        for prop in enhanced_result["detected_properties"][:8]:  # Top 8
-            print(f"  • {prop['name']} (confidence: {prop['confidence']})")
-            if prop['evidence']:
-                print(f"    └─ {prop['evidence'][0]['source']}: {prop['evidence'][0]['snippet'][:60]}...")
-        
-        print(f"\nDomain Analysis:")
-        for domain, score in sorted(enhanced_result['domain_analysis'].items(), 
-                                  key=lambda x: x[1], reverse=True)[:5]:
-            print(f"  • {domain}: {score:.3f}")
-        
-        print(f"\nAnalysis Summary:")
-        summary = enhanced_result['analysis_summary']
-        print(f"  • Primary Task: {summary['primary_task_type']}")
-        print(f"  • Primary Domain: {summary['primary_domain']}")
-        print(f"  • Research Stage: {summary['research_stage']}")
-        print(f"  • Complexity Factors: {', '.join(summary['complexity_factors'])}")
-        print(f"  • Uncertainty Level: {summary['uncertainty_assessment']['level']}")
-        
-        print(f"\nMissing Property Suggestions ({len(enhanced_result['missing_property_suggestions'])}):")
-        for suggestion in enhanced_result['missing_property_suggestions']:
-            print(f"  • {suggestion}")
-        
-        print(f"\nQuery Metadata:")
-        metadata = enhanced_result['query_metadata']
-        print(f"  • Length: {metadata['length']} chars, {metadata['word_count']} words")
-        print(f"  • Technical Terms: {metadata['has_technical_terms']}")
-        print(f"  • Type: {metadata['question_type']}")
-        
-    except ImportError as e:
-        print("\nNote: Enhanced PropertyExtractor2 requires 'sentence-transformers' for full semantic capabilities.")
-        print("Install with: pip install sentence-transformers")
-        print("Running with keyword matching only...")
-        
-        # Run without semantic matching
-        enhanced_tool = DecomposerTool2(use_semantic_matching=False)
-        enhanced_result = enhanced_tool.analyze(demo_query)
-        
-        print(f"\nDetected Properties ({len(enhanced_result['detected_properties'])} - keyword matching only):")
-        for prop in enhanced_result["detected_properties"][:5]:
-            print(f"  • {prop['name']} (confidence: {prop['confidence']})")
-    
-    print("\n" + "="*80)
-    print("Key Improvements in PropertyExtractor2:")
-    print("- Semantic understanding via embeddings (when available)")
-    print("- Expanded ML/AI ontology with modern architectures") 
-    print("- Domain-aware analysis and suggestions")
-    print("- Enhanced confidence scoring and explanations")
-    print("- Better gap detection and next steps")
-    print("- Compositional reasoning for property combinations")
-    print("="*80)
+    demo_query = (
+  #"I want to train a multilingual sentiment classifier for clinical notes, where each document can be very short or very long, and I need the model to generalize well in few-shot scenarios with limited labeled data."
+  #"I am interested in detecting anomalies in dynamic social networks, where nodes and edges appear or disappear over time, and the model should capture temporal graph structure as well as sudden changes."
+  
+  "Can you help me design a multilingual sentiment classifier for clinical notes that works well with limited labeled data?"
+  #"Can you recommend approaches for predicting stock prices using both historical price data and news sentiment? The sequences have different lengths and I need the model to be interpretable for regulatory compliance."
+  #"Need GDPR-compliant model that can be audited and doesn't store personal information."
+  #"hi"
+    )
+
+    tool = DecomposerTool()
+    result = tool.analyze(demo_query)
+
+    print("\n=== Research Query ===")
+    print(demo_query)
+
+    print("\n=== arXiv Search Summary ===")
+    if result["arxiv_query_summary"]:
+        print(f"Suggested arXiv search: {result['arxiv_query_summary']}")
+    else:
+        print("(arXiv summary not available - check OpenAI API key)")
+
+    print("\n=== Detected Properties ===")
+    for prop in result["detected_properties"]:
+        print(f"- {prop['name']} (confidence={prop['confidence']})")
+        for ev in prop["evidence"]:
+            print(f"    · evidence: '{ev['snippet']}' [{ev['source']}, score={ev['score']}]")
+
+    print("\n=== Suggested Model Families ===")
+    if result["suggested_models"]:
+        for s in result["suggested_models"]:
+            print(f"- {s['name']}")
+            print(f"    rationale: {s['rationale']}")
+            for note in s["notes"]:
+                print(f"    · {note}")
+    else:
+        print("(No direct model suggestions, consider clarifying task further.)")
+
+    print("\n=== Missing / Ambiguous Aspects ===")
+    if result["missing_or_ambiguous"]:
+        for m in result["missing_or_ambiguous"]:
+            print(f"- {m['name']}: {m['ask']}")
+    else:
+        print("(No major gaps detected.)")
