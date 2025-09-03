@@ -213,6 +213,10 @@ class MLResearcherTool:
         except Exception as e:
             print(f"❌ LLM property extraction failed: {str(e)}")
             return []
+        
+        
+        
+        
     
     def decompose_task_with_llm(self, prompt: str) -> Dict[str, Any]:
         """Use LLM to decompose the task and identify additional properties."""
@@ -256,6 +260,9 @@ class MLResearcherTool:
                 "error": f"LLM decomposition failed: {str(e)}",
                 "llm_analysis": None
             }
+            
+            
+            
     
     def generate_arxiv_search_summary(self, prompt: str, detected_properties: List[PropertyHit], llm_analysis: Dict[str, Any]) -> str:
         """Generate a summary suitable for arXiv API search."""
@@ -376,7 +383,7 @@ class MLResearcherTool:
                     response = requests.get(arxiv_url)
                     feed = feedparser.parse(response.text)
                     entry = feed.entries[0]
-                    pdf_txt = extract_pdf_text(arxiv_url)
+                  
 
 
                                         
