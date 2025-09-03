@@ -414,25 +414,18 @@ Return only the search query without explanation.
                            f.write(response.content)
 
                         
-                        # Get authors
-                        authors = []
-                        for author in entry.findall('atom:author', ns):
-                            name = author.find('atom:name', ns).text
-                            authors.append(name)
-                        
                         # Get published date
                         published = entry.find('atom:published', ns).text[:10] if entry.find('atom:published', ns) is not None else "Unknown"
                         
                         # Get arXiv URL
-                        arxiv_url = f"https://arxiv.org/abs/{paper_id}"
-                        
+                        arxiv_url = f"http://export.arxiv.org/api/query?id_list={paper_id}"
                         # Store paper info
                         paper_info = {
                             "title": title,
                             "id": paper_id,
                             "published": published,
-                            "authors": authors,
-                            "abstract": summary,
+                            #"authors": authors,
+                            #"abstract": summary,
                             "url": arxiv_url
                         }
                         papers.append(paper_info)
@@ -443,7 +436,7 @@ Return only the search query without explanation.
                         print(f"Title: {title}")
                         print(f"ID: {paper_id}")
                         print(f"Published: {published}")
-                        print(f"Authors: {', '.join(authors)}")
+                       # print(f"Authors: {', '.join(authors)}")
                         print(f"URL: {arxiv_url}")
                         print("-" * 60)
                         print(f"Abstract:\n{summary}")
