@@ -1601,8 +1601,8 @@ def generate_arxiv_query_summary(original_query: str, detected_props: list[str])
     base_url = os.getenv('BASE_URL', 'https://agents.aetherraid.dev')  # load from config
     
     # Create the prompt content
-    content = f"Create a concise arXiv search string (5-8 keywords) for this research query:\n\n{context_text}\n\nRespond with only the search keywords, no explanation."
-    
+    content = f"Create a concise arXiv search string (5-8 keywords) for this research query:\n\n{context_text}\n\nRespond with only the search keywords, no explanation. These keywords must be representative of the problem at hand, order them from most to least important."
+
     client = openai.OpenAI(
         api_key=api_key,
         base_url=base_url
@@ -1739,9 +1739,9 @@ class DecomposerTool:
 if __name__ == "__main__":
     demo_query = (
   #"I want to train a multilingual sentiment classifier for clinical notes, where each document can be very short or very long, and I need the model to generalize well in few-shot scenarios with limited labeled data."
-  #"I am interested in detecting anomalies in dynamic social networks, where nodes and edges appear or disappear over time, and the model should capture temporal graph structure as well as sudden changes."
+  "I am interested in detecting anomalies in dynamic social networks, where nodes and edges appear or disappear over time, and the model should capture temporal graph structure as well as sudden changes."
   
-  "Can you help me design a multilingual sentiment classifier for clinical notes that works well with limited labeled data?"
+  #"Can you help me design a multilingual sentiment classifier for clinical notes that works well with limited labeled data?"
   #"Can you recommend approaches for predicting stock prices using both historical price data and news sentiment? The sequences have different lengths and I need the model to be interpretable for regulatory compliance."
   #"Need GDPR-compliant model that can be audited and doesn't store personal information."
   #"hi"

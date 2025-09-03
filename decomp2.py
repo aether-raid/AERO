@@ -479,6 +479,7 @@ class SemanticMatcher:
                 from sentence_transformers import SentenceTransformer
                 self._model = SentenceTransformer('all-MiniLM-L6-v2')
                 self._semantic_available = True
+                print('sentence transformer found, using sentence transformer')
             except ImportError:
                 if self._semantic_available is None:  # Only warn once
                     print("Note: sentence-transformers not available, using keyword matching only")
@@ -1345,7 +1346,7 @@ class DecomposerTool2:
 if __name__ == "__main__":
       # Test enhanced PropertyExtractor2
 
-    demo_query =   "I want to build a real-time object detection system for autonomous vehicles using transformer architecture with edge deployment constraints."
+    demo_query =   "I'm working on anomaly detection in dynamic social networks where nodes and edges change over time."
     print("ENHANCED PropertyExtractor2 Results")
     print("="*50)
     
