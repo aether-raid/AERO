@@ -35,6 +35,7 @@ def extract_pdf_text(pdf_url):
     except Exception as e:
         print(f"❌ Error extracting PDF text: {e}")
         return None
+    
 if __name__ == "__main__":
     # Example: Get metadata for a paper by ID
     arxiv_id = "2111.00715v1"

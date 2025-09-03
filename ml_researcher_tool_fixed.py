@@ -324,134 +324,126 @@ class MLResearcherTool:
         print(f"\n🔍 SEARCHING arXiv: {search_query}")
         print("=" * 80)
         
-        # Try multiple search strategies if first one fails
-        search_strategies = [
-            ("Full query", search_query),
-            ("First two terms", "/".join(search_query.split('/')[:2])),
-            ("Main term only", search_query.split('/')[0])
-        ]
+        # Format the search query
+        formatted_query = format_search_string(search_query)
+        print(f"Formatted query: {formatted_query}")
         
-        for strategy_name, query in search_strategies:
-            print(f"Trying {strategy_name}: {query}")
+        # Build the URL
+        url = f"http://export.arxiv.org/api/query?search_query={formatted_query}&start=0&max_results={max_results}"
+        
+        try:
+            with libreq.urlopen(url) as response:
+                xml_data = response.read()
             
-            # Format the search query
-            formatted_query = format_search_string(query)
-            print(f"Formatted query: {formatted_query}")
+            # Parse XML
+            root = ET.fromstring(xml_data)
             
-            # Build the URL
-            url = f"http://export.arxiv.org/api/query?search_query={formatted_query}&start=0&max_results={max_results}"
+            # Namespaces
+            ns = {
+                'atom': 'http://www.w3.org/2005/Atom',
+                'arxiv': 'http://arxiv.org/schemas/atom',
+                'opensearch': 'http://a9.com/-/spec/opensearch/1.1/'
+            }
             
-            try:
-                with libreq.urlopen(url) as response:
-                    xml_data = response.read()
+            # Get total results
+            total_results_elem = root.find('opensearch:totalResults', ns)
+            total_results = int(total_results_elem.text) if total_results_elem is not None else 0
+            
+            print(f"Total papers found: {total_results}")
+            
+            if total_results > 0:
+                print("=" * 80)
                 
-                # Parse XML
-                root = ET.fromstring(xml_data)
+                # Get all paper entries
+                entries = root.findall('atom:entry', ns)
+                papers = []
                 
-                # Namespaces
-                ns = {
-                    'atom': 'http://www.w3.org/2005/Atom',
-                    'arxiv': 'http://arxiv.org/schemas/atom',
-                    'opensearch': 'http://a9.com/-/spec/opensearch/1.1/'
-                }
-                
-                # Get total results
-                total_results_elem = root.find('opensearch:totalResults', ns)
-                total_results = int(total_results_elem.text) if total_results_elem is not None else 0
-                
-                print(f"Total papers found: {total_results}")
-                
-                # If we found papers, proceed with this strategy
-                if total_results > 0:
-                    print("=" * 80)
+                for i, entry in enumerate(entries, 1):
+                    # Extract basic info
+                    title = entry.find('atom:title', ns).text.strip()
+                    paper_id = entry.find('atom:id', ns).text.split('/')[-1]
                     
-                    # Get all paper entries
-                    entries = root.findall('atom:entry', ns)
-                    papers = []
+
+                    # Get published date
+                    published = entry.find('atom:published', ns).text[:10] if entry.find('atom:published', ns) is not None else "Unknown"
                     
-                    for i, entry in enumerate(entries, 1):
-                        # Extract basic info
-                        title = entry.find('atom:title', ns).text.strip()
-                        paper_id = entry.find('atom:id', ns).text.split('/')[-1]
-                        
-
-                        # Get published date
-                        published = entry.find('atom:published', ns).text[:10] if entry.find('atom:published', ns) is not None else "Unknown"
-                        
-                        # Get arXiv URL
-                        arxiv_url = f"http://export.arxiv.org/api/query?id_list={paper_id}"
-                        import requests
-                        import feedparser
+                    # Get arXiv URL
+                    arxiv_url = f"http://export.arxiv.org/api/query?id_list={paper_id}"
+                    import requests
+                    import feedparser
 
 
-                        response = requests.get(arxiv_url)
-                        feed = feedparser.parse(response.text)
-                        entry = feed.entries[0]
-                        pdf_txt = extract_pdf_text(arxiv_url)
+                    response = requests.get(arxiv_url)
+                    feed = feedparser.parse(response.text)
+                    entry = feed.entries[0]
+                    pdf_txt = extract_pdf_text(arxiv_url)
 
 
-                                            
-                        # Find PDF link
-                        pdf_link = None
-                        for link in entry.links:
-                            if link.type == 'application/pdf':
-                                pdf_link = link.href
-                                break
+                                        
+                    # Find PDF link
+                    pdf_link = None
+                    for link in entry.links:
+                        if link.type == 'application/pdf':
+                            pdf_link = link.href
+                            break
 
-                        # Extract text from PDF
-                        pdf_txt = extract_pdf_text(pdf_link) if pdf_link else None
+                    # Extract text from PDF
+                    pdf_txt = extract_pdf_text(pdf_link) if pdf_link else None
 
-                        # Store paper info
-                        paper_info = {
-                            "title": title,
-                            "id": paper_id,
-                            "published": published,
-                            #"authors": authors,
-                            #"abstract": summary,
-                            "content": pdf_txt,
-                            "url": arxiv_url
-                        }
-                        papers.append(paper_info)
-                        
-                        # Print formatted output
-                        print(f"\n📄 PAPER #{i}")
-                        print("-" * 60)
-                        print(f"Title: {title}")
-                        print(f"ID: {paper_id}")
-                        print(f"Published: {published}")
-                       
-                        print(f"URL: {arxiv_url}")
-                        print(f"Content:\n{pdf_txt[500:]}")
-                        print("-" * 60)
-                       
-                    
-                    return {
-                        "search_successful": True,
-                        "total_results": str(total_results),
-                        "papers_returned": len(papers),
-                        "papers": papers,
-                        "formatted_query": formatted_query,
-                        "original_query": search_query,
-                        "strategy_used": strategy_name
+                    # Store paper info
+                    paper_info = {
+                        "title": title,
+                        "id": paper_id,
+                        "published": published,
+                        #"authors": authors,
+                        #"abstract": summary,
+                        "content": pdf_txt,
+                        "url": arxiv_url
                     }
-                else:
-                    print(f"No papers found with {strategy_name}, trying next strategy...")
-                    print("-" * 40)
+                    papers.append(paper_info)
                     
-            except Exception as e:
-                print(f"Error with {strategy_name}: {e}")
-                print("-" * 40)
-                continue
-        
-        # If all strategies failed
-        print("❌ No papers found with any search strategy")
-        return {
-            "search_successful": False,
-            "error": "No papers found with any search strategy",
-            "papers": [],
-            "formatted_query": "",
-            "original_query": search_query
-        }
+                    # Print formatted output
+                    print(f"\n📄 PAPER #{i}")
+                    print("-" * 60)
+                    print(f"Title: {title}")
+                    print(f"ID: {paper_id}")
+                    print(f"Published: {published}")
+                   
+                    print(f"URL: {arxiv_url}")
+                    print(f"Content:\n{pdf_txt[:500]}")
+                    print("-" * 60)
+                   
+                
+                return {
+                    "search_successful": True,
+                    "total_results": str(total_results),
+                    "papers_returned": len(papers),
+                    "papers": papers,
+                    "formatted_query": formatted_query,
+                    "original_query": search_query
+                }
+            else:
+                print("No papers found")
+                return {
+                    "search_successful": False,
+                    "total_results": "0",
+                    "papers_returned": 0,
+                    "papers": [],
+                    "formatted_query": formatted_query,
+                    "original_query": search_query
+                }
+                    
+        except Exception as e:
+            print(f"Error searching arXiv: {e}")
+            return {
+                "search_successful": False,
+                "error": f"Search error: {e}",
+                "total_results": "0",
+                "papers_returned": 0,
+                "papers": [],
+                "formatted_query": "",
+                "original_query": search_query
+            }
     
     def analyze_research_task(self, prompt: str) -> Dict[str, Any]:
         """Main method to analyze a research task."""
