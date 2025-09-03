@@ -37,7 +37,7 @@ def extract_pdf_text(pdf_url):
         return None
 if __name__ == "__main__":
     # Example: Get metadata for a paper by ID
-    arxiv_id = "2406.05088v1"
+    arxiv_id = "2111.00715v1"
     url = f"http://export.arxiv.org/api/query?id_list={arxiv_id}"
 
     response = requests.get(url)
@@ -58,6 +58,8 @@ if __name__ == "__main__":
         if link.type == 'application/pdf':
             pdf_link = link.href
             break
+
+        
 
     if pdf_link:
         print("PDF Link:", pdf_link)

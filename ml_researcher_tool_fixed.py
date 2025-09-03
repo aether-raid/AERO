@@ -409,13 +409,32 @@ Return only the search query without explanation.
                         paper_id = entry.find('atom:id', ns).text.split('/')[-1]
                         
 
-                        
                         # Get published date
                         published = entry.find('atom:published', ns).text[:10] if entry.find('atom:published', ns) is not None else "Unknown"
                         
                         # Get arXiv URL
                         arxiv_url = f"http://export.arxiv.org/api/query?id_list={paper_id}"
+                        import requests
+                        import feedparser
+
+
+                        response = requests.get(arxiv_url)
+                        feed = feedparser.parse(response.text)
+                        entry = feed.entries[0]
                         pdf_txt = extract_pdf_text(arxiv_url)
+
+
+                                            
+                        # Find PDF link
+                        pdf_link = None
+                        for link in entry.links:
+                            if link.type == 'application/pdf':
+                                pdf_link = link.href
+                                break
+
+                        # Extract text from PDF
+                        pdf_txt = extract_pdf_text(pdf_link) if pdf_link else None
+
                         # Store paper info
                         paper_info = {
                             "title": title,
