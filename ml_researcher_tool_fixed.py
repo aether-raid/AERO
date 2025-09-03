@@ -23,6 +23,7 @@ import openai
 import math
 import urllib.request as libreq
 import xml.etree.ElementTree as ET
+from Report_to_txt import extract_pdf_text
 
 
 @dataclass
@@ -405,13 +406,8 @@ Return only the search query without explanation.
                     for i, entry in enumerate(entries, 1):
                         # Extract basic info
                         title = entry.find('atom:title', ns).text.strip()
-                        summary = entry.find('atom:summary', ns).text.strip()
                         paper_id = entry.find('atom:id', ns).text.split('/')[-1]
-                        import requests
-                        pdf_url = entry.find("atom:link[@title='pdf']", ns).attrib['href']
-                        response = requests.get(pdf_url)
-                        with open("paper.pdf", "wb") as f:
-                           f.write(response.content)
+                        
 
                         
                         # Get published date
@@ -419,6 +415,7 @@ Return only the search query without explanation.
                         
                         # Get arXiv URL
                         arxiv_url = f"http://export.arxiv.org/api/query?id_list={paper_id}"
+                        pdf_txt = extract_pdf_text(arxiv_url)
                         # Store paper info
                         paper_info = {
                             "title": title,
@@ -426,6 +423,7 @@ Return only the search query without explanation.
                             "published": published,
                             #"authors": authors,
                             #"abstract": summary,
+                            "content": pdf_txt,
                             "url": arxiv_url
                         }
                         papers.append(paper_info)
@@ -436,11 +434,11 @@ Return only the search query without explanation.
                         print(f"Title: {title}")
                         print(f"ID: {paper_id}")
                         print(f"Published: {published}")
-                       # print(f"Authors: {', '.join(authors)}")
+                       
                         print(f"URL: {arxiv_url}")
+                        print(f"Content:\n{pdf_txt[500:]}")
                         print("-" * 60)
-                        print(f"Abstract:\n{summary}")
-                        print("=" * 80)
+                       
                     
                     return {
                         "search_successful": True,
