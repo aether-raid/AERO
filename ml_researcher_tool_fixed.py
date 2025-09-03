@@ -24,6 +24,7 @@ import math
 import urllib.request as libreq
 import xml.etree.ElementTree as ET
 from Report_to_txt import extract_pdf_text
+from arxiv import format_search_string
 
 
 @dataclass
@@ -133,39 +134,39 @@ class MLResearcherTool:
         categories_list = "\n".join([f"- {category}" for category in ML_RESEARCH_CATEGORIES])
         
         content = f"""
-You are an expert machine learning researcher. Analyze the following research task and determine which of the predefined categories apply.
+            You are an expert machine learning researcher. Analyze the following research task and determine which of the predefined categories apply.
 
-Research Task: {query}
+            Research Task: {query}
 
-Categories to analyze:
-{categories_list}
+            Categories to analyze:
+            {categories_list}
 
-For each category that applies to this research task, provide:
-1. The category name (exactly as listed above)
-2. A confidence score between 0.0 and 1.0 (how certain you are this category applies)
-3. A brief explanation of why this category applies
-4. Specific evidence from the task description that supports this categorization
+            For each category that applies to this research task, provide:
+            1. The category name (exactly as listed above)
+            2. A confidence score between 0.0 and 1.0 (how certain you are this category applies)
+            3. A brief explanation of why this category applies
+            4. Specific evidence from the task description that supports this categorization
 
-Only include categories that clearly apply to the task. If a category doesn't apply or you're uncertain, don't include it.
+            Only include categories that clearly apply to the task. If a category doesn't apply or you're uncertain, don't include it.
 
-Format your response as a JSON array like this:
-[
-  {{
-    "category": "temporal_structure",
-    "confidence": 0.95,
-    "explanation": "The task explicitly mentions time series data which has temporal dependencies",
-    "evidence": "time series forecasting"
-  }},
-  {{
-    "category": "variable_length_sequences", 
-    "confidence": 0.85,
-    "explanation": "Task mentions variable length sequences",
-    "evidence": "variable length sequences"
-  }}
-]
+            Format your response as a JSON array like this:
+            [
+            {{
+                "category": "temporal_structure",
+                "confidence": 0.95,
+                "explanation": "The task explicitly mentions time series data which has temporal dependencies",
+                "evidence": "time series forecasting"
+            }},
+            {{
+                "category": "variable_length_sequences", 
+                "confidence": 0.85,
+                "explanation": "Task mentions variable length sequences",
+                "evidence": "variable length sequences"
+            }}
+            ]
 
-Return only the JSON array, no additional text.
-"""
+            Return only the JSON array, no additional text.
+        """
 
         try:
             response = self.client.chat.completions.create(
@@ -216,27 +217,27 @@ Return only the JSON array, no additional text.
     def decompose_task_with_llm(self, prompt: str) -> Dict[str, Any]:
         """Use LLM to decompose the task and identify additional properties."""
         content = f"""
-You are an expert machine learning researcher. Analyze the following research task and decompose it into key properties and characteristics.
+            You are an expert machine learning researcher. Analyze the following research task and decompose it into key properties and characteristics.
 
-Task: {prompt}
+            Task: {prompt}
 
-Please identify and analyze the following aspects:
+            Please identify and analyze the following aspects:
 
-1. **Data Type**: What kind of data is involved? (text, images, time series, tabular, etc.)
-2. **Learning Type**: What type of learning is this? (supervised, unsupervised, reinforcement, etc.)
-3. **Task Category**: What is the main ML task? (classification, regression, generation, clustering, etc.)
-4. **Architecture Requirements**: What types of models or architectures might be suitable?
-5. **Key Challenges**: What are the main technical challenges?
-6. **Data Characteristics**: 
-   - Variable length sequences?
-   - Fixed or variable input dimensions?
-   - Temporal structure?
-   - Multi-modal data?
-7. **Performance Metrics**: What metrics would be appropriate for evaluation?
-8. **Domain Specifics**: Any domain-specific considerations?
+            1. **Data Type**: What kind of data is involved? (text, images, time series, tabular, etc.)
+            2. **Learning Type**: What type of learning is this? (supervised, unsupervised, reinforcement, etc.)
+            3. **Task Category**: What is the main ML task? (classification, regression, generation, clustering, etc.)
+            4. **Architecture Requirements**: What types of models or architectures might be suitable?
+            5. **Key Challenges**: What are the main technical challenges?
+            6. **Data Characteristics**: 
+            - Variable length sequences?
+            - Fixed or variable input dimensions?
+            - Temporal structure?
+            - Multi-modal data?
+            7. **Performance Metrics**: What metrics would be appropriate for evaluation?
+            8. **Domain Specifics**: Any domain-specific considerations?
 
-Provide your analysis in a structured JSON format with clear explanations for each identified property.
-"""
+            Provide your analysis in a structured JSON format with clear explanations for each identified property.
+    """
 
         try:
             response = self.client.chat.completions.create(
@@ -264,32 +265,32 @@ Provide your analysis in a structured JSON format with clear explanations for ea
         prop_names = [prop.name for prop in high_confidence_props]
         
         content = f"""
-Based on the following machine learning research task analysis, generate a concise search query suitable for arXiv API search.
+            Based on the following machine learning research task analysis, generate a concise search query suitable for arXiv API search.
 
-Original Task: {prompt}
+            Original Task: {prompt}
 
-Detected Categories: {', '.join(prop_names)}
+            Detected Categories: {', '.join(prop_names)}
 
-Detailed Analysis: {llm_analysis.get('llm_analysis', 'Not available')}
+            Detailed Analysis: {llm_analysis.get('llm_analysis', 'Not available')}
 
-Create a focused search query (2-4 key terms) that would effectively find relevant research papers on arXiv. The query should be:
-- Specific enough to find relevant papers
-- General enough to not be too restrictive
-- Include key ML concepts and techniques
-- Use forward slashes (/) to separate different terms or concepts
-- Group related words together as single terms (e.g., neural network, time series, machine learning)
-- Avoid overly technical jargon
+            Create a focused search query (2-4 key terms) that would effectively find relevant research papers on arXiv. The query should be:
+            - Specific enough to find relevant papers
+            - General enough to not be too restrictive
+            - Include key ML concepts and techniques
+            - Use forward slashes (/) to separate different terms or concepts
+            - Group related words together as single terms (e.g., neural network, time series, machine learning)
+            - Avoid overly technical jargon
 
-IMPORTANT: Use forward slashes (/) to separate terms, not quotes or spaces.
+            IMPORTANT: Use forward slashes (/) to separate terms, not quotes or spaces.
 
-Examples of good search queries:
-- neural network/time series/forecasting
-- deep learning/anomaly detection/sensor data
-- transformer model/natural language processing
-- autoencoder/reconstruction/noise robustness
+            Examples of good search queries:
+            - neural network/time series/forecasting
+            - deep learning/anomaly detection/sensor data
+            - transformer model/natural language processing
+            - autoencoder/reconstruction/noise robustness
 
-Return only the search query without explanation.
-"""
+            Return only the search query without explanation.
+        """
 
         try:
             response = self.client.chat.completions.create(
@@ -316,42 +317,7 @@ Return only the search query without explanation.
                 keywords.append("autoencoder")
             
             return "/".join(keywords) if keywords else "machine learning"
-    
-    def format_search_string(self, input_string: str) -> str:
-        """Convert string to arXiv search format handling slash-separated terms.
-        
-        Input: "deep learning/time series/forecasting/variable length"
-        Output: More flexible search that's likely to find papers
-        """
-        # Split by forward slashes
-        terms = input_string.strip().split('/')
-        
-        if not terms:
-            return "all:machine+learning"
-        
-        # For better results, use OR between terms instead of AND
-        # This makes the search less restrictive
-        parts = []
-        
-        for term in terms:
-            term = term.strip()
-            if not term:
-                continue
-            
-            # If term has spaces, treat it as a phrase
-            if ' ' in term:
-                # Replace spaces with + and add URL encoding for quotes
-                formatted_term = term.replace(' ', '+')
-                parts.append(f'all:%22{formatted_term}%22')
-            else:
-                # Single word, no quotes needed
-                parts.append(f'all:{term}')
-        
-        # Join with OR for broader results (instead of AND)
-        # But limit to first 3 terms to avoid too broad search
-        main_parts = parts[:3]
-        return '+OR+'.join(main_parts) if main_parts else "all:machine+learning"
-    
+
     def search_arxiv(self, search_query: str, max_results: int = 5) -> Dict[str, Any]:
         """Search arXiv for papers using the formatted search query."""
         
@@ -369,7 +335,7 @@ Return only the search query without explanation.
             print(f"Trying {strategy_name}: {query}")
             
             # Format the search query
-            formatted_query = self.format_search_string(query)
+            formatted_query = format_search_string(query)
             print(f"Formatted query: {formatted_query}")
             
             # Build the URL
@@ -490,61 +456,63 @@ Return only the search query without explanation.
         else:
             print("✅ LLM analysis completed")
             
-            # Display the detailed analysis in readable format
-            print("\n" + "=" * 80)
-            print("📋 DETAILED ANALYSIS")
-            print("=" * 80)
-            
-            analysis_text = llm_analysis.get('llm_analysis', 'No analysis available')
-            
-            # Try to parse and format JSON if it's JSON, otherwise just print as text
-            try:
-                # Remove markdown formatting if present
-                if analysis_text.startswith("```json"):
-                    analysis_text = analysis_text[7:]
-                if analysis_text.endswith("```"):
-                    analysis_text = analysis_text[:-3]
-                analysis_text = analysis_text.strip()
+            wantsee=False
+            if wantsee:
+                # Display the detailed analysis in readable format
+                print("\n" + "=" * 80)
+                print("📋 DETAILED ANALYSIS")
+                print("=" * 80)
                 
-                # Try to parse as JSON for better formatting
-                analysis_json = json.loads(analysis_text)
+                analysis_text = llm_analysis.get('llm_analysis', 'No analysis available')
                 
-                # Pretty print the analysis
-                def print_analysis_section(key, value, indent=0):
-                    prefix = "  " * indent
-                    if isinstance(value, dict):
-                        print(f"{prefix}📌 {key.replace('_', ' ').title()}:")
-                        for sub_key, sub_value in value.items():
-                            print_analysis_section(sub_key, sub_value, indent + 1)
-                    elif isinstance(value, list):
-                        print(f"{prefix}📌 {key.replace('_', ' ').title()}:")
-                        for i, item in enumerate(value, 1):
-                            if isinstance(item, dict):
-                                print(f"{prefix}  {i}. {item}")
-                            else:
-                                print(f"{prefix}  {i}. {item}")
-                    else:
-                        if key.lower() in ['type', 'category', 'explanation', 'description']:
-                            print(f"{prefix}📌 {key.replace('_', ' ').title()}: {value}")
+                # Try to parse and format JSON if it's JSON, otherwise just print as text
+                try:
+                    # Remove markdown formatting if present
+                    if analysis_text.startswith("```json"):
+                        analysis_text = analysis_text[7:]
+                    if analysis_text.endswith("```"):
+                        analysis_text = analysis_text[:-3]
+                    analysis_text = analysis_text.strip()
+                    
+                    # Try to parse as JSON for better formatting
+                    analysis_json = json.loads(analysis_text)
+                    
+                    # Pretty print the analysis
+                    def print_analysis_section(key, value, indent=0):
+                        prefix = "  " * indent  
+                        if isinstance(value, dict):
+                            print(f"{prefix}📌 {key.replace('_', ' ').title()}:")
+                            for sub_key, sub_value in value.items():
+                                print_analysis_section(sub_key, sub_value, indent + 1)
+                        elif isinstance(value, list):
+                            print(f"{prefix}📌 {key.replace('_', ' ').title()}:")
+                            for i, item in enumerate(value, 1):
+                                if isinstance(item, dict):
+                                    print(f"{prefix}  {i}. {item}")
+                                else:
+                                    print(f"{prefix}  {i}. {item}")
                         else:
-                            print(f"{prefix}• {key.replace('_', ' ').title()}: {value}")
-                
-                # Print each main section
-                for main_key, main_value in analysis_json.items():
-                    if main_key == 'analysis' and isinstance(main_value, dict):
-                        for section_key, section_value in main_value.items():
-                            print(f"\n🔍 {section_key.replace('_', ' ').upper()}")
+                            if key.lower() in ['type', 'category', 'explanation', 'description']:
+                                print(f"{prefix}📌 {key.replace('_', ' ').title()}: {value}")
+                            else:
+                                print(f"{prefix}• {key.replace('_', ' ').title()}: {value}")
+                    
+                    # Print each main section
+                    for main_key, main_value in analysis_json.items():
+                        if main_key == 'analysis' and isinstance(main_value, dict):
+                            for section_key, section_value in main_value.items():
+                                print(f"\n🔍 {section_key.replace('_', ' ').upper()}")
+                                print("-" * 60)
+                                print_analysis_section(section_key, section_value, 0)
+                        else:
+                            print(f"\n🔍 {main_key.replace('_', ' ').upper()}")
                             print("-" * 60)
-                            print_analysis_section(section_key, section_value, 0)
-                    else:
-                        print(f"\n🔍 {main_key.replace('_', ' ').upper()}")
-                        print("-" * 60)
-                        print_analysis_section(main_key, main_value, 0)
-                        
-            except (json.JSONDecodeError, AttributeError):
-                # If it's not JSON or parsing fails, just print as formatted text
-                print(analysis_text)
-            
+                            print_analysis_section(main_key, main_value, 0)
+                            
+                except (json.JSONDecodeError, AttributeError):
+                    # If it's not JSON or parsing fails, just print as formatted text
+                    print(analysis_text)
+                
             print("\n" + "=" * 80)
         
         # Step 3: Generate arXiv search summary

@@ -75,76 +75,76 @@ def explore_atom_elements(xml_data):
     print(f"  • opensearch: {namespaces['opensearch']}")
     
     return namespaces
+if __name__ == "__main__":
+    # Example usage
+    search_string = "deep learning/time series forecasting/variable length"
+    search_query = format_search_string(search_string)
 
-# Example usage
-search_string = "deep learning/time series forecasting/variable length"
-search_query = format_search_string(search_string)
-
-print(f"Original string: {search_string}")
-print(f"Formatted query: {search_query}")
-print("="*80)
-print("="*80)
-url = f"http://export.arxiv.org/api/query?search_query={search_query}&start=0&max_results=5"
-
-print("🔍 SEARCHING: Deep learning time series variable length")
-print("="*80)
-print(f"Query: {search_query}")
-print("="*80)
-
-try:
-    with libreq.urlopen(url) as response:
-        xml_data = response.read()
-    
-    # First, explore the atom elements
-    namespaces = explore_atom_elements(xml_data)
-    
-    # Parse XML
-    root = ET.fromstring(xml_data)
-    
-    # Namespaces (from explorer)
-    ns = namespaces
-    
-    # Get total results
-    total_results_elem = root.find('opensearch:totalResults', ns)
-    total_results = total_results_elem.text if total_results_elem is not None else "Unknown"
-    
-    print(f"Total papers found: {total_results}")
+    print(f"Original string: {search_string}")
+    print(f"Formatted query: {search_query}")
     print("="*80)
-    
-    # Get all paper entries
-    entries = root.findall('atom:entry', ns)
-    
-    if entries:
-        for i, entry in enumerate(entries, 1):
-            # Extract basic info
-            title = entry.find('atom:title', ns).text.strip()
-            summary = entry.find('atom:summary', ns).text.strip()
-            paper_id = entry.find('atom:id', ns).text.split('/')[-1]
-            content = entry.find('atom:content', ns).text.strip() if entry.find('atom:content', ns) is not None else "No content"
+    print("="*80)
+    url = f"http://export.arxiv.org/api/query?search_query={search_query}&start=0&max_results=5"
 
-            # Get authors
-            authors = []
-            for author in entry.findall('atom:author', ns):
-                name = author.find('atom:name', ns).text
-                authors.append(name)
-            
-            # Get published date
-            published = entry.find('atom:published', ns).text[:10] if entry.find('atom:published', ns) is not None else "Unknown"
-            
-            # Print formatted output
-            print(f"\n📄 PAPER #{i}")
-            print("-" * 60)
-            print(f"Title: {title}")
-            print(f"ID: {paper_id}")
-            print(f"Published: {published}")
-            print(f"Authors: {', '.join(authors)}")
-            print(f"Content:{content}")
-            print("-" * 60)
-            print(f"Abstract:\n{summary}")
-            print("="*80)
-    else:
-        print("❌ No papers found")
+    print("🔍 SEARCHING: Deep learning time series variable length")
+    print("="*80)
+    print(f"Query: {search_query}")
+    print("="*80)
+
+    try:
+        with libreq.urlopen(url) as response:
+            xml_data = response.read()
         
-except Exception as e:
-    print(f"❌ Error with search: {e}")
-    
+        # First, explore the atom elements
+        namespaces = explore_atom_elements(xml_data)
+        
+        # Parse XML
+        root = ET.fromstring(xml_data)
+        
+        # Namespaces (from explorer)
+        ns = namespaces
+        
+        # Get total results
+        total_results_elem = root.find('opensearch:totalResults', ns)
+        total_results = total_results_elem.text if total_results_elem is not None else "Unknown"
+        
+        print(f"Total papers found: {total_results}")
+        print("="*80)
+        
+        # Get all paper entries
+        entries = root.findall('atom:entry', ns)
+        
+        if entries:
+            for i, entry in enumerate(entries, 1):
+                # Extract basic info
+                title = entry.find('atom:title', ns).text.strip()
+                summary = entry.find('atom:summary', ns).text.strip()
+                paper_id = entry.find('atom:id', ns).text.split('/')[-1]
+                content = entry.find('atom:content', ns).text.strip() if entry.find('atom:content', ns) is not None else "No content"
+
+                # Get authors
+                authors = []
+                for author in entry.findall('atom:author', ns):
+                    name = author.find('atom:name', ns).text
+                    authors.append(name)
+                
+                # Get published date
+                published = entry.find('atom:published', ns).text[:10] if entry.find('atom:published', ns) is not None else "Unknown"
+                
+                # Print formatted output
+                print(f"\n📄 PAPER #{i}")
+                print("-" * 60)
+                print(f"Title: {title}")
+                print(f"ID: {paper_id}")
+                print(f"Published: {published}")
+                print(f"Authors: {', '.join(authors)}")
+                print(f"Content:{content}")
+                print("-" * 60)
+                print(f"Abstract:\n{summary}")
+                print("="*80)
+        else:
+            print("❌ No papers found")
+            
+    except Exception as e:
+        print(f"❌ Error with search: {e}")
+        
