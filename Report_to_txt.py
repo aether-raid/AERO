@@ -1,7 +1,5 @@
 import requests
 import feedparser
-import os
-from urllib.parse import urlparse
 import PyPDF2
 from io import BytesIO
 
@@ -42,22 +40,16 @@ def extract_pdf_text(pdf_url):
 arxiv_id = "2406.05088v1"
 url = f"http://export.arxiv.org/api/query?id_list={arxiv_id}"
 
-# Create downloads directory if it doesn't exist
-if not os.path.exists('downloads'):
-    os.makedirs('downloads')
-
 response = requests.get(url)
 feed = feedparser.parse(response.text)
 entry = feed.entries[0]
 
 print("="*60)
 print("📋 PAPER DETAILS")
-print("="*60)
+print("-"*60)
 print("Title:", entry.title)
 print("Authors:", ', '.join([author.name for author in entry.authors]))
 print("Published:", entry.published)
-print("="*60)
-print("Abstract:", entry.summary[:200] + "...")
 print("="*60)
 
 # Find PDF link
@@ -74,13 +66,8 @@ if pdf_link:
     pdf_text = extract_pdf_text(pdf_link)
     if pdf_text:
         print("\n" + "="*60)
-        print("📄 PDF TEXT CONTENT")
+        print("📄 PDF TEXT CONTENT (First 500 characters)")
         print("="*60)
-        print(pdf_text[:2000] + "..." if len(pdf_text) > 2000 else pdf_text)
-        
-        # Optionally save text to file
-        with open(f"downloads/{arxiv_id}_text.txt", 'w', encoding='utf-8') as f:
-            f.write(pdf_text)
-        print(f"\n� Full text saved as: downloads/{arxiv_id}_text.txt")
+        print(pdf_text[:500] + "..." if len(pdf_text) > 500 else pdf_text)
 else:
     print("❌ No PDF link found")
