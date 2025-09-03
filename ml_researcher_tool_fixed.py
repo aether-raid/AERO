@@ -67,29 +67,30 @@ class PropertyHit:
 
 
 # ML Research Categories for LLM Analysis
-ML_RESEARCH_CATEGORIES = [
-    "variable_length_sequences",
-    "fixed_channel_count", 
-    "temporal_structure",
-    "reconstruction_objective",
-    "latent_embedding_required",
-    "shape_preserving_seq2seq",
-    "classification_objective",
-    "regression_objective", 
-    "generation_objective",
-    "noise_robustness",
-    "real_time_constraint",
-    "invariance_requirements",
-    "sensor_data",
-    "multimodal_data",
-    "interpretability_required",
-    "high_accuracy_required",
-    "few_shot_learning",
-    "model_selection_query",
-    "text_data",
-    "multilingual_requirement",
-    "variable_document_length"
-]
+ML_RESEARCH_CATEGORIES = {
+    "variable_length_sequences": "Data consists of sequences of varying lengths (e.g., text, sensor streams, speech).",
+    "fixed_channel_count": "Inputs have a fixed number of channels or features across all samples (e.g., EEG signals, RGB images).",
+    "temporal_structure": "Data has inherent time dependencies or ordering that models must capture (e.g., time series forecasting).",
+    "reconstruction_objective": "Task requires reconstructing input signals from compressed or corrupted representations (e.g., autoencoders).",
+    "latent_embedding_required": "Learning meaningful latent representations is central to the approach (e.g., VAEs, contrastive learning).",
+    "shape_preserving_seq2seq": "Output sequences must preserve key structural properties of the input (e.g., translation, speech-to-speech).",
+    "classification_objective": "Task involves predicting discrete labels from data (e.g., sentiment analysis, image classification).",
+    "regression_objective": "Task involves predicting continuous values (e.g., stock prices, energy consumption).",
+    "generation_objective": "Models must produce new data samples from learned distributions (e.g., text generation, image synthesis).",
+    "noise_robustness": "System must perform well under noisy, incomplete, or corrupted inputs (e.g., real-world sensor data).",
+    "real_time_constraint": "Solution must operate under strict latency or streaming requirements (e.g., real-time detection).",
+    "invariance_requirements": "Predictions must remain stable under transformations (e.g., translation, scaling, rotation, time shifts).",
+    "sensor_data": "Inputs originate from physical sensors (e.g., IoT, biomedical devices, accelerometers).",
+    "multimodal_data": "Task combines multiple data types or modalities (e.g., vision + language, audio + text).",
+    "interpretability_required": "Model must provide human-understandable reasoning or explanations (e.g., clinical AI, finance).",
+    "high_accuracy_required": "Performance must meet strict accuracy thresholds due to critical application domains (e.g., medical diagnostics).",
+    "few_shot_learning": "System must generalize from very few labeled examples (e.g., low-resource languages, rare diseases).",
+    "model_selection_query": "Research focuses on choosing or suggesting the most appropriate model for given properties.",
+    "text_data": "Inputs are natural language text (e.g., documents, transcripts, chat logs).",
+    "multilingual_requirement": "Task involves handling multiple languages or cross-lingual transfer.",
+    "variable_document_length": "Document inputs vary significantly in length (e.g., short tweets vs. long research papers)."
+}
+
 
 
 class MLResearcherTool:
@@ -143,11 +144,27 @@ class MLResearcherTool:
 
             For each category that applies to this research task, provide:
             1. The category name (exactly as listed above)
-            2. A confidence score between 0.0 and 1.0 (how certain you are this category applies)
+            2. A confidence score between 0.0 and 1.0 (how certain you are this category applies, Refer to the calibration table)
             3. A brief explanation of why this category applies
             4. Specific evidence from the task description that supports this categorization
 
-            Only include categories that clearly apply to the task. If a category doesn't apply or you're uncertain, don't include it.
+            Confidence calibration (0.0–1.0):
+            - 0.95–1.00: Category is explicitly stated or entailed by multiple strong cues.
+            - 0.80–0.94: Strong single cue or multiple moderate cues; unlikely to be wrong.
+            - 0.60–0.79: Reasonable inference with at least one clear cue; some uncertainty.
+            - <0.60: Category is highly unlikely to apply, and can be safely ignored.
+
+            Explanations:
+            - 1–2 sentences, specific and non-generic, referencing how the evidence meets the category’s definition.
+            - Avoid restating the evidence verbatim; interpret it.
+
+            Evidence rules:
+            - "evidence" must be short verbatim quotes or near-verbatim spans from the task (≤ 20 words each). If paraphrase is unavoidable, mark with ~ at start (e.g., "~streaming data implies temporal order").
+            - Provide 1–3 evidence snippets per category, concatenated with " | " if multiple.
+            - No invented facts; no external knowledge.
+
+            Do not filter categories down to only the applicable ones, you want to always return the full set, but include a confidence score for each (so the tool/user can judge relevance).
+
 
             Format your response as a JSON array like this:
             [
@@ -164,6 +181,7 @@ class MLResearcherTool:
                 "evidence": "variable length sequences"
             }}
             ]
+            Always return valid JSON. For any field that may contain multiple values (e.g., evidence), output them as a JSON array of strings instead of separating by commas inside a single string.
 
             Return only the JSON array, no additional text.
         """
@@ -586,6 +604,7 @@ class MLResearcherTool:
                 print("\n" + "=" * 50)
                 print("📊 ANALYSIS RESULTS")
                 print("=" * 50)
+            
                 
                 # Save results to file
                 timestamp = __import__('datetime').datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -626,3 +645,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
