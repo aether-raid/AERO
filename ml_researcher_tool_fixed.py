@@ -354,7 +354,7 @@ class MLResearcherTool:
                 keywords.append("autoencoder")
             
             return "/".join(keywords) if keywords else "machine learning"
-
+    
     import re, math, time
 
     async def _score_paper_relevance(self, paper_title: str, paper_content: str, original_query: str) -> float:
@@ -460,6 +460,30 @@ class MLResearcherTool:
         
         print(f"\n✅ Papers ranked by relevance to: '{original_query}'")
         return ranked_papers
+
+    def _clean_text_for_json(self, text: str) -> str:
+        """Clean text to remove invalid Unicode characters that cause JSON serialization issues."""
+        if not isinstance(text, str):
+            return str(text)
+        
+        # Remove surrogate characters and other problematic Unicode
+        import unicodedata
+        
+        # First, try to handle common issues
+        try:
+            # Remove or replace surrogate pairs
+            cleaned = text.encode('utf-8', errors='ignore').decode('utf-8')
+            
+            # Normalize Unicode characters
+            cleaned = unicodedata.normalize('NFKD', cleaned)
+            
+            # Remove any remaining control characters except common ones
+            cleaned = ''.join(char for char in cleaned if unicodedata.category(char) != 'Cc' or char in '\n\r\t')
+            
+            return cleaned
+        except Exception:
+            # If all else fails, keep only ASCII characters
+            return ''.join(char for char in text if ord(char) < 128)
 
     def _process_single_paper(self, entry, ns, index):
         """Process a single paper entry and extract its content."""
@@ -826,7 +850,7 @@ Format your response as a structured analysis with clear sections for each probl
                 "open_problems": None
             }
     
-    async def analyze_research_task(self, prompt: str) -> Dict[str, Any]:
+    def analyze_research_task(self, prompt: str) -> Dict[str, Any]:
         """Main method to analyze a research task."""
         print(f"🔍 Analyzing research task: {prompt}")
         print("=" * 50)
@@ -925,6 +949,9 @@ Format your response as a structured analysis with clear sections for each probl
         # Step 6: Identify open research problems based on all evidence and model suggestions
         open_problems = self.suggest_open_problems(prompt, llm_properties, llm_analysis, arxiv_results, model_suggestions)
         
+        # Step 7: Generate comprehensive research plan synthesizing all analysis
+        research_plan = self.generate_comprehensive_research_plan(prompt, llm_properties, llm_analysis, arxiv_results, model_suggestions, open_problems)
+        
         # Compile results
         results = {
             "original_prompt": prompt,
@@ -934,6 +961,7 @@ Format your response as a structured analysis with clear sections for each probl
             "arxiv_results": arxiv_results,
             "model_suggestions": model_suggestions,
             "open_problems": open_problems,
+            "research_plan": research_plan,
             "summary": {
                 "total_categories_detected": len(llm_properties),
                 "high_confidence_categories": len([p for p in llm_properties if p.confidence > 0.7]),
@@ -941,7 +969,8 @@ Format your response as a structured analysis with clear sections for each probl
                 "arxiv_search_successful": arxiv_results.get("search_successful", False),
                 "papers_found": arxiv_results.get("papers_returned", 0),
                 "model_suggestions_successful": model_suggestions.get("suggestions_successful", False),
-                "open_problems_successful": open_problems.get("problems_identification_successful", False)
+                "open_problems_successful": open_problems.get("problems_identification_successful", False),
+                "research_plan_successful": research_plan.get("plan_generation_successful", False)
             }
         }
         
