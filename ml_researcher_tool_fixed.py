@@ -848,7 +848,170 @@ Format your response as a structured analysis with clear sections for each probl
                 "open_problems": None
             }
     
-    def analyze_research_task(self, prompt: str) -> Dict[str, Any]:
+    def clean_text_for_encoding(self, text: str) -> str:
+        """Clean text to avoid UTF-8 encoding issues with surrogates."""
+        if not text:
+            return ""
+        
+        # Remove or replace surrogate characters
+        cleaned = text.encode('utf-8', errors='ignore').decode('utf-8')
+        
+        # Additional cleaning for common problematic characters
+        replacements = {
+            '\u2018': "'",  # Left single quotation mark
+            '\u2019': "'",  # Right single quotation mark
+            '\u201c': '"',  # Left double quotation mark
+            '\u201d': '"',  # Right double quotation mark
+            '\u2013': '-',  # En dash
+            '\u2014': '--', # Em dash
+            '\u2026': '...', # Horizontal ellipsis
+        }
+        
+        for old, new in replacements.items():
+            cleaned = cleaned.replace(old, new)
+        
+        return cleaned
+    
+    def generate_comprehensive_research_plan(self, prompt: str, detected_categories: List[PropertyHit], 
+                                           detailed_analysis: Dict[str, Any], arxiv_results: Dict[str, Any], 
+                                           model_suggestions: Dict[str, Any], open_problems: Dict[str, Any]) -> Dict[str, Any]:
+        """Generate a comprehensive, time-bound research plan synthesizing all previous analysis."""
+        
+        print("\n📋 Step 7: Generating comprehensive research plan...")
+        
+        # Extract and clean all relevant information
+        category_names = [prop.name for prop in detected_categories]
+        papers_info = ""
+        
+        if arxiv_results.get("papers"):
+            papers_info = "\n".join([
+                f"- {paper['title']}"
+                for paper in arxiv_results["papers"][:3]
+            ])
+        else:
+            papers_info = "No specific papers found in arXiv search."
+        
+        # Clean all text inputs to avoid encoding issues
+        clean_prompt = self.clean_text_for_encoding(prompt)
+        clean_detailed_analysis = self.clean_text_for_encoding(str(detailed_analysis.get('llm_analysis', 'Not available')))
+        clean_model_suggestions = self.clean_text_for_encoding(str(model_suggestions.get('model_suggestions', 'Not available')))
+        clean_open_problems = self.clean_text_for_encoding(str(open_problems.get('open_problems', 'Not available')))
+        clean_papers_info = self.clean_text_for_encoding(papers_info)
+        
+        content = f"""
+You are an expert research project manager and machine learning researcher. Your task is to synthesize ALL the previous analysis into a comprehensive, actionable, and time-bound research plan.
+
+**SYNTHESIS INPUTS:**
+
+**Original Task:** {clean_prompt}
+
+**Detected ML Categories:** {', '.join(category_names)}
+
+**Expert Technical Analysis:** {clean_detailed_analysis[:2000]}...
+
+**Recommended Models:** {clean_model_suggestions[:1500]}...
+
+**Open Research Problems:** {clean_open_problems[:1500]}...
+
+**Current Literature (arXiv papers found):**
+{clean_papers_info}
+
+**YOUR TASK:**
+Create a comprehensive research plan that synthesizes ALL the above information into an actionable roadmap. The plan should be:
+
+1. **COMPREHENSIVE** - Incorporate insights from all previous steps
+2. **TIME-BOUND** - Provide realistic timelines for each phase
+3. **ACTIONABLE** - Clear next steps and deliverables
+4. **STRUCTURED** - Organized phases with dependencies
+5. **RESEARCH-ORIENTED** - Focus on advancing knowledge, not just implementation
+
+**REQUIRED STRUCTURE:**
+
+## EXECUTIVE SUMMARY
+- Brief overview of the research objectives
+- Key insights from the synthesis
+- Expected timeline and outcomes
+
+## PHASE 1: FOUNDATION (Months 1-2)
+- Literature review and background research
+- Dataset acquisition and preparation
+- Initial baseline implementations
+- Specific tasks and deliverables
+
+## PHASE 2: CORE DEVELOPMENT (Months 3-5)
+- Model development and experimentation
+- Based on the recommended models from Step 5
+- Address specific technical challenges identified
+- Specific tasks and deliverables
+
+## PHASE 3: ADVANCED RESEARCH (Months 6-8)
+- Tackle open problems identified in Step 6
+- Novel contributions and innovations
+- Comparative analysis and evaluation
+- Specific tasks and deliverables
+
+## PHASE 4: VALIDATION & DISSEMINATION (Months 9-12)
+- Comprehensive evaluation and testing
+- Real-world validation
+- Paper writing and publication
+- Specific tasks and deliverables
+
+## RISK MITIGATION
+- Potential challenges and mitigation strategies
+- Alternative approaches if primary methods fail
+
+## RESOURCE REQUIREMENTS
+- Computational resources needed
+- Data requirements
+- Potential collaborations
+
+## SUCCESS METRICS
+- How to measure progress in each phase
+- Key performance indicators
+
+Provide a detailed, well-structured research plan that a graduate student or researcher could follow.
+"""
+
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[{"content": content, "role": "user"}]
+            )
+            
+            # Clean the response to avoid encoding issues
+            research_plan = self.clean_text_for_encoding(response.choices[0].message.content)
+            
+            # Print readable summary
+            print("✅ Comprehensive research plan generated")
+            print("\n" + "=" * 80)
+            print("📋 COMPREHENSIVE RESEARCH PLAN")
+            print("=" * 80)
+            print(research_plan)
+            print("=" * 80)
+            
+            return {
+                "research_plan_successful": True,
+                "research_plan": research_plan,
+                "model_used": self.model,
+                "tokens_used": response.usage.total_tokens if response.usage else "unknown",
+                "synthesis_inputs": {
+                    "categories_count": len(detected_categories),
+                    "papers_analyzed": len(arxiv_results.get("papers", [])),
+                    "models_suggested": model_suggestions.get("suggestions_successful", False),
+                    "problems_identified": open_problems.get("problems_identification_successful", False)
+                }
+            }
+        
+        except Exception as e:
+            error_msg = f"Research plan generation failed: {str(e)}"
+            print(f"❌ {error_msg}")
+            return {
+                "research_plan_successful": False,
+                "error": error_msg,
+                "research_plan": None
+            }
+    
+    async def analyze_research_task(self, prompt: str) -> Dict[str, Any]:
         """Main method to analyze a research task."""
         print(f"🔍 Analyzing research task: {prompt}")
         print("=" * 50)
@@ -967,7 +1130,7 @@ Format your response as a structured analysis with clear sections for each probl
                 "papers_found": arxiv_results.get("papers_returned", 0),
                 "model_suggestions_successful": model_suggestions.get("suggestions_successful", False),
                 "open_problems_successful": open_problems.get("problems_identification_successful", False),
-                "research_plan_successful": research_plan.get("plan_generation_successful", False)
+                "research_plan_successful": research_plan.get("research_plan_successful", False)
             }
         }
         
