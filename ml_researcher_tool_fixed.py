@@ -443,12 +443,12 @@ class MLResearcherTool:
             
             relevance_score = await self._score_paper_relevance(
                 paper['title'], 
-                paper.get('content', ''), 
+                paper.get('summary', ''), 
                 original_query
             )
             
             paper['relevance_score'] = relevance_score
-            print(f"   📊 Score: {relevance_score:.1f}/10.0")
+            print(f"Score: {relevance_score:.1f}/10.0")
             return paper
         
         # Run all scoring tasks concurrently
@@ -494,6 +494,7 @@ class MLResearcherTool:
             # Extract basic info
             title = entry.find('atom:title', ns).text.strip()
             paper_id = entry.find('atom:id', ns).text.split('/')[-1]
+            summary = entry.find('atom:summary', ns).text.strip()
             
             # Get published date
             published = entry.find('atom:published', ns).text[:10] if entry.find('atom:published', ns) is not None else "Unknown"
@@ -522,6 +523,7 @@ class MLResearcherTool:
                 "published": published,
                 "content": pdf_txt,
                 "url": arxiv_url,
+                "summary": summary,
                 "index": index  # Keep track of original order
             }
             
@@ -1025,6 +1027,7 @@ Provide a detailed, well-structured research plan that a graduate student or res
         
         # Run both tasks concurrently
         llm_properties, llm_analysis = await asyncio.gather(property_task, decomposition_task)
+        print("Task 1 Complete")
         
         print(f"✅ Property extraction completed: Found {len(llm_properties)} properties")
         for prop in llm_properties:
@@ -1033,7 +1036,7 @@ Provide a detailed, well-structured research plan that a graduate student or res
         if "error" in llm_analysis:
             print(f"❌ Task decomposition failed: {llm_analysis['error']}")
         else:
-            print("✅ Task decomposition completed")
+            print("✅ Task 2 :decomposition completed")
             
             wantsee=False
             if wantsee:
