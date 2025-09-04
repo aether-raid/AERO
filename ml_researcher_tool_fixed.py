@@ -608,6 +608,105 @@ class MLResearcherTool:
                 "model_suggestions": None
             }
     
+    def suggest_open_problems(self, prompt: str, detected_categories: List[PropertyHit], 
+                             detailed_analysis: Dict[str, Any], arxiv_results: Dict[str, Any], 
+                             model_suggestions: Dict[str, Any]) -> Dict[str, Any]:
+        """Use LLM to suggest open problem statements based on research evidence and model suggestions."""
+        
+        print("\n🔬 Step 6: Identifying open research problems...")
+        
+        # Extract relevant information
+        category_names = [prop.name for prop in detected_categories]
+        papers_info = ""
+        
+        if arxiv_results.get("papers"):
+            papers_info = "\n".join([
+                f"- {paper['title']}"
+                for paper in arxiv_results["papers"][:3]  # Limit to first 3 papers
+            ])
+        else:
+            papers_info = "No specific papers found in arXiv search."
+        
+        content = f"""
+You are an expert machine learning researcher specializing in identifying open research problems and future research directions.
+
+**Original Research Task:** {prompt}
+
+**Detected Categories:** {', '.join(category_names)}
+
+**Detailed Analysis:** {detailed_analysis.get('llm_analysis', 'Not available')}
+
+**Suggested Models:** {model_suggestions.get('model_suggestions', 'Not available')}
+
+**Research Papers Found:**
+{papers_info}
+
+Based on all this evidence, identify and suggest **open research problems** and **future research directions** that are:
+
+1. **Specific to the suggested models** - Problems that specifically relate to the models recommended in Step 5
+2. **Grounded in current research** - Based on gaps or limitations mentioned in the arXiv papers
+3. **Technically feasible** - Realistic problems that can be addressed with current technology
+4. **Impactful** - Would advance the field if solved
+
+For each open problem, provide:
+
+1. **Problem Statement** - Clear, concise description of the research gap
+2. **Connection to Suggested Models** - How this problem specifically relates to the recommended models
+3. **Research Evidence** - What evidence from the papers supports this being an open problem
+4. **Potential Impact** - Why solving this would be valuable
+5. **Suggested Approach** - High-level methodology for addressing this problem
+6. **Timeline Estimate** - Realistic timeframe for investigation (e.g., 6 months, 1-2 years)
+
+**Categories of open problems to consider:**
+- Model architecture improvements
+- Training methodology enhancements  
+- Evaluation metric development
+- Dataset limitations and needs
+- Computational efficiency challenges
+- Interpretability and explainability gaps
+- Real-world deployment issues
+- Scalability concerns
+
+Provide 3-5 well-justified open problems that would make meaningful contributions to the field.
+
+Format your response as a structured analysis with clear sections for each problem.
+"""
+
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[{"content": content, "role": "user"}]
+            )
+            
+            open_problems = response.choices[0].message.content
+            
+            # Print readable summary
+            print("✅ Open research problems identified")
+            print("\n" + "=" * 80)
+            print("🔬 OPEN RESEARCH PROBLEMS & FUTURE DIRECTIONS")
+            print("=" * 80)
+            print(open_problems)
+            print("=" * 80)
+            
+            return {
+                "problems_identification_successful": True,
+                "open_problems": open_problems,
+                "model_used": self.model,
+                "tokens_used": response.usage.total_tokens if response.usage else "unknown",
+                "papers_analyzed": len(arxiv_results.get("papers", [])),
+                "categories_considered": len(detected_categories),
+                "based_on_models": model_suggestions.get("suggestions_successful", False)
+            }
+        
+        except Exception as e:
+            error_msg = f"Open problems identification failed: {str(e)}"
+            print(f"❌ {error_msg}")
+            return {
+                "problems_identification_successful": False,
+                "error": error_msg,
+                "open_problems": None
+            }
+    
     def analyze_research_task(self, prompt: str) -> Dict[str, Any]:
         """Main method to analyze a research task."""
         print(f"🔍 Analyzing research task: {prompt}")
@@ -701,6 +800,9 @@ class MLResearcherTool:
         # Step 5: Suggest models based on all evidence
         model_suggestions = self.suggest_models_from_arxiv(prompt, arxiv_results, llm_properties, llm_analysis)
         
+        # Step 6: Identify open research problems based on all evidence and model suggestions
+        open_problems = self.suggest_open_problems(prompt, llm_properties, llm_analysis, arxiv_results, model_suggestions)
+        
         # Compile results
         results = {
             "original_prompt": prompt,
@@ -709,13 +811,15 @@ class MLResearcherTool:
             "arxiv_search_query": arxiv_search_query,
             "arxiv_results": arxiv_results,
             "model_suggestions": model_suggestions,
+            "open_problems": open_problems,
             "summary": {
                 "total_categories_detected": len(llm_properties),
                 "high_confidence_categories": len([p for p in llm_properties if p.confidence > 0.7]),
                 "detailed_analysis_successful": "error" not in llm_analysis,
                 "arxiv_search_successful": arxiv_results.get("search_successful", False),
                 "papers_found": arxiv_results.get("papers_returned", 0),
-                "model_suggestions_successful": model_suggestions.get("suggestions_successful", False)
+                "model_suggestions_successful": model_suggestions.get("suggestions_successful", False),
+                "open_problems_successful": open_problems.get("problems_identification_successful", False)
             }
         }
         
