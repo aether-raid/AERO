@@ -824,7 +824,7 @@ Format your response as a structured analysis with clear sections for each probl
                 "open_problems": None
             }
     
-    def analyze_research_task(self, prompt: str) -> Dict[str, Any]:
+    async def analyze_research_task(self, prompt: str) -> Dict[str, Any]:
         """Main method to analyze a research task."""
         print(f"🔍 Analyzing research task: {prompt}")
         print("=" * 50)
