@@ -23,6 +23,7 @@ import openai
 import math
 import urllib.request as libreq
 import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from Report_to_txt import extract_pdf_text
 from arxiv import format_search_string
 
@@ -290,7 +291,7 @@ class MLResearcherTool:
         prop_names = [prop.name for prop in high_confidence_props]
         
         content = f"""
-            Based on the following machine learning research task analysis, generate a concise search query suitable for arXiv API search.
+            Based on the following machine learning research task analysis, generate ONE concise arXiv API search query (exactly 3 terms, separated by forward slashes).
 
             Original Task: {prompt}
 
@@ -298,24 +299,27 @@ class MLResearcherTool:
 
             Detailed Analysis: {llm_analysis.get('llm_analysis', 'Not available')}
 
-            Create a focused search query (2-4 key terms) that would effectively find relevant research papers on arXiv. The query should be:
-            - Specific enough to find relevant papers
-            - General enough to not be too restrictive
-            - Include key ML concepts and techniques
-            - Use forward slashes (/) to separate different terms or concepts
-            - Group related words together as single terms (e.g., neural network, time series, machine learning)
-            - Avoid overly technical jargon
+            Rules for constructing the query:
+            - EXACTLY 4 terms, separated by "/" (no quotes, no extra spaces).
+            - Include:
+            1) a MODEL keyword (e.g., transformer, ViT, DETR, RT-DETR, Deformable DETR, YOLOS),
+            2) the TASK (e.g., object detection, segmentation),
+            3) a DEPLOYMENT/CONSTRAINT or TOOLING term if present (e.g., real-time, edge deployment, TensorRT, quantization, INT8).
+            - Prefer task-specific + model-specific terms over generic ones.
+            - Avoid vague terms like "deep learning" or "machine learning" unless nothing better fits.
+            - Prefer dataset/benchmark anchors (e.g., KITTI, nuScenes, Waymo) OVER broad domain words (e.g., autonomous vehicles). Use the domain ONLY if it is essential and not overly broad.
+            - If computer vision is relevant, make the TASK a CV term (e.g., object detection, instance segmentation).
+            - Do NOT include arXiv category labels (cs.CV, cs.LG) in the query terms.
+            - Return ONLY the query string (no explanation, no punctuation besides "/").
+            4) a DOMAIN or APPLICATION term if relevant (e.g., medical imaging, remote sensing, autonomous vehicles).
 
-            IMPORTANT: Use forward slashes (/) to separate terms, not quotes or spaces.
-
-            Examples of good search queries:
-            - neural network/time series/forecasting
-            - deep learning/anomaly detection/sensor data
-            - transformer model/natural language processing
-            - autoencoder/reconstruction/noise robustness
-
-            Return only the search query without explanation.
+            Good examples:
+            - transformer/object detection/real-time
+            - RT-DETR/object detection/TensorRT
+            - Deformable DETR/object detection/KITTI
+            - vision transformer/object detection/edge deployment
         """
+
 
         try:
             response = self.client.chat.completions.create(
@@ -343,7 +347,64 @@ class MLResearcherTool:
             
             return "/".join(keywords) if keywords else "machine learning"
 
-    def search_arxiv(self, search_query: str, max_results: int = 5) -> Dict[str, Any]:
+    def _process_single_paper(self, entry, ns, index):
+        """Process a single paper entry and extract its content."""
+        import requests
+        import feedparser
+        
+        try:
+            # Extract basic info
+            title = entry.find('atom:title', ns).text.strip()
+            paper_id = entry.find('atom:id', ns).text.split('/')[-1]
+            
+            # Get published date
+            published = entry.find('atom:published', ns).text[:10] if entry.find('atom:published', ns) is not None else "Unknown"
+            
+            # Get arXiv URL
+            arxiv_url = f"http://export.arxiv.org/api/query?id_list={paper_id}"
+            
+            response = requests.get(arxiv_url)
+            feed = feedparser.parse(response.text)
+            entry_data = feed.entries[0]
+            
+            # Find PDF link
+            pdf_link = None
+            for link in entry_data.links:
+                if link.type == 'application/pdf':
+                    pdf_link = link.href
+                    break
+            
+            # Extract text from PDF
+            pdf_txt = extract_pdf_text(pdf_link) if pdf_link else None
+            
+            # Store paper info
+            paper_info = {
+                "title": title,
+                "id": paper_id,
+                "published": published,
+                "content": pdf_txt,
+                "url": arxiv_url,
+                "index": index  # Keep track of original order
+            }
+            
+            # Print progress
+            print(f"✅ PAPER #{index} processed: {title[:60]}...")
+            
+            return paper_info
+            
+        except Exception as e:
+            print(f"❌ Error processing paper #{index}: {e}")
+            return {
+                "title": f"Error processing paper #{index}",
+                "id": "error",
+                "published": "Unknown",
+                "content": None,
+                "url": "error",
+                "index": index,
+                "error": str(e)
+            }
+
+    def search_arxiv(self, search_query: str, max_results: int = 20) -> Dict[str, Any]:
         """Search arXiv for papers using the formatted search query."""
         
         print(f"\n🔍 SEARCHING arXiv: {search_query}")
@@ -381,61 +442,45 @@ class MLResearcherTool:
                 
                 # Get all paper entries
                 entries = root.findall('atom:entry', ns)
-                papers = []
                 
-                for i, entry in enumerate(entries, 1):
-                    # Extract basic info
-                    title = entry.find('atom:title', ns).text.strip()
-                    paper_id = entry.find('atom:id', ns).text.split('/')[-1]
-                    
-
-                    # Get published date
-                    published = entry.find('atom:published', ns).text[:10] if entry.find('atom:published', ns) is not None else "Unknown"
-                    
-                    # Get arXiv URL
-                    arxiv_url = f"http://export.arxiv.org/api/query?id_list={paper_id}"
-                    import requests
-                    import feedparser
-
-
-                    response = requests.get(arxiv_url)
-                    feed = feedparser.parse(response.text)
-                    entry = feed.entries[0]
-                  
-
-
-                                        
-                    # Find PDF link
-                    pdf_link = None
-                    for link in entry.links:
-                        if link.type == 'application/pdf':
-                            pdf_link = link.href
-                            break
-
-                    # Extract text from PDF
-                    pdf_txt = extract_pdf_text(pdf_link) if pdf_link else None
-
-                    # Store paper info
-                    paper_info = {
-                        "title": title,
-                        "id": paper_id,
-                        "published": published,
-                        #"authors": authors,
-                        #"abstract": summary,
-                        "content": pdf_txt,
-                        "url": arxiv_url
+                print(f"🚀 Processing {len(entries)} papers in parallel...")
+                
+                # Process papers in parallel
+                
+                papers = []
+                with ThreadPoolExecutor(max_workers=5) as executor:  # Limit to 5 concurrent downloads
+                    # Submit all tasks
+                    future_to_index = {
+                        executor.submit(self._process_single_paper, entry, ns, i): i 
+                        for i, entry in enumerate(entries, 1)
                     }
-                    papers.append(paper_info)
                     
-                    # Print formatted output
+                    # Collect results as they complete
+                    for future in as_completed(future_to_index):
+                        paper_info = future.result()
+                        papers.append(paper_info)
+                
+                # Sort papers back to original order
+                papers.sort(key=lambda x: x.get('index', 999))
+                
+                # Print final results
+                print("\n" + "=" * 80)
+                print("📋 FINAL RESULTS:")
+                print("=" * 80)
+                
+                for paper in papers:
+                    i = paper.get('index', 0)
                     print(f"\n📄 PAPER #{i}")
                     print("-" * 60)
-                    print(f"Title: {title}")
-                    print(f"ID: {paper_id}")
-                    print(f"Published: {published}")
-                   
-                    print(f"URL: {arxiv_url}")
-                    print(f"Content:\n{pdf_txt[:500]}")
+                    print(f"Title: {paper['title']}")
+                    print(f"ID: {paper['id']}")
+                    print(f"Published: {paper['published']}")
+                    print(f"URL: {paper['url']}")
+                    
+                    if paper['content']:
+                        print(f"Content:\n{paper['content'][:500]}")
+                    else:
+                        print("Content: [No content extracted]")
                     print("-" * 60)
                    
                 
@@ -479,13 +524,13 @@ class MLResearcherTool:
         papers_evidence = ""
         if arxiv_results.get("search_successful") and arxiv_results.get("papers"):
             papers_evidence = "\n--- arXiv Papers Found ---\n"
-            for i, paper in enumerate(arxiv_results["papers"][:3], 1):  # Use top 3 papers
+            for i, paper in enumerate(arxiv_results["papers"], 1):  # Use top 3 papers
                 papers_evidence += f"""
-Paper {i}: {paper["title"]}
-Published: {paper["published"]}
-URL: {paper["url"]}
----
-"""
+                    Paper {i}: {paper["title"]}
+                    Published: {paper["published"]}
+                    URL: {paper["url"]}
+                    ---
+                """
         else:
             papers_evidence = "\n--- No arXiv Papers Found ---\nNo relevant papers were found in the search, so recommendations will be based on general ML knowledge.\n"
         
@@ -494,37 +539,40 @@ URL: {paper["url"]}
         
         # Create comprehensive prompt for model suggestion
         content = f"""
-You are an expert machine learning researcher and architect. Based on the following comprehensive analysis, suggest the most suitable machine learning models/architectures for this task and provide detailed justification.
+            You are an expert machine learning researcher and architect. Based on the following comprehensive analysis, suggest the most suitable machine learning models/architectures for this task and provide detailed justification.
 
-## Original Task
-{prompt}
+            ## Original Task
+            {prompt}
 
-## Detected ML Categories
-{categories_text}
+            ## Detected ML Categories
+            {categories_text}
 
-## Detailed Analysis Summary
-{detailed_analysis.get('llm_analysis', 'Analysis not available')[:1000]}...
+            ## Detailed Analysis Summary
+            {detailed_analysis.get('llm_analysis', 'Analysis not available')[:1000]}...
 
-## Evidence from Recent Research Papers
-{papers_evidence}
+            ## Evidence from Recent Research Papers
+            {papers_evidence}
 
-## Your Task
-Based on ALL the evidence above (task requirements, detected categories, detailed analysis, and recent research papers), provide:
+            ## Your Task
+            Based on ALL the evidence above (task requirements, detected categories, detailed analysis, and recent research papers), provide:
 
-1. **Top 3 Recommended Models/Architectures** - List the most suitable models in order of preference
-2. **Detailed Justification** - For each model, explain:
-   - Why it's suitable for this specific task
-   - How it addresses the detected categories/requirements
-   - Evidence from the research papers (if available) that supports this choice
-   - Specific advantages and potential limitations
-3. **Implementation Considerations** - Practical advice for each model:
-   - Key hyperparameters to tune
-   - Training considerations
-   - Expected performance characteristics
-4. **Alternative Approaches** - Brief mention of other viable options and when they might be preferred
+            1. **Top 3 Recommended Models/Architectures** - List the most suitable models in order of preference
+            2. **Detailed Justification** - For each model, explain:
+            - Each choice MUST be based in truth from the research evidence
+            - Why it's suitable for this specific task
+            - How it addresses the detected categories/requirements
+            - Evidence from the research papers (if available) that supports this choice
+            - Specific advantages and potential limitations
+            
+            3. **Implementation Considerations** - Practical advice for each model:
+            - Key hyperparameters to tune
+            - Training considerations
+            - Expected performance characteristics
+            4. **Alternative Approaches** - Brief mention of other viable options and when they might be preferred
 
-Format your response as a structured analysis that clearly connects your recommendations to the evidence provided.
-"""
+            Format your response as a structured analysis that clearly connects your recommendations to the evidence provided.
+            Your response MUST be based on the research evidence presented in the prompt and the arXiv papers.
+        """
 
         try:
             response = self.client.chat.completions.create(
@@ -648,7 +696,7 @@ Format your response as a structured analysis that clearly connects your recomme
         
         # Step 4: Search arXiv for relevant papers
         print("\n📖 Step 4: Searching arXiv for relevant papers...")
-        arxiv_results = self.search_arxiv(arxiv_search_query, max_results=5)
+        arxiv_results = self.search_arxiv(arxiv_search_query, max_results=20)
         
         # Step 5: Suggest models based on all evidence
         model_suggestions = self.suggest_models_from_arxiv(prompt, arxiv_results, llm_properties, llm_analysis)
