@@ -24,6 +24,7 @@ import math
 import urllib.request as libreq
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import asyncio
 from Report_to_txt import extract_pdf_text
 from arxiv import format_search_string
 
@@ -130,7 +131,7 @@ class MLResearcherTool:
             pass
         return None
     
-    def extract_properties_llm_based(self, query: str) -> List[PropertyHit]:
+    async def extract_properties_llm_based(self, query: str) -> List[PropertyHit]:
         """Extract properties using LLM analysis of predefined categories."""
         
         categories_list = "\n".join([f"- {category}" for category in ML_RESEARCH_CATEGORIES])
@@ -188,9 +189,12 @@ class MLResearcherTool:
         """
 
         try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[{"content": content, "role": "user"}]
+            response = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[{"content": content, "role": "user"}]
+                )
             )
             
             # Parse the LLM response
@@ -237,7 +241,7 @@ class MLResearcherTool:
         
         
     
-    def decompose_task_with_llm(self, prompt: str) -> Dict[str, Any]:
+    async def decompose_task_with_llm(self, prompt: str) -> Dict[str, Any]:
         """Use LLM to decompose the task and identify additional properties."""
         content = f"""
             You are an expert machine learning researcher. Analyze the following research task and decompose it into key properties and characteristics.
@@ -263,9 +267,12 @@ class MLResearcherTool:
     """
 
         try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[{"content": content, "role": "user"}]
+            response = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[{"content": content, "role": "user"}]
+                )
             )
             
             return {
@@ -324,6 +331,7 @@ class MLResearcherTool:
         try:
             response = self.client.chat.completions.create(
                 model=self.model,
+                temperature=0,
                 messages=[{"content": content, "role": "user"}]
             )
             
@@ -347,6 +355,112 @@ class MLResearcherTool:
             
             return "/".join(keywords) if keywords else "machine learning"
     
+    import re, math, time
+
+    async def _score_paper_relevance(self, paper_title: str, paper_content: str, original_query: str) -> float:
+        """LLM relevance score in [1.0, 10.0]. Returns a float only."""
+        # Keep prompts lean; truncate huge inputs to control tokens
+        MAX_CHARS = 8000
+        title = (paper_title or "").strip()[:512] or "<untitled>"
+        content = (paper_content or "").strip()[:MAX_CHARS]
+        query = (original_query or "").strip()[:2000]
+
+        user_prompt = f"""
+        You are an expert ML librarian. Score how relevant the paper is to the user's research query on a 1–10 scale.
+
+        Return ONLY a number between 1.0 and 10.0 (one decimal). No words, no JSON, no symbols.
+
+        Research query:
+        \"\"\"{query}\"\"\"
+
+        Paper title:
+        \"\"\"{title}\"\"\"
+
+        Paper content:
+        \"\"\"{content}\"\"\"
+
+        Scoring rubric (weighting):
+        - task_match (40%): does the paper directly address the task(s)?
+        - method_match (30%): overlap with architectures/approaches or close variants.
+        - constraint_match (20%): matches constraints/tooling/datasets/hardware (e.g., real-time, edge, TensorRT, INT8).
+        - evidence_match (10%): concrete signals (benchmarks, datasets, metrics, ablations, deployment notes).
+
+        Compute: score = round((0.40*task + 0.30*method + 0.20*constraint + 0.10*evidence)*10, 1).
+        If clearly unrelated (all four < 0.15), output 1.0.
+        Clip to [1.0, 10.0].
+
+        Output: ONLY the final number (e.g., 8.7).
+        """.strip()
+
+        async def _call_llm(prompt: str) -> str:
+            resp = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: self.client.chat.completions.create(
+                    model=self.model,
+                    temperature=0,
+                    messages=[
+                        {"role": "system", "content": "You are a strict numeric scorer. Reply with ONLY a number between 1.0 and 10.0."},
+                        {"role": "user", "content": prompt},
+                    ],
+                )
+            )
+            return (resp.choices[0].message.content or "").strip()
+
+        def _to_score(txt: str) -> float:
+            # Pull the first numeric token; tolerate minor deviations
+            m = re.search(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", txt)
+            if not m:
+                return 1.0
+            val = float(m.group())
+            # clip to [1.0, 10.0]
+            if not math.isfinite(val):
+                return 1.0
+            return max(1.0, min(10.0, val))
+
+        # Retries with backoff for transient failures
+        backoff = 0.6
+        import re, math, time, asyncio
+        for attempt in range(3):
+            try:
+                raw = await _call_llm(user_prompt)
+                score = _to_score(raw)
+                return score
+            except Exception:
+                if attempt < 2:
+                    await asyncio.sleep(backoff)
+                    backoff *= 2
+                else:
+                    return 1.0
+
+
+    async def _rank_papers_by_relevance(self, papers: List[Dict], original_query: str) -> List[Dict]:
+        """Score and rank papers by relevance to the original query using concurrent scoring."""
+        print("\n🎯 Scoring papers for relevance concurrently...")
+        
+        # Create scoring tasks for all papers
+        async def score_paper(i, paper):
+            print(f"⏳ Scoring paper {i}/{len(papers)}: {paper['title'][:50]}...")
+            
+            relevance_score = await self._score_paper_relevance(
+                paper['title'], 
+                paper.get('content', ''), 
+                original_query
+            )
+            
+            paper['relevance_score'] = relevance_score
+            print(f"   📊 Score: {relevance_score:.1f}/10.0")
+            return paper
+        
+        # Run all scoring tasks concurrently
+        scoring_tasks = [score_paper(i, paper) for i, paper in enumerate(papers, 1)]
+        scored_papers = await asyncio.gather(*scoring_tasks)
+        
+        # Sort by relevance score (highest first)
+        ranked_papers = sorted(scored_papers, key=lambda x: x.get('relevance_score', 0), reverse=True)
+        
+        print(f"\n✅ Papers ranked by relevance to: '{original_query}'")
+        return ranked_papers
+
     def _clean_text_for_json(self, text: str) -> str:
         """Clean text to remove invalid Unicode characters that cause JSON serialization issues."""
         if not isinstance(text, str):
@@ -428,7 +542,7 @@ class MLResearcherTool:
                 "error": str(e)
             }
 
-    def search_arxiv(self, search_query: str, max_results: int = 20) -> Dict[str, Any]:
+    async def search_arxiv(self, search_query: str, max_results: int = 20) -> Dict[str, Any]:
         """Search arXiv for papers using the formatted search query."""
         
         print(f"\n🔍 SEARCHING arXiv: {search_query}")
@@ -487,14 +601,17 @@ class MLResearcherTool:
                 # Sort papers back to original order
                 papers.sort(key=lambda x: x.get('index', 999))
                 
-                # Print final results
+                # Rank papers by relevance to the original query
+                papers = await self._rank_papers_by_relevance(papers, search_query)
+                
+                # Print final results (now ranked by relevance)
                 print("\n" + "=" * 80)
-                print("📋 FINAL RESULTS:")
+                print("📋 RANKED RESULTS (by relevance):")
                 print("=" * 80)
                 
-                for paper in papers:
-                    i = paper.get('index', 0)
-                    print(f"\n📄 PAPER #{i}")
+                for i, paper in enumerate(papers, 1):
+                    relevance_score = paper.get('relevance_score', 0)
+                    print(f"\n📄 PAPER #{i} (Relevance: {relevance_score:.1f}/10.0)")
                     print("-" * 60)
                     print(f"Title: {paper['title']}")
                     print(f"ID: {paper['id']}")
@@ -731,185 +848,29 @@ Format your response as a structured analysis with clear sections for each probl
                 "open_problems": None
             }
     
-    def generate_comprehensive_research_plan(self, prompt: str, detected_categories: List[PropertyHit], 
-                                           detailed_analysis: Dict[str, Any], arxiv_results: Dict[str, Any],
-                                           model_suggestions: Dict[str, Any], open_problems: Dict[str, Any]) -> Dict[str, Any]:
-        """Generate a comprehensive, time-bound research plan synthesizing all previous analysis."""
-        
-        print("\n🗓️ Step 7: Generating comprehensive research plan...")
-        
-        # Clean and prepare inputs to avoid encoding issues
-        clean_prompt = self._clean_text_for_json(prompt)
-        
-        # Prepare summary of all inputs with text cleaning
-        category_names = [self._clean_text_for_json(prop.name) for prop in detected_categories]
-        papers_count = len(arxiv_results.get("papers", []))
-        
-        # Safely extract and clean content from previous steps
-        analysis_content = detailed_analysis.get('llm_analysis', 'Not available')
-        if analysis_content:
-            analysis_content = self._clean_text_for_json(analysis_content)[:2000]  # Truncate to avoid too long content
-        
-        model_content = model_suggestions.get('model_recommendations', 'Not available')
-        if model_content:
-            model_content = self._clean_text_for_json(model_content)[:1500]
-        
-        problems_content = open_problems.get('open_problems', 'Not available') 
-        if problems_content:
-            problems_content = self._clean_text_for_json(problems_content)[:1500]
-        
-        # Create clean paper summaries
-        paper_summaries = []
-        for paper in arxiv_results.get('papers', [])[:3]:
-            title = self._clean_text_for_json(paper.get('title', ''))
-            published = self._clean_text_for_json(paper.get('published', ''))
-            paper_summaries.append(f"- {title} ({published})")
-        
-        content = f"""
-You are an expert research strategist and project manager specializing in machine learning research. 
-
-Based on the comprehensive analysis below, create a detailed, time-bound research plan that synthesizes all findings.
-
-**ORIGINAL RESEARCH TASK:**
-{clean_prompt}
-
-**DETECTED ML CATEGORIES:** 
-{', '.join(category_names)}
-
-**DETAILED ANALYSIS SUMMARY:**
-{analysis_content}
-
-**ARXIV RESEARCH FINDINGS:**
-- Papers found: {papers_count}
-- Search successful: {arxiv_results.get('search_successful', False)}
-{chr(10).join(paper_summaries)}
-
-**SUGGESTED MODELS:**
-{model_content}
-
-**IDENTIFIED OPEN PROBLEMS:**
-{problems_content}
-
----
-
-**TASK: Create a comprehensive research plan with the following structure:**
-
-## 1. RESEARCH OVERVIEW
-- **Objective**: Clear statement of what we're trying to achieve
-- **Scope**: What's included and excluded
-- **Success Criteria**: How we'll measure success
-
-## 2. TECHNICAL APPROACH
-- **Recommended Models**: Based on the analysis and literature
-- **Architecture Strategy**: High-level technical approach
-- **Key Challenges**: Main technical hurdles to overcome
-
-## 3. TIME-BOUND RESEARCH PHASES
-
-### Phase 1: Foundation (Months 1-2)
-- Literature review and baseline establishment
-- Dataset preparation and preprocessing
-- Initial model selection and setup
-- **Deliverables**: [specific outcomes]
-
-### Phase 2: Development (Months 3-5)  
-- Model implementation and training
-- Initial experiments and validation
-- Performance optimization
-- **Deliverables**: [specific outcomes]
-
-### Phase 3: Advanced Research (Months 6-8)
-- Addressing identified open problems
-- Novel contributions and improvements
-- Comprehensive evaluation
-- **Deliverables**: [specific outcomes]
-
-### Phase 4: Validation & Documentation (Months 9-12)
-- Real-world testing and validation
-- Paper writing and documentation
-- Code cleanup and publication
-- **Deliverables**: [specific outcomes]
-
-## 4. RESOURCE REQUIREMENTS
-- **Computational**: Hardware/cloud requirements
-- **Data**: Dataset needs and acquisition strategy  
-- **Human**: Team composition and expertise needed
-- **Timeline**: Critical path and dependencies
-
-## 5. RISK MITIGATION
-- **Technical Risks**: Potential technical challenges and mitigation strategies
-- **Timeline Risks**: What could delay the project and contingency plans
-- **Resource Risks**: Backup plans for resource constraints
-
-## 6. EXPECTED OUTCOMES
-- **Academic Contributions**: Papers, conferences, publications
-- **Practical Applications**: Real-world impact and applications
-- **Open Source**: Code, datasets, or tools to be released
-
-Make the plan specific, actionable, and realistic. Include concrete milestones and deliverables for each phase.
-IMPORTANT: Keep response clean and avoid special Unicode characters that might cause encoding issues.
-"""
-
-        try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[{"content": content, "role": "user"}]
-            )
-            
-            # Clean the response to avoid encoding issues
-            research_plan = self._clean_text_for_json(response.choices[0].message.content)
-            
-            # Print readable summary
-            print("✅ Comprehensive research plan generated")
-            print("\n" + "=" * 80)
-            print("📋 COMPREHENSIVE RESEARCH PLAN")
-            print("=" * 80)
-            print(research_plan)
-            print("=" * 80)
-            
-            return {
-                "plan_generation_successful": True,
-                "research_plan": research_plan,
-                "model_used": self.model,
-                "tokens_used": response.usage.total_tokens if response.usage else "unknown",
-                "synthesized_components": {
-                    "categories": len(detected_categories),
-                    "arxiv_papers": papers_count,
-                    "model_suggestions": model_suggestions.get("suggestions_successful", False),
-                    "open_problems": open_problems.get("problems_identification_successful", False)
-                }
-            }
-        
-        except Exception as e:
-            error_msg = f"Research plan generation failed: {str(e)}"
-            print(f"❌ {error_msg}")
-            return {
-                "plan_generation_successful": False,
-                "error": error_msg,
-                "research_plan": None
-            }
-    
     def analyze_research_task(self, prompt: str) -> Dict[str, Any]:
         """Main method to analyze a research task."""
         print(f"🔍 Analyzing research task: {prompt}")
         print("=" * 50)
         
-        # Step 1: LLM-based property extraction
-        print("🤖 Step 1: Extracting properties using LLM analysis...")
-        llm_properties = self.extract_properties_llm_based(prompt)
+        # Steps 1 & 2: Run property extraction and task decomposition concurrently
+        print("🤖 Steps 1 & 2: Running property extraction and task decomposition concurrently...")
         
-        print(f"Found {len(llm_properties)} properties:")
+        # Create concurrent tasks
+        property_task = self.extract_properties_llm_based(prompt)
+        decomposition_task = self.decompose_task_with_llm(prompt)
+        
+        # Run both tasks concurrently
+        llm_properties, llm_analysis = await asyncio.gather(property_task, decomposition_task)
+        
+        print(f"✅ Property extraction completed: Found {len(llm_properties)} properties")
         for prop in llm_properties:
             print(f"  - {prop.name}: {prop.confidence:.2f} confidence")
         
-        # Step 2: Detailed LLM-based task decomposition
-        print("\n🔬 Step 2: Performing detailed task decomposition...")
-        llm_analysis = self.decompose_task_with_llm(prompt)
-        
         if "error" in llm_analysis:
-            print(f"❌ LLM analysis failed: {llm_analysis['error']}")
+            print(f"❌ Task decomposition failed: {llm_analysis['error']}")
         else:
-            print("✅ LLM analysis completed")
+            print("✅ Task decomposition completed")
             
             wantsee=False
             if wantsee:
@@ -977,7 +938,7 @@ IMPORTANT: Keep response clean and avoid special Unicode characters that might c
         
         # Step 4: Search arXiv for relevant papers
         print("\n📖 Step 4: Searching arXiv for relevant papers...")
-        arxiv_results = self.search_arxiv(arxiv_search_query, max_results=20)
+        arxiv_results = await self.search_arxiv(arxiv_search_query, max_results=5)
         
         # Step 5: Suggest models based on all evidence
         model_suggestions = self.suggest_models_from_arxiv(prompt, arxiv_results, llm_properties, llm_analysis)
@@ -1012,7 +973,7 @@ IMPORTANT: Keep response clean and avoid special Unicode characters that might c
         
         return results
     
-    def interactive_mode(self):
+    async def interactive_mode(self):
         """Run the tool in interactive mode."""
         print("🔬 ML Research Task Analyzer")
         print("=" * 30)
@@ -1032,7 +993,7 @@ IMPORTANT: Keep response clean and avoid special Unicode characters that might c
                     continue
                 
                 # Analyze the task
-                results = self.analyze_research_task(prompt)
+                results = await self.analyze_research_task(prompt)
                 
                 # Display results
                 print("\n" + "=" * 50)
@@ -1057,7 +1018,7 @@ IMPORTANT: Keep response clean and avoid special Unicode characters that might c
                 print(f"❌ An error occurred: {str(e)}")
 
 
-def main():
+async def main():
     """Main function to run the ML Researcher Tool."""
     try:
         tool = MLResearcherTool()
@@ -1065,11 +1026,11 @@ def main():
         if len(sys.argv) > 1:
             # Command line mode
             prompt = " ".join(sys.argv[1:])
-            results = tool.analyze_research_task(prompt)
+            results = await tool.analyze_research_task(prompt)
             print("\n" + json.dumps(results, indent=2))
         else:
             # Interactive mode
-            tool.interactive_mode()
+            await tool.interactive_mode()
     
     except Exception as e:
         print(f"❌ Failed to initialize ML Researcher Tool: {str(e)}")
@@ -1078,7 +1039,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
 
 
 
