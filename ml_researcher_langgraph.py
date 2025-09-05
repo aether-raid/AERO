@@ -202,16 +202,14 @@ class MLResearcherLangGraph:
         workflow = StateGraph(ModelSuggestionState)
         
         # Add nodes for model suggestion pipeline
-        workflow.add_node("extract_properties", self._extract_properties_node)
-        workflow.add_node("decompose_task", self._decompose_task_node)
+        workflow.add_node("analyze_properties_and_task", self._analyze_properties_and_task_node)
         workflow.add_node("generate_search_query", self._generate_search_query_node)
         workflow.add_node("search_arxiv", self._search_arxiv_node)
         workflow.add_node("suggest_models", self._suggest_models_node)
         
         # Define the flow
-        workflow.set_entry_point("extract_properties")
-        workflow.add_edge("extract_properties", "decompose_task")
-        workflow.add_edge("decompose_task", "generate_search_query")
+        workflow.set_entry_point("analyze_properties_and_task")
+        workflow.add_edge("analyze_properties_and_task", "generate_search_query")
         workflow.add_edge("generate_search_query", "search_arxiv")
         workflow.add_edge("search_arxiv", "suggest_models")
         workflow.add_edge("suggest_models", END)
@@ -363,6 +361,206 @@ class MLResearcherLangGraph:
         
         return state
     
+    async def _analyze_properties_and_task_node(self, state: ModelSuggestionState) -> ModelSuggestionState:
+        """Combined node for extracting properties and decomposing task concurrently."""
+        print("\n🤖 Step 1: Analyzing properties and decomposing task concurrently...")
+        state["current_step"] = "analyze_properties_and_task"
+        
+        async def extract_properties():
+            """Extract properties using LLM analysis."""
+            try:
+                categories_list = "\n".join([f"- {category}" for category in ML_RESEARCH_CATEGORIES])
+                
+                content = f"""
+                    You are an expert machine learning researcher. Analyze the following research task and determine which of the predefined categories apply.
+
+                    Research Task: {state["original_prompt"]}
+
+                    Categories to analyze:
+                    {categories_list}
+
+                    For each category that applies to this research task, provide:
+                    1. The category name (exactly as listed above)
+                    2. A confidence score between 0.0 and 1.0 (how certain you are this category applies, Refer to the calibration table)
+                    3. A brief explanation of why this category applies
+                    4. Specific evidence from the task description that supports this categorization
+
+                    Confidence calibration (0.0–1.0):
+                    - 0.95–1.00: Category is explicitly stated or entailed by multiple strong cues.
+                    - 0.80–0.94: Strong single cue or multiple moderate cues; unlikely to be wrong.
+                    - 0.60–0.79: Reasonable inference with at least one clear cue; some uncertainty.
+                    - <0.60: Category is highly unlikely to apply, and can be safely ignored.
+
+                    Explanations:
+                    - 1–2 sentences, specific and non-generic, referencing how the evidence meets the category's definition.
+                    - Avoid restating the evidence verbatim; interpret it.
+
+                    Evidence rules:
+                    - "evidence" must be short verbatim quotes or near-verbatim spans from the task (≤ 20 words each). If paraphrase is unavoidable, mark with ~ at start (e.g., "~streaming data implies temporal order").
+                    - Provide 1–3 evidence snippets per category, concatenated with " | " if multiple.
+                    - No invented facts; no external knowledge.
+
+                    Do not filter categories down to only the applicable ones, you want to always return the full set, but include a confidence score for each (so the tool/user can judge relevance).
+
+                    Format your response as a JSON array like this:
+                    [
+                    {{
+                        "category": "temporal_structure",
+                        "confidence": 0.95,
+                        "explanation": "The task explicitly mentions time series data which has temporal dependencies",
+                        "evidence": "time series forecasting"
+                    }},
+                    {{
+                        "category": "variable_length_sequences", 
+                        "confidence": 0.85,
+                        "explanation": "Task mentions variable length sequences",
+                        "evidence": "variable length sequences"
+                    }}
+                    ]
+                    Always return valid JSON. For any field that may contain multiple values (e.g., evidence), output them as a JSON array of strings instead of separating by commas inside a single string.
+
+                    Return only the JSON array, no additional text.
+                """
+
+                response = await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    lambda: self.client.chat.completions.create(
+                        model=self.model,
+                        messages=[{"content": content, "role": "user"}]
+                    )
+                )
+                
+                # Parse the LLM response
+                llm_response = response.choices[0].message.content.strip()
+                
+                # Try to extract JSON from the response
+                try:
+                    # Remove any markdown formatting
+                    if llm_response.startswith("```json"):
+                        llm_response = llm_response[7:]
+                    if llm_response.endswith("```"):
+                        llm_response = llm_response[:-3]
+                    llm_response = llm_response.strip()
+                    
+                    properties_data = json.loads(llm_response)
+                    
+                    # Convert to PropertyHit objects and then to dict
+                    property_hits = []
+                    for prop_data in properties_data:
+                        evidence = [Evidence(
+                            snippet=prop_data.get("evidence", ""),
+                            source=f"llm_analysis:{prop_data['category']}",
+                            score=prop_data.get("confidence", 0.5)
+                        )]
+                        
+                        property_hit = PropertyHit(
+                            name=prop_data["category"],
+                            evidence=evidence
+                        )
+                        property_hits.append(property_hit.to_dict())
+                    
+                    print(f"✅ Property extraction completed: Found {len(property_hits)} properties")
+                    return {"success": True, "properties": property_hits}
+                    
+                except json.JSONDecodeError as e:
+                    error_msg = f"Failed to parse LLM JSON response: {e}"
+                    print(f"⚠️  {error_msg}")
+                    return {"success": False, "error": error_msg, "properties": []}
+            
+            except Exception as e:
+                error_msg = f"LLM property extraction failed: {str(e)}"
+                print(f"❌ {error_msg}")
+                return {"success": False, "error": error_msg, "properties": []}
+
+        async def decompose_task():
+            """Decompose task using LLM analysis."""
+            try:
+                content = f"""
+                    You are an expert machine learning researcher. Analyze the following research task and decompose it into key properties and characteristics.
+
+                    Task: {state["original_prompt"]}
+
+                    Please identify and analyze the following aspects:
+
+                    1. **Data Type**: What kind of data is involved? (text, images, time series, tabular, etc.)
+                    2. **Learning Type**: What type of learning is this? (supervised, unsupervised, reinforcement, etc.)
+                    3. **Task Category**: What is the main ML task? (classification, regression, generation, clustering, etc.)
+                    4. **Architecture Requirements**: What types of models or architectures might be suitable?
+                    5. **Key Challenges**: What are the main technical challenges?
+                    6. **Data Characteristics**: 
+                    - Variable length sequences?
+                    - Fixed or variable input dimensions?
+                    - Temporal structure?
+                    - Multi-modal data?
+                    7. **Performance Metrics**: What metrics would be appropriate for evaluation?
+                    8. **Domain Specifics**: Any domain-specific considerations?
+
+                    Provide your analysis in a structured JSON format with clear explanations for each identified property.
+                """
+
+                response = await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    lambda: self.client.chat.completions.create(
+                        model=self.model,
+                        messages=[{"content": content, "role": "user"}]
+                    )
+                )
+                
+                detailed_analysis = {
+                    "llm_analysis": response.choices[0].message.content,
+                    "model_used": self.model,
+                    "tokens_used": response.usage.total_tokens if response.usage else "unknown"
+                }
+                
+                print("✅ Task decomposition completed")
+                return {"success": True, "analysis": detailed_analysis}
+            
+            except Exception as e:
+                error_msg = f"LLM decomposition failed: {str(e)}"
+                print(f"❌ {error_msg}")
+                return {"success": False, "error": error_msg, "analysis": {"error": error_msg, "llm_analysis": None}}
+
+        # Run both tasks concurrently
+        print("🔄 Running property extraction and task decomposition in parallel...")
+        properties_result, decomposition_result = await asyncio.gather(
+            extract_properties(),
+            decompose_task(),
+            return_exceptions=True
+        )
+        
+        # Handle results
+        if isinstance(properties_result, Exception):
+            error_msg = f"Property extraction failed: {str(properties_result)}"
+            state["errors"].append(error_msg)
+            state["detected_categories"] = []
+            print(f"❌ {error_msg}")
+        elif properties_result["success"]:
+            state["detected_categories"] = properties_result["properties"]
+            for prop in properties_result["properties"]:
+                print(f"  - {prop['name']}: {prop['confidence']:.2f} confidence")
+        else:
+            state["errors"].append(properties_result["error"])
+            state["detected_categories"] = properties_result["properties"]
+        
+        if isinstance(decomposition_result, Exception):
+            error_msg = f"Task decomposition failed: {str(decomposition_result)}"
+            state["errors"].append(error_msg)
+            state["detailed_analysis"] = {"error": error_msg, "llm_analysis": None}
+            print(f"❌ {error_msg}")
+        elif decomposition_result["success"]:
+            state["detailed_analysis"] = decomposition_result["analysis"]
+        else:
+            state["errors"].append(decomposition_result["error"])
+            state["detailed_analysis"] = decomposition_result["analysis"]
+        
+        # Add success messages
+        if properties_result.get("success") and decomposition_result.get("success"):
+            state["messages"].append(
+                AIMessage(content=f"Successfully analyzed task properties ({len(properties_result['properties'])} categories) and decomposed task characteristics concurrently.")
+            )
+        
+        return state
+
     async def _extract_properties_node(self, state: ModelSuggestionState) -> ModelSuggestionState:
         """Node for extracting properties using LLM analysis."""
         print("\n🤖 Step 1: Extracting properties using LLM analysis...")
@@ -547,7 +745,7 @@ class MLResearcherLangGraph:
     
     def _generate_search_query_node(self, state: ModelSuggestionState) -> ModelSuggestionState:
         """Node for generating arXiv search query."""
-        print("\n📚 Step 3: Generating arXiv search query...")
+        print("\n📚 Step 2: Generating arXiv search query...")
         state["current_step"] = "generate_search_query"
         
         try:
@@ -628,13 +826,14 @@ class MLResearcherLangGraph:
         return state
     
     async def _search_arxiv_node(self, state: ModelSuggestionState) -> ModelSuggestionState:
-        """Node for searching arXiv papers."""
-        print(f"\n📖 Step 4: Searching arXiv for relevant papers...")
+        """Node for searching arXiv papers using optimized 3-stage workflow."""
+        print(f"\n📖 Step 3: Searching arXiv for relevant papers...")
         state["current_step"] = "search_arxiv"
         
         try:
             search_query = state["arxiv_search_query"]
-            max_results = 5
+            original_prompt = state["original_prompt"]
+            max_results = 15  # Get more papers initially for better selection
             
             print(f"🔍 SEARCHING arXiv: {search_query}")
             print("=" * 80)
@@ -645,9 +844,15 @@ class MLResearcherLangGraph:
             
             # Build the URL
             url = f"http://export.arxiv.org/api/query?search_query={formatted_query}&start=0&max_results={max_results}"
+            print(f"🌐 Full URL: {url}")
             
             with libreq.urlopen(url) as response:
                 xml_data = response.read()
+            
+            # Debug: Check XML content
+            xml_str = xml_data.decode('utf-8')
+            entry_count = xml_str.count('<entry>')
+            print(f"🔍 Debug: Found {entry_count} <entry> elements in XML response")
             
             # Parse XML
             root = ET.fromstring(xml_data)
@@ -670,28 +875,85 @@ class MLResearcherLangGraph:
                 
                 # Get all paper entries
                 entries = root.findall('atom:entry', ns)
+                print(f"🔍 Debug: XML parsing found {len(entries)} entries using namespace search")
                 
-                print(f"🚀 Processing {len(entries)} papers in parallel...")
+                # Alternative debugging - try without namespace  
+                entries_no_ns = root.findall('.//entry')
+                print(f"🔍 Debug: Found {len(entries_no_ns)} entries without namespace")
                 
-                # Process papers in parallel
+                # If no entries found with namespace, try alternative approach
+                if len(entries) == 0 and len(entries_no_ns) > 0:
+                    print("⚠️ Using entries found without namespace")
+                    entries = entries_no_ns
+                
+                # If we got very few results compared to total, try a simpler query
+                if len(entries) < 5 and total_results > 1000:
+                    print(f"⚠️ Only found {len(entries)} entries despite {total_results} total results")
+                    print("🔄 Attempting fallback with simpler query...")
+                    
+                    # Try a simpler query by removing the most specific terms
+                    query_parts = search_query.split('/')
+                    if len(query_parts) > 2:
+                        # Keep only the first two most important terms
+                        fallback_query = '/'.join(query_parts[:2])
+                        formatted_fallback = format_search_string(fallback_query)
+                        fallback_url = f"http://export.arxiv.org/api/query?search_query={formatted_fallback}&start=0&max_results={max_results}"
+                        print(f"🔄 Fallback query: {fallback_query}")
+                        print(f"🌐 Fallback URL: {fallback_url}")
+                        
+                        try:
+                            with libreq.urlopen(fallback_url) as fallback_response:
+                                fallback_xml_data = fallback_response.read()
+                            
+                            fallback_root = ET.fromstring(fallback_xml_data)
+                            fallback_entries = fallback_root.findall('atom:entry', ns)
+                            
+                            if len(fallback_entries) > len(entries):
+                                print(f"✅ Fallback found {len(fallback_entries)} entries - using fallback results")
+                                entries = fallback_entries
+                                xml_data = fallback_xml_data  # Update for consistency
+                                root = fallback_root
+                            else:
+                                print(f"❌ Fallback only found {len(fallback_entries)} entries - keeping original")
+                        except Exception as fallback_error:
+                            print(f"❌ Fallback query failed: {fallback_error}")
+                
+                # Stage 1: Extract basic info (title, abstract, metadata) without downloading PDFs
+                print(f"📝 Stage 1: Extracting basic info for {len(entries)} papers...")
+                
+                # Stage 1: Extract basic info (title, abstract, metadata) without downloading PDFs
+                print(f"� Stage 1: Extracting basic info for {len(entries)} papers...")
                 papers = []
-                with ThreadPoolExecutor(max_workers=5) as executor:
-                    # Submit all tasks
-                    future_to_index = {
-                        executor.submit(self._process_single_paper, entry, ns, i): i 
-                        for i, entry in enumerate(entries, 1)
+                for i, entry in enumerate(entries, 1):
+                    paper_info = self._extract_basic_paper_info(entry, ns, i)
+                    papers.append(paper_info)
+                    print(f"✅ Basic info extracted for paper #{i}: {paper_info['title'][:50]}...")
+                
+                # Stage 2: Rank papers by relevance using title + abstract only
+                print(f"\n🎯 Stage 2: Ranking papers by relevance (based on title + abstract)...")
+                papers = await self._rank_papers_by_relevance(papers, original_prompt)
+                
+                # Stage 3: Download full content for top 5 papers only
+                top_papers = papers[:5]  # Get top 5 papers
+                print(f"\n📥 Stage 3: Downloading full PDF content for top {len(top_papers)} papers...")
+                
+                with ThreadPoolExecutor(max_workers=3) as executor:  # Limit concurrent downloads
+                    # Submit download tasks for top papers only
+                    future_to_paper = {
+                        executor.submit(self._download_paper_content, paper): paper 
+                        for paper in top_papers
                     }
                     
                     # Collect results as they complete
-                    for future in as_completed(future_to_index):
-                        paper_info = future.result()
-                        papers.append(paper_info)
+                    for future in as_completed(future_to_paper):
+                        updated_paper = future.result()
+                        # Update the paper in the original list
+                        for i, paper in enumerate(papers):
+                            if paper['id'] == updated_paper['id']:
+                                papers[i] = updated_paper
+                                break
                 
-                # Sort papers back to original order
-                papers.sort(key=lambda x: x.get('index', 999))
-                
-                # Rank papers by relevance to the original query
-                papers = await self._rank_papers_by_relevance(papers, state["original_prompt"])
+                print(f"✅ PDF download stage completed. Top 5 papers now have full content.")
                 
                 # Print final results (now ranked by relevance)
                 print("\n" + "=" * 80)
@@ -700,17 +962,27 @@ class MLResearcherLangGraph:
                 
                 for i, paper in enumerate(papers, 1):
                     relevance_score = paper.get('relevance_score', 0)
-                    print(f"\n📄 PAPER #{i} (Relevance: {relevance_score:.1f}/10.0)")
+                    has_content = paper.get('pdf_downloaded', False)
+                    content_status = "📄 FULL CONTENT" if has_content else "📝 TITLE+ABSTRACT"
+                    
+                    print(f"\n📄 PAPER #{i} ({content_status}) - Relevance: {relevance_score:.1f}/10.0")
                     print("-" * 60)
                     print(f"Title: {paper['title']}")
                     print(f"ID: {paper['id']}")
                     print(f"Published: {paper['published']}")
                     print(f"URL: {paper['url']}")
                     
-                    if paper['content']:
-                        print(f"Content:\n{paper['content'][:500]}")
+                    # Show summary for all papers
+                    if paper.get('summary'):
+                        print(f"Summary: {paper['summary'][:300]}...")
+                    
+                    # Show content preview only if downloaded
+                    if paper.get('content'):
+                        print(f"Full Content Preview:\n{paper['content'][:400]}...")
+                    elif not has_content and i <= 5:
+                        print("Full Content: [Available in top 5 - check PDF download status]")
                     else:
-                        print("Content: [No content extracted]")
+                        print("Full Content: [Not downloaded - not in top 5]")
                     print("-" * 60)
                 
                 state["arxiv_results"] = {
@@ -755,7 +1027,7 @@ class MLResearcherLangGraph:
     
     def _suggest_models_node(self, state: ModelSuggestionState) -> ModelSuggestionState:
         """Node for suggesting suitable models based on analysis."""
-        print(f"\n🤖 Step 5: Analyzing papers and suggesting suitable models...")
+        print(f"\n🤖 Step 4: Analyzing papers and suggesting suitable models...")
         state["current_step"] = "suggest_models"
         
         try:
@@ -1320,6 +1592,94 @@ Provide a detailed, well-structured research plan that leverages the validated o
         
         return cleaned
     
+    
+    
+    # ARXIV handling funtions 
+    def _extract_basic_paper_info(self, entry, ns, index):
+        """Extract basic paper info without downloading PDF content."""
+        try:
+            # Extract basic info
+            title = entry.find('atom:title', ns).text.strip()
+            paper_id = entry.find('atom:id', ns).text.split('/')[-1]
+            
+            # Get published date
+            published = entry.find('atom:published', ns).text[:10] if entry.find('atom:published', ns) is not None else "Unknown"
+            
+            # Get abstract/summary
+            summary_elem = entry.find('atom:summary', ns)
+            summary = summary_elem.text.strip() if summary_elem is not None else ""
+            
+            # Get arXiv URL
+            arxiv_url = f"http://export.arxiv.org/api/query?id_list={paper_id}"
+            
+            # Store paper info without content
+            paper_info = {
+                "title": title,
+                "id": paper_id,
+                "published": published,
+                "summary": summary,
+                "content": None,  # Will be filled later for top papers
+                "url": arxiv_url,
+                "index": index,
+                "pdf_downloaded": False
+            }
+            
+            return paper_info
+            
+        except Exception as e:
+            print(f"❌ Error extracting basic info for paper #{index}: {e}")
+            return {
+                "title": f"Error processing paper #{index}",
+                "id": "error",
+                "published": "Unknown",
+                "summary": "",
+                "content": None,
+                "url": "error",
+                "index": index,
+                "pdf_downloaded": False,
+                "error": str(e)
+            }
+
+    def _download_paper_content(self, paper_info):
+        """Download and extract PDF content for a specific paper."""
+        import requests
+        import feedparser
+        
+        try:
+            paper_id = paper_info['id']
+            arxiv_url = f"http://export.arxiv.org/api/query?id_list={paper_id}"
+            
+            response = requests.get(arxiv_url)
+            feed = feedparser.parse(response.text)
+            
+            if not feed.entries:
+                return paper_info
+                
+            entry_data = feed.entries[0]
+            
+            # Find PDF link
+            pdf_link = None
+            for link in entry_data.links:
+                if link.type == 'application/pdf':
+                    pdf_link = link.href
+                    break
+            
+            # Extract text from PDF
+            if pdf_link:
+                print(f"Fetching PDF from: {pdf_link}")
+                pdf_txt = extract_pdf_text(pdf_link)
+                paper_info['content'] = pdf_txt
+                paper_info['pdf_downloaded'] = True
+                print(f"✅ Downloaded PDF content for: {paper_info['title'][:50]}...")
+            else:
+                print(f"⚠️ No PDF link found for: {paper_info['title'][:50]}...")
+            
+            return paper_info
+            
+        except Exception as e:
+            print(f"❌ Error downloading PDF for {paper_info['title'][:50]}...: {e}")
+            return paper_info
+    
     def _process_single_paper(self, entry, ns, index):
         """Process a single paper entry and extract its content."""
         import requests
@@ -1388,31 +1748,38 @@ Provide a detailed, well-structured research plan that leverages the validated o
         query = (original_query or "").strip()[:2000]
 
         user_prompt = f"""
-        You are an expert ML librarian. Score how relevant the paper is to the user's research query on a 1–10 scale.
+You are an expert ML librarian. Score how relevant the paper is to the user's research query on a 1–10 scale.
 
-        Return ONLY a number between 1.0 and 10.0 (one decimal). No words, no JSON, no symbols.
+OUTPUT FORMAT (STRICT):
+- Return EXACTLY one floating-point number with ONE decimal (e.g., 8.7).
+- No words, no JSON, no units, no symbols, no explanation.
+- Single line only (no leading/trailing spaces or extra lines).
 
-        Research query:
-        \"\"\"{query}\"\"\"
+Use ONLY the text provided below (title + content). Do not browse or assume unstated results. If the content is partial, rely on what’s given (title/abstract first).
 
-        Paper title:
-        \"\"\"{title}\"\"\"
+Scoring rubric — assign four subscores in [0,1]:
+- task_match (40%): directly addresses the research task(s).
+- method_match (30%): overlap with the architectures/approaches in the query or close variants.
+- constraint_match (20%): aligns with constraints/tooling/datasets/hardware (e.g., real-time, FPS/latency, edge/mobile, TensorRT/ONNX, INT8/FP16).
+- evidence_match (10%): concrete signals (benchmarks like nuScenes/Waymo/KITTI, metrics, ablations, deployment notes).
 
-        Paper content:
-        \"\"\"{content}\"\"\"
+Compute:
+- Let t,m,c,e ∈ [0,1].
+- score = round((0.40*t + 0.30*m + 0.20*c + 0.10*e) * 10, 1).
+- If clearly unrelated (all four < 0.15), output 1.0.
+- Clip to [1.0, 10.0].
+- Be conservative if uncertain.
 
-        Scoring rubric (weighting):
-        - task_match (40%): does the paper directly address the task(s)?
-        - method_match (30%): overlap with architectures/approaches or close variants.
-        - constraint_match (20%): matches constraints/tooling/datasets/hardware (e.g., real-time, edge, TensorRT, INT8).
-        - evidence_match (10%): concrete signals (benchmarks, datasets, metrics, ablations, deployment notes).
+Research query:
+\"\"\"{query}\"\"\"
 
-        Compute: score = round((0.40*task + 0.30*method + 0.20*constraint + 0.10*evidence)*10, 1).
-        If clearly unrelated (all four < 0.15), output 1.0.
-        Clip to [1.0, 10.0].
+Paper title:
+\"\"\"{title}\"\"\"
 
-        Output: ONLY the final number (e.g., 8.7).
-        """.strip()
+Paper content:
+\"\"\"{content}\"\"\"
+""".strip()
+
 
         async def _call_llm(prompt: str) -> str:
             resp = await asyncio.get_event_loop().run_in_executor(
@@ -1454,32 +1821,33 @@ Provide a detailed, well-structured research plan that leverages the validated o
                     return 1.0
 
     async def _rank_papers_by_relevance(self, papers: List[Dict], original_query: str) -> List[Dict]:
-        """Score and rank papers by relevance to the original query using concurrent scoring."""
-        print("\n🎯 Scoring papers for relevance concurrently...")
+        """Score and rank papers by relevance using cosine similarity (fast, deterministic)."""
+        print("\n🎯 Scoring papers for relevance using cosine similarity...")
         
-        # Create scoring tasks for all papers
+        # Create scoring tasks for all papers using the new cosine similarity method
         async def score_paper(i, paper):
             print(f"⏳ Scoring paper {i}/{len(papers)}: {paper['title'][:50]}...")
             
+            # Use the new cosine similarity scoring method
             relevance_score = await self._score_paper_relevance(
                 paper['title'], 
-                paper.get('summary', ''), 
+                paper.get('summary', ''),  # Use summary instead of content for initial ranking
                 original_query
             )
             
             paper['relevance_score'] = relevance_score
-            print(f"Score: {relevance_score:.1f}/10.0")
+            print(f"   📊 Cosine Similarity Score: {relevance_score:.1f}/10.0")
             return paper
         
         # Run all scoring tasks concurrently
         scoring_tasks = [score_paper(i, paper) for i, paper in enumerate(papers, 1)]
         scored_papers = await asyncio.gather(*scoring_tasks)
         
-        # Sort by relevance score (highest first)
+        # Sort by relevance score (highest first) and return top 5
         ranked_papers = sorted(scored_papers, key=lambda x: x.get('relevance_score', 0), reverse=True)
         
-        print(f"\n✅ Papers ranked by relevance to: '{original_query}'")
-        return ranked_papers
+        print(f"\n✅ Papers ranked by cosine similarity to: '{original_query}'")
+        return ranked_papers[:5]  # Return only top 5
     
     async def analyze_research_task(self, prompt: str) -> Dict[str, Any]:
         """Main method to analyze a research task using multi-workflow LangGraph architecture."""

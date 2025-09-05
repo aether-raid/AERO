@@ -28,6 +28,9 @@ def format_search_string(input_string):
     # Join with AND
     return '+'.join(parts) if parts else ""
 
+
+
+
 def explore_atom_elements(xml_data):
     """Explore and display all atom element names in the XML response."""
     root = ET.fromstring(xml_data)
@@ -75,6 +78,39 @@ def explore_atom_elements(xml_data):
     print(f"  • opensearch: {namespaces['opensearch']}")
     
     return namespaces
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 if __name__ == "__main__":
     # Example usage
     search_string = "deep learning/time series forecasting/variable length"
