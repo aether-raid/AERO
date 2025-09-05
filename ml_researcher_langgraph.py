@@ -37,6 +37,9 @@ from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
 # LLM and related imports
 import openai
 
+# Web search imports
+from modular_search.engines import GoogleSearchEngine
+
 # Local imports
 from Report_to_txt import extract_pdf_text
 from arxiv import format_search_string
@@ -982,58 +985,126 @@ class MLResearcherLangGraph:
         return state
     
     async def _validate_problem_node(self, state: ResearchPlanningState) -> ResearchPlanningState:
-        """Node for validating if the generated problem is already solved."""
-        print(f"\n🔍 Validating problem: {state['current_problem']['statement'][:60]}...")
+        """Node for validating if the generated problem is already solved using web search."""
+        print(f"\n🔍 Validating problem with web search: {state['current_problem']['statement'][:60]}...")
         state["current_step"] = "validate_problem"
         
         try:
             current_problem = state["current_problem"]
             keywords = current_problem.get("keywords", [])
+            problem_statement = current_problem.get("statement", "")
+            description = current_problem.get("description", "")
             
-            # Step 1: Web search simulation using LLM knowledge
-            search_content = f"""
-                You are an expert research validator. Your task is to determine if a research problem has already been solved or is well-established in the literature.
+            # Step 1: Perform web searches to find existing solutions
+            print("🌐 Performing web searches for existing solutions...")
+            
+            # Create search engine
+            search_engine = GoogleSearchEngine(num_results=10)
+            
+            # Construct search queries to find existing solutions
+            search_queries = [
+                f"{problem_statement} solution",
+                f"{problem_statement} solved",
+                f"{problem_statement} research paper",
+                f"{problem_statement} state of the art",
+                " ".join(keywords) + " solution" if keywords else problem_statement,
+                " ".join(keywords) + " recent advances" if keywords else f"{problem_statement} advances"
+            ]
+            
+            all_search_results = []
+            search_summaries = []
+            
+            # Perform searches
+            for query in search_queries[:3]:  # Limit to 3 queries to avoid rate limits
+                try:
+                    print(f"🔍 Searching: {query[:50]}...")
+                    results = await asyncio.get_event_loop().run_in_executor(
+                        None, 
+                        lambda q=query: search_engine(q)
+                    )
+                    
+                    if results:
+                        all_search_results.extend(results)
+                        search_summaries.append(f"Query: '{query}' - Found {len(results)} results")
+                        print(f"  ✅ Found {len(results)} results")
+                    else:
+                        search_summaries.append(f"Query: '{query}' - No results")
+                        print(f"  ❌ No results found")
+                        
+                except Exception as search_error:
+                    print(f"  ⚠️  Search error for '{query}': {search_error}")
+                    search_summaries.append(f"Query: '{query}' - Error: {str(search_error)}")
+            
+            # Step 2: Analyze search results with LLM
+            print("🧠 Analyzing search results with LLM...")
+            
+            # Format search results for analysis
+            formatted_results = ""
+            if all_search_results:
+                formatted_results = "\n".join([f"- {url}" for url in all_search_results[:20]])  # Limit to first 20 URLs
+            else:
+                formatted_results = "No search results found"
+            
+            # Create comprehensive analysis prompt
+            analysis_content = f"""
+You are an expert research validator. Analyze the web search results to determine if a research problem has already been solved.
 
-                Research Problem: {current_problem['statement']}
-                Description: {current_problem.get('description', '')}
-                Keywords: {', '.join(keywords)}
-                Research Question: {current_problem.get('research_question', '')}
+Research Problem: {problem_statement}
+Description: {description}
+Keywords: {', '.join(keywords)}
 
-                Based on your knowledge of the field, analyze whether this problem:
+Web Search Results:
+{formatted_results}
 
-                1. **Is already solved**: Has been conclusively addressed with established solutions
-                2. **Is well-studied**: Has extensive research but may have room for improvements
-                3. **Is partially solved**: Has some solutions but significant gaps remain
-                4. **Is open/novel**: Has minimal research or represents a genuine gap
+Search Queries Performed:
+{chr(10).join(search_summaries)}
 
-                Consider:
-                - Existing publications and solutions in this area
-                - State-of-the-art methods that address this problem
-                - Recent breakthroughs or established techniques
-                - Whether this is a known challenge in the field
+Based on the search results, analyze whether this problem:
 
-                Respond with a JSON object:
-                {{
-                    "status": "solved" | "well_studied" | "partially_solved" | "open",
-                    "confidence": 0.0-1.0,
-                    "reasoning": "Detailed explanation of your assessment",
-                    "existing_solutions": ["list", "of", "known", "solutions", "if", "any"],
-                    "research_gaps": ["remaining", "gaps", "if", "any"],
-                    "recommendation": "accept" | "reject"
-                }}
+1. **Is already solved**: Search results show conclusive solutions and implementations
+2. **Is well-studied**: Many search results indicate extensive research exists
+3. **Is partially solved**: Some solutions exist but search results suggest gaps remain
+4. **Is open/novel**: Few or no relevant search results, indicating a research gap
 
-                Use "reject" for problems that are clearly solved or well-established.
-                Use "accept" for problems that represent genuine research opportunities.
+Assessment Criteria:
+- Number and relevance of search results
+- Presence of solution-oriented URLs and papers
+- Academic paper URLs vs general web content
+- Recent research activity indicated by search results
 
-                Return only the JSON object, no additional text.
-            """
+Respond with a JSON object:
+{{
+    "status": "solved" | "well_studied" | "partially_solved" | "open",
+    "confidence": 0.0-1.0,
+    "reasoning": "Detailed explanation based on search results analysis",
+    "existing_solutions": ["URLs or papers that show existing solutions"],
+    "research_gaps": ["gaps identified from search analysis"],
+    "recommendation": "accept" | "reject",
+    "search_evidence": {{
+        "total_results": {len(all_search_results)},
+        "solution_indicators": "number of results suggesting solutions",
+        "academic_sources": "presence of academic/research URLs",
+        "recency_indicators": "evidence of recent research activity"
+    }}
+}}
 
+Guidelines:
+- If search results show many solution-oriented pages: status "solved" or "well_studied"
+- If few or no relevant results: status "open" (likely novel problem)
+- If mixed results with some gaps: status "partially_solved"
+- Use "accept" for "open" and some "partially_solved" problems
+- Use "reject" for "solved" and "well_studied" problems
+
+Return only the JSON object, no additional text.
+"""
+
+            # Get LLM analysis of search results
             response = await asyncio.get_event_loop().run_in_executor(
                 None,
                 lambda: self.client.chat.completions.create(
                     model=self.model,
-                    temperature=0.3,  # Lower temperature for more consistent validation
-                    messages=[{"content": search_content, "role": "user"}]
+                    temperature=0.3,
+                    messages=[{"content": analysis_content, "role": "user"}]
                 )
             )
             
@@ -1050,7 +1121,26 @@ class MLResearcherLangGraph:
                 
                 validation_data = json.loads(validation_response)
                 
-                # Store validation results
+                # Store comprehensive validation results including search info
+                validation_data["web_search_performed"] = True
+                validation_data["search_queries"] = search_queries[:3]
+                validation_data["search_results_count"] = len(all_search_results)
+                validation_data["total_urls_found"] = len(all_search_results)
+                
+                # Store relevant URLs for the research plan
+                validation_data["relevant_urls"] = all_search_results[:10]  # Store top 10 URLs
+                
+                # Create a summary of web findings for the research plan
+                web_findings_summary = f"Web search found {len(all_search_results)} results. "
+                if len(all_search_results) > 10:
+                    web_findings_summary += "High activity in this research area suggests established field. "
+                elif len(all_search_results) < 3:
+                    web_findings_summary += "Limited search results indicate potential research gap. "
+                else:
+                    web_findings_summary += "Moderate research activity with possible opportunities. "
+                
+                validation_data["web_findings"] = web_findings_summary
+                
                 state["validation_results"] = validation_data
                 
                 # Update current problem with validation info
@@ -1063,17 +1153,18 @@ class MLResearcherLangGraph:
                 
                 print(f"📊 Validation Status: {status.upper()}")
                 print(f"🎯 Confidence: {confidence:.2f}")
+                print(f"🌐 Search Results: {len(all_search_results)} URLs found")
                 print(f"💡 Recommendation: {recommendation.upper()}")
-                print(f"🧠 Reasoning: {validation_data.get('reasoning', 'No reasoning provided')[:100]}...")
+                print(f"🧠 Reasoning: {validation_data.get('reasoning', 'No reasoning provided')[:150]}...")
                 
                 if recommendation == "accept":
                     print("✅ Problem validated as open research opportunity")
                 else:
-                    print("❌ Problem rejected - already solved or well-established")
+                    print("❌ Problem rejected - evidence of existing solutions found")
                 
                 # Add validation message
                 state["messages"].append(
-                    AIMessage(content=f"Validated problem: {recommendation.upper()} (status: {status}, confidence: {confidence:.2f})")
+                    AIMessage(content=f"Web-validated problem: {recommendation.upper()} (status: {status}, confidence: {confidence:.2f}, {len(all_search_results)} URLs analyzed)")
                 )
                 
             except json.JSONDecodeError as e:
@@ -1084,23 +1175,55 @@ class MLResearcherLangGraph:
                     "status": "unknown",
                     "confidence": 0.0,
                     "reasoning": "Validation parsing failed",
-                    "recommendation": "reject"
+                    "recommendation": "reject",
+                    "web_search_performed": True,
+                    "total_urls_found": len(all_search_results)
                 }
                 state["current_problem"]["validation"] = state["validation_results"]
                 print(f"⚠️  {error_msg}, defaulting to rejection")
         
         except Exception as e:
-            error_msg = f"Problem validation failed: {str(e)}"
+            error_msg = f"Web search validation failed: {str(e)}"
             state["errors"].append(error_msg)
-            # Default to rejection on error
-            state["validation_results"] = {
-                "status": "unknown", 
-                "confidence": 0.0,
-                "reasoning": "Validation failed due to error",
-                "recommendation": "reject"
-            }
-            state["current_problem"]["validation"] = state["validation_results"]
-            print(f"❌ {error_msg}, defaulting to rejection")
+            print(f"❌ {error_msg}")
+            
+            # Fallback to basic LLM validation if web search fails
+            print("🔄 Falling back to LLM-only validation...")
+            try:
+                fallback_content = f"""
+Research Problem: {state['current_problem'].get('statement', '')}
+Based on your knowledge, is this problem already solved? Respond with JSON:
+{{"status": "solved|open", "confidence": 0.0-1.0, "reasoning": "brief explanation", "recommendation": "accept|reject"}}
+"""
+                fallback_response = await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    lambda: self.client.chat.completions.create(
+                        model=self.model,
+                        temperature=0.3,
+                        messages=[{"content": fallback_content, "role": "user"}]
+                    )
+                )
+                
+                fallback_json = json.loads(fallback_response.choices[0].message.content.strip())
+                fallback_json["web_search_performed"] = False
+                fallback_json["fallback_used"] = True
+                
+                state["validation_results"] = fallback_json
+                state["current_problem"]["validation"] = fallback_json
+                print(f"✅ Fallback validation: {fallback_json.get('recommendation', 'reject').upper()}")
+                
+            except Exception as fallback_error:
+                print(f"❌ Fallback validation also failed: {fallback_error}")
+                # Final fallback - conservative rejection
+                state["validation_results"] = {
+                    "status": "unknown", 
+                    "confidence": 0.0,
+                    "reasoning": "Both web search and LLM validation failed",
+                    "recommendation": "reject",
+                    "web_search_performed": False,
+                    "error": str(e)
+                }
+                state["current_problem"]["validation"] = state["validation_results"]
         
         return state
 
@@ -1126,86 +1249,134 @@ class MLResearcherLangGraph:
                 validation = problem.get('validation', {})
                 problems_text += f"- **Validation Status:** {validation.get('status', 'unknown')}\n"
                 problems_text += f"- **Validation Confidence:** {validation.get('confidence', 0.0):.2f}\n"
-                problems_text += f"- **Research Gaps:** {', '.join(validation.get('research_gaps', []))}\n\n"
+                problems_text += f"- **Research Gaps:** {', '.join(validation.get('research_gaps', []))}\n"
+                
+                # Include web search findings if available
+                if validation.get('web_search_performed', False):
+                    problems_text += f"- **Web Search Performed:** Yes\n"
+                    problems_text += f"- **Search Results Found:** {validation.get('search_results_count', 0)}\n"
+                    
+                    # Include relevant URLs found during validation
+                    relevant_urls = validation.get('relevant_urls', [])
+                    if relevant_urls:
+                        problems_text += f"- **Relevant Resources Found:**\n"
+                        for j, url in enumerate(relevant_urls[:5], 1):  # Limit to top 5 URLs
+                            problems_text += f"  {j}. {url}\n"
+                    
+                    # Include key findings from web search
+                    web_findings = validation.get('web_findings', '')
+                    if web_findings:
+                        problems_text += f"- **Current Research State:** {web_findings[:200]}...\n"
+                        
+                    # Include existing solutions found
+                    existing_solutions = validation.get('existing_solutions', [])
+                    if existing_solutions:
+                        problems_text += f"- **Existing Approaches:** {', '.join(existing_solutions[:3])}\n"
+                else:
+                    problems_text += f"- **Web Search Performed:** No (fallback to LLM validation)\n"
+                
+                problems_text += "\n"
             
             clean_problems = self._clean_text_for_encoding(problems_text)
             
             content = f"""
-You are an expert research project manager and academic research planner. Your task is to create a comprehensive, actionable research plan based on validated open problems that have been systematically identified and verified.
+You are an expert research project manager and academic research planner. Your task is to create a comprehensive, actionable research plan based on validated open problems that have been systematically identified and verified through web search analysis.
 
 **RESEARCH CONTEXT:**
 
 **Research Domain/Query:** {clean_prompt}
 
-**VALIDATED OPEN PROBLEMS:**
+**VALIDATED OPEN PROBLEMS (Web-Search Verified):**
 {clean_problems[:4000]}
 
+**IMPORTANT NOTE:** Each problem above has been validated using real-time web search. Pay special attention to:
+- Problems marked with "Web Search Performed: Yes" have current market/research validation
+- Relevant resources and URLs have been identified for each problem
+- Current research state information is based on actual web findings
+- Use the provided URLs and existing approaches as starting points for literature review
+
 **YOUR TASK:**
-Create a comprehensive research plan that addresses these validated open problems in a structured, time-bound manner. The plan should prioritize problems based on their research potential and feasibility.
+Create a comprehensive research plan that leverages both the validated problems AND the web search findings. The plan should prioritize problems based on their research potential, feasibility, and the current state of research as revealed by web analysis.
 
 **REQUIRED STRUCTURE:**
 
 ## EXECUTIVE SUMMARY
 - Brief overview of the research objectives
-- Summary of the {len(validated_problems)} validated open problems
-- Research prioritization strategy
+- Summary of the {len(validated_problems)} web-validated open problems
+- Research prioritization strategy based on web search findings
 - Expected timeline and outcomes
 
-## PROBLEM PRIORITIZATION
-- Rank the validated problems by research potential and feasibility
-- Explain the selection criteria used
-- Identify which problems will be primary vs. secondary focus
+## WEB-INFORMED PROBLEM PRIORITIZATION
+- Rank problems by research potential AND current research activity level
+- Explain selection criteria using web search insights
+- Identify which problems have the most/least existing research (based on search results)
+- Highlight problems with identified resource URLs for immediate follow-up
 
 ## PHASE 1: FOUNDATION & LITERATURE REVIEW (Months 1-3)
-- Comprehensive literature review strategy for each priority problem
-- Key papers and research groups to study
-- Knowledge gap validation through literature
-- Initial research question refinement
+- Comprehensive literature review strategy starting with URLs found during validation
+- Key papers and research groups to study (use provided relevant resources)
+- Knowledge gap validation through the identified web resources
+- Initial research question refinement based on current state analysis
 - Specific tasks and deliverables
 
 ## PHASE 2: PROBLEM FORMULATION (Months 4-6)
 - Formalize specific research hypotheses for priority problems
 - Design initial experiments or theoretical approaches
-- Identify required datasets/tools/resources
+- Identify required datasets/tools/resources (leverage web-found resources)
 - Risk assessment for each chosen problem
 - Specific tasks and deliverables
 
-## PHASE 3: CORE RESEARCH (Months 7-18)
-- Execute primary research activities for each problem
-- Develop novel solutions/approaches
-- Conduct experiments and evaluations
-- Address validation gaps identified in problem assessment
-- Specific tasks and deliverables for each problem
-
-## PHASE 4: VALIDATION & DISSEMINATION (Months 19-24)
-- Comprehensive evaluation of proposed solutions
-- Comparison with existing state-of-the-art
-- Paper writing and publication strategy
-- Conference and journal targets
+## PHASE 3: ACTIVE RESEARCH (Months 7-18)
+- Research execution plan for each chosen problem
+- Experimental design and methodology informed by web-discovered approaches
+- Progress milestones and validation metrics
+- Collaboration strategies with research groups identified through web search
+- Build upon existing work found through URL analysis
+- Expected outcomes and publications plan
 - Specific tasks and deliverables
 
-## RISK MITIGATION
-- Potential challenges for each research problem
-- Alternative approaches if primary methods fail
-- Backup problems to pursue if main ones prove infeasible
+## PHASE 4: EVALUATION & SYNTHESIS (Months 19-24)
+- Results evaluation framework comparing against current state identified via web search
+- Cross-problem synthesis opportunities leveraging interconnected research found online
+- Publication and dissemination strategy positioning against existing literature
+- Future research directions based on gaps identified through web analysis
+- Expected impact assessment relative to current research landscape
+- Specific tasks and deliverables
 
-## RESOURCE REQUIREMENTS
-- Computational resources needed for each problem
-- Data requirements and acquisition strategy
-- Potential collaborations and partnerships
-- Funding considerations
+## WEB-INFORMED RESOURCE REQUIREMENTS
+- Computational resources needed (consider approaches found in web search)
+- Datasets and tools required (prioritize those referenced in found URLs)
+- Personnel requirements with expertise in areas identified through research
+- Budget estimates informed by current research approaches
+- Infrastructure needs based on state-of-the-art identified online
 
-## SUCCESS METRICS
-- How to measure progress for each problem
-- Key performance indicators
-- Publication and impact goals
+## WEB-VALIDATED RISK MITIGATION
+- Challenges identified through analysis of existing research attempts
+- Learn from failures/limitations discovered in web search results
+- Alternative approaches based on diverse methodologies found online
+- Timeline flexibility informed by realistic research durations observed
+- Contingency plans based on common obstacles identified in literature
 
-## LONG-TERM IMPACT
-- How solving these problems could influence the field
-- Potential for follow-up research
-- Broader implications and applications
+## SUCCESS METRICS BENCHMARKED AGAINST CURRENT RESEARCH
+- Success criteria informed by achievements in existing work
+- Metrics comparing progress against state-of-the-art found through web search
+- Publication targets considering current publication landscape
+- Impact measurement relative to existing research influence
 
-Provide a detailed, well-structured research plan that leverages the validated open problems to make significant contributions to the field.
+## EXPECTED OUTCOMES & CONTRIBUTIONS
+- Contributions positioned relative to current research landscape
+- Expected papers building upon and citing discovered relevant work
+- Potential real-world applications validated through market research
+- Future research enablement informed by current research directions
+- Clear differentiation from existing approaches found through web analysis
+
+**IMPLEMENTATION PRIORITY:** Focus first on problems with:
+1. High search result counts (indicating active research area)
+2. Quality URLs providing immediate research starting points
+3. Clear gaps identified through web analysis
+4. Existing foundations to build upon (identified through web search)
+
+Remember: This plan leverages real-time web search validation to ensure relevance, avoid duplication, and build upon existing work. Each phase should incorporate insights from the web search findings, and the URLs discovered should serve as immediate action items for literature review and collaboration outreach.
 """
 
             response = self.client.chat.completions.create(

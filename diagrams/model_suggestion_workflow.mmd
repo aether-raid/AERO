@@ -1,0 +1,36 @@
+graph TD
+    A[🔍 Model Suggestion Start] --> B[📚 Search arXiv Papers<br/>Query Processing]
+    
+    B --> C[📄 Download & Process PDFs<br/>Extract Content]
+    C --> D[🧹 Clean & Structure Data<br/>Remove Artifacts]
+    D --> E[🧠 Domain Analysis<br/>Current State Assessment]
+    E --> F[💡 Generate Model Suggestions<br/>Architecture Recommendations]
+    F --> G[📊 Format Output<br/>Structured Results]
+    
+    %% Sub-processes
+    B --> B1[🔑 Extract Keywords]
+    B --> B2[🔍 arXiv API Query]
+    B --> B3[📋 Filter Results]
+    
+    C --> C1[⬇️ Download PDFs]
+    C --> C2[📖 Extract Text]
+    C --> C3[🧹 Clean Content]
+    
+    E --> E1[📈 Analyze Trends]
+    E --> E2[🎯 Identify Challenges]
+    E --> E3[💪 Assess Strengths]
+    
+    F --> F1[🏗️ Architecture Options]
+    F --> F2[⚖️ Performance Comparisons]
+    F --> F3[🛠️ Implementation Guidance]
+    
+    G --> H[✅ Final Recommendations<br/>Complete Analysis]
+    
+    %% Styling
+    classDef process fill:#4ECDC4,stroke:#17A2B8,stroke-width:2px
+    classDef subprocess fill:#A8E6CF,stroke:#28A745,stroke-width:2px
+    classDef output fill:#DDA0DD,stroke:#8A2BE2,stroke-width:2px
+    
+    class A,B,C,D,E,F,G process
+    class B1,B2,B3,C1,C2,C3,E1,E2,E3,F1,F2,F3 subprocess
+    class H output

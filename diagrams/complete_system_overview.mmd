@@ -1,0 +1,58 @@
+graph TB
+    subgraph "🌟 ML Researcher LangGraph System"
+        A[👤 User Query<br/>Research Question] --> B[🤖 Intelligent Router<br/>Semantic Analysis]
+        
+        B --> C{🎯 Workflow Decision<br/>Intent Classification}
+        
+        C -->|🔍 Model Query| D[📊 Model Suggestion Pipeline]
+        C -->|🔬 Research Query| E[🧪 Research Planning Pipeline]
+    end
+    
+    subgraph "📊 Model Suggestion Workflow"
+        D --> D1[📚 Literature Search<br/>arXiv Papers]
+        D1 --> D2[🧠 Domain Analysis<br/>Current State]
+        D2 --> D3[💡 Model Recommendations<br/>Architecture Guidance]
+        D3 --> D4[📋 Structured Output<br/>Implementation Guide]
+    end
+    
+    subgraph "🧪 Research Planning Workflow (Iterative)"
+        E --> E1[🎯 Problem Generation<br/>Novel Research Questions]
+        E1 --> E2[✅ Problem Validation<br/>Novelty Assessment]
+        E2 --> E3{🤔 Accept Problem?<br/>Open vs Solved}
+        E3 -->|✅ Accept| E4[📥 Problem Collection<br/>Build Validated Set]
+        E3 -->|❌ Reject| E1
+        E4 --> E5{📊 Sufficient Problems?<br/>Target: 3+ Problems}
+        E5 -->|❌ Need More| E1
+        E5 -->|✅ Ready| E6[📋 Research Plan Creation<br/>Comprehensive Strategy]
+    end
+    
+    subgraph "🎯 System Features"
+        F1[🔄 Intelligent Routing<br/>Confidence Scoring]
+        F2[📚 Real-time Literature<br/>Analysis & Search]
+        F3[🔍 Iterative Validation<br/>Problem Novelty Check]
+        F4[📊 Structured Outputs<br/>JSON Results]
+        F5[⚡ Error Handling<br/>Graceful Recovery]
+        F6[🧠 LLM Integration<br/>Advanced Analysis]
+    end
+    
+    D4 --> G[📤 Final Results<br/>Model Recommendations]
+    E6 --> H[📤 Final Results<br/>Research Plan]
+    
+    %% Styling
+    classDef userInput fill:#FFE4B5,stroke:#FF8C00,stroke-width:3px
+    classDef router fill:#FF6B6B,stroke:#DC143C,stroke-width:2px
+    classDef decision fill:#FECA57,stroke:#F39C12,stroke-width:2px
+    classDef modelFlow fill:#4ECDC4,stroke:#17A2B8,stroke-width:2px
+    classDef researchFlow fill:#45B7D1,stroke:#007BFF,stroke-width:2px
+    classDef output fill:#90EE90,stroke:#32CD32,stroke-width:3px
+    classDef features fill:#E6E6FA,stroke:#9370DB,stroke-width:1px
+    classDef validation fill:#96CEB4,stroke:#28A745,stroke-width:2px
+    
+    class A userInput
+    class B router
+    class C,E3,E5 decision
+    class D,D1,D2,D3,D4 modelFlow
+    class E,E1,E2,E4,E6 researchFlow
+    class E2,E4 validation
+    class G,H output
+    class F1,F2,F3,F4,F5,F6 features

@@ -1,0 +1,71 @@
+graph TD
+    subgraph "🔀 Router Logic Decision Tree"
+        A[📝 User Query Analysis] --> B{🎯 Intent Detection<br/>Semantic Analysis}
+        B -->|Model Keywords| C[🔍 MODEL_SUGGESTION<br/>Triggers Detected]
+        B -->|Research Keywords| D[🔬 RESEARCH_PLANNING<br/>Triggers Detected]
+        
+        C --> C1[📊 Confidence: High<br/>Architecture Query]
+        D --> D1[📊 Confidence: High<br/>Problem Discovery]
+    end
+    
+    subgraph "🔄 Research Planning Conditional Logic"
+        E[🎯 Problem Generation] --> F[✅ Problem Validation]
+        F --> G{🤔 Validation Decision<br/>_check_completion()}
+        
+        G -->|recommendation: accept| H[📥 Collect Problem<br/>Add to Validated List]
+        G -->|recommendation: reject| I[🔄 Continue Generation<br/>Loop Back]
+        
+        H --> J{📊 Collection Decision<br/>_should_continue_generating()}
+        
+        J -->|validated_problems < 3| K[🔄 Generate More<br/>Need Additional Problems]
+        J -->|validated_problems >= 3| L[✅ Finalize Plan<br/>Sufficient Problems]
+        J -->|iteration_count >= 10| M[⏰ Force Finalize<br/>Max Iterations Reached]
+        
+        I --> E
+        K --> E
+        L --> N[📋 Create Research Plan]
+        M --> N
+    end
+    
+    subgraph "🎯 Validation Assessment Logic"
+        O[🔍 Problem Analysis] --> P{📊 Status Classification}
+        
+        P -->|Status: solved| Q[❌ REJECT<br/>Well Established]
+        P -->|Status: well_studied| R[❌ REJECT<br/>Extensively Researched]
+        P -->|Status: partially_solved| S{🎯 Confidence Check<br/>> 0.7?}
+        P -->|Status: open| T[✅ ACCEPT<br/>Novel Opportunity]
+        
+        S -->|Yes| U[✅ ACCEPT<br/>Significant Gaps]
+        S -->|No| V[❌ REJECT<br/>Low Confidence]
+    end
+    
+    subgraph "⚙️ System Control Flow"
+        W[🚀 System Start] --> X[🤖 Initialize Router]
+        X --> Y[📝 Process User Query]
+        Y --> Z{🎯 Route Decision}
+        Z -->|Model| AA[📊 Execute Model Workflow]
+        Z -->|Research| BB[🔬 Execute Research Workflow]
+        AA --> CC[📤 Return Model Results]
+        BB --> DD[📤 Return Research Results]
+        CC --> EE[💾 Save & Display Results]
+        DD --> EE
+    end
+    
+    %% Styling
+    classDef router fill:#FFE4E1,stroke:#DC143C,stroke-width:2px
+    classDef research fill:#E0F6FF,stroke:#0080FF,stroke-width:2px
+    classDef validation fill:#F0FFF0,stroke:#32CD32,stroke-width:2px
+    classDef control fill:#F5F5DC,stroke:#8B4513,stroke-width:2px
+    classDef decision fill:#FFFACD,stroke:#DAA520,stroke-width:2px
+    classDef accept fill:#98FB98,stroke:#228B22,stroke-width:2px
+    classDef reject fill:#FFB6C1,stroke:#DC143C,stroke-width:2px
+    classDef process fill:#E6E6FA,stroke:#9370DB,stroke-width:2px
+    
+    class A,B,C,D,C1,D1 router
+    class E,F,H,I,J,K,L,M,N research
+    class O,P,S validation
+    class W,X,Y,Z,AA,BB,CC,DD,EE control
+    class B,G,J,P,S,Z decision
+    class T,U accept
+    class Q,R,V reject
+    class A,E,F,H,O,AA,BB,CC,DD,N process
