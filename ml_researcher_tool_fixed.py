@@ -371,7 +371,7 @@ class MLResearcherTool:
         Return ONLY a number between 1.0 and 10.0 (one decimal). No words, no JSON, no symbols.
 
         Research query:
-        \"\"\"{query}\"\"\"
+        \"\"\"{original_query}\"\"\"
 
         Paper title:
         \"\"\"{title}\"\"\"
@@ -432,23 +432,313 @@ class MLResearcherTool:
                 else:
                     return 1.0
 
+    async def _score_paper_relevance2(self, paper_title: str, paper_content: str, original_query: str) -> float:
+        """Score paper relevance using cosine similarity with comprehensive feature extraction."""
+        import re
+        from collections import Counter
+        from math import sqrt
+        
+        def preprocess_text(text: str) -> str:
+            """Clean and normalize text for analysis."""
+            if not text:
+                return ""
+            # Convert to lowercase and remove special characters
+            text = re.sub(r'[^\w\s]', ' ', text.lower())
+            # Remove extra whitespace
+            text = ' '.join(text.split())
+            return text
+        
+        def extract_ml_keywords(text: str) -> set:
+            """Extract ML-specific keywords and concepts."""
+            ml_patterns = {
+                # Core ML concepts
+                'machine_learning', 'deep_learning', 'neural_network', 'artificial_intelligence',
+                'supervised_learning', 'unsupervised_learning', 'reinforcement_learning',
+                
+                # Architectures
+                'transformer', 'attention', 'bert', 'gpt', 'lstm', 'gru', 'rnn', 'cnn', 'convolution',
+                'resnet', 'vgg', 'inception', 'mobilenet', 'efficientnet', 'densenet',
+                'unet', 'autoencoder', 'variational_autoencoder', 'gan', 'generative',
+                'vision_transformer', 'vit', 'detr', 'yolo', 'faster_rcnn', 'mask_rcnn',
+                
+                # Tasks
+                'classification', 'regression', 'clustering', 'detection', 'segmentation',
+                'object_detection', 'image_classification', 'semantic_segmentation', 
+                'instance_segmentation', 'face_recognition', 'natural_language_processing',
+                'computer_vision', 'speech_recognition', 'recommendation', 'anomaly_detection',
+                
+                # Domains
+                'autonomous_vehicle', 'medical_imaging', 'robotics', 'finance', 'healthcare',
+                'self_driving', 'autonomous_driving', 'medical', 'biomedical', 'clinical',
+                'remote_sensing', 'satellite', 'surveillance', 'security',
+                
+                # Constraints/Deployment
+                'real_time', 'edge_computing', 'mobile', 'embedded', 'quantization',
+                'pruning', 'tensorrt', 'onnx', 'optimization', 'inference', 'deployment',
+                'lightweight', 'efficient', 'low_latency', 'edge_deployment',
+                
+                # Data types
+                'image', 'video', 'text', 'audio', 'speech', 'time_series', 'tabular',
+                'multimodal', 'sensor_data', 'lidar', 'radar', 'camera',
+                
+                # Datasets/Benchmarks
+                'imagenet', 'coco', 'kitti', 'nuscenes', 'waymo', 'cityscapes',
+                'pascal_voc', 'mnist', 'cifar', 'glue', 'squad'
+            }
+            
+            found_keywords = set()
+            text_lower = text.lower()
+            
+            for keyword in ml_patterns:
+                # Check for exact match and variations
+                keyword_variants = [
+                    keyword,
+                    keyword.replace('_', ' '),
+                    keyword.replace('_', '-'),
+                    keyword.replace('_', '')
+                ]
+                
+                for variant in keyword_variants:
+                    if variant in text_lower:
+                        found_keywords.add(keyword)
+                        break
+            
+            return found_keywords
+        
+        def extract_technical_terms(text: str) -> set:
+            """Extract technical terms using patterns."""
+            technical_terms = set()
+            text_lower = text.lower()
+            
+            # Architecture patterns
+            arch_patterns = [
+                r'\b(?:transformer|attention|bert|gpt|lstm|gru|rnn|cnn)\b',
+                r'\b(?:resnet|vgg|inception|mobilenet|efficientnet)\b',
+                r'\b(?:yolo|detr|faster.?rcnn|mask.?rcnn)\b'
+            ]
+            
+            for pattern in arch_patterns:
+                matches = re.findall(pattern, text_lower)
+                technical_terms.update(matches)
+            
+            return technical_terms
+        
+        def calculate_cosine_similarity(vec1: dict, vec2: dict) -> float:
+            """Calculate cosine similarity between two feature vectors."""
+            # Get all unique features
+            all_features = set(vec1.keys()) | set(vec2.keys())
+            
+            if not all_features:
+                return 0.0
+            
+            # Calculate dot product and magnitudes
+            dot_product = sum(vec1.get(f, 0) * vec2.get(f, 0) for f in all_features)
+            
+            mag1 = sqrt(sum(v**2 for v in vec1.values()))
+            mag2 = sqrt(sum(v**2 for v in vec2.values()))
+            
+            if mag1 == 0 or mag2 == 0:
+                return 0.0
+            
+            return dot_product / (mag1 * mag2)
+        
+        def create_feature_vector(text: str, weight: float = 1.0) -> dict:
+            """Create weighted feature vector from text."""
+            if not text:
+                return {}
+            
+            # Extract different types of features
+            processed_text = preprocess_text(text)
+            ml_keywords = extract_ml_keywords(text)
+            tech_terms = extract_technical_terms(text)
+            
+            # Create feature vector with different weights
+            features = {}
+            
+            # ML keywords (high weight)
+            for keyword in ml_keywords:
+                features[f"ml_{keyword}"] = weight * 3.0
+            
+            # Technical terms (medium weight)
+            for term in tech_terms:
+                features[f"tech_{term}"] = weight * 2.0
+            
+            # Important words (lower weight)
+            important_words = [
+                'learning', 'neural', 'network', 'model', 'algorithm',
+                'training', 'optimization', 'performance', 'accuracy',
+                'detection', 'classification', 'segmentation', 'recognition'
+            ]
+            
+            for word in important_words:
+                if word in processed_text:
+                    count = processed_text.count(word)
+                    features[f"word_{word}"] = weight * count * 1.0
+            
+            return features
+        
+        # Clean inputs
+        title = (paper_title or "").strip()
+        content = (paper_content or "").strip()[:4000]  # Limit content length
+        query = (original_query or "").strip()
+        
+        if not title and not content:
+            return 1.0
+        
+        # Create feature vectors with different weights
+        query_vector = create_feature_vector(query, weight=1.0)
+        title_vector = create_feature_vector(title, weight=2.0)  # Title more important
+        content_vector = create_feature_vector(content, weight=1.0)
+        
+        # Combine paper vectors (title + content)
+        paper_vector = {}
+        for vec in [title_vector, content_vector]:
+            for feature, value in vec.items():
+                paper_vector[feature] = paper_vector.get(feature, 0) + value
+        
+        # Calculate cosine similarity
+        similarity = calculate_cosine_similarity(query_vector, paper_vector)
+        
+        # Apply scoring rules with domain knowledge
+        def apply_scoring_rules(sim_score: float, title: str, content: str, query: str) -> float:
+            """Apply domain-specific scoring rules to adjust similarity."""
+            base_score = sim_score * 10.0  # Scale to 1-10
+            
+            # Boost for exact task matches
+            query_lower = query.lower()
+            title_lower = title.lower()
+            content_lower = content.lower()
+            
+            # Task matching boost
+            task_keywords = ['detection', 'classification', 'segmentation', 'recognition', 'tracking']
+            for task in task_keywords:
+                if task in query_lower and task in (title_lower + ' ' + content_lower):
+                    base_score += 1.0
+                    break
+            
+            # Architecture matching boost
+            arch_keywords = ['transformer', 'cnn', 'lstm', 'bert', 'yolo', 'detr']
+            for arch in arch_keywords:
+                if arch in query_lower and arch in (title_lower + ' ' + content_lower):
+                    base_score += 0.8
+                    break
+            
+            # Domain matching boost
+            domain_keywords = ['autonomous', 'medical', 'robotics', 'vision', 'nlp']
+            for domain in domain_keywords:
+                if domain in query_lower and domain in (title_lower + ' ' + content_lower):
+                    base_score += 0.6
+                    break
+            
+            # Constraint matching boost
+            constraint_keywords = ['real.?time', 'edge', 'mobile', 'efficient', 'lightweight']
+            for constraint in constraint_keywords:
+                if re.search(constraint, query_lower) and re.search(constraint, title_lower + ' ' + content_lower):
+                    base_score += 0.5
+                    break
+            
+            # Penalty for completely unrelated domains
+            if ('medical' in query_lower and 'autonomous' in title_lower) or \
+               ('autonomous' in query_lower and 'medical' in title_lower):
+                base_score *= 0.3
+            
+            # Ensure score is in valid range
+            return max(1.0, min(10.0, base_score))
+        
+        # Apply scoring rules and return final score
+        final_score = apply_scoring_rules(similarity, title, content, query)
+        
+        return round(final_score, 1)
+    async def _score_paper_relevance3(self, paper_title: str, paper_content: str, original_query: str) -> float:
+        """
+        Relevance = cosine(query_embedding, paper_embedding), mapped to [1.0, 10.0].
+        No anchor bonuses, no handcrafted keyword bumps—purely based on the query and paper text.
+
+        Fallbacks:
+        - If sentence-transformers is unavailable, uses TF-IDF cosine.
+        - If inputs are empty, returns 1.0.
+        """
+        import re
+        import numpy as np
+
+        # -------- helpers --------
+        def _norm(s: str, n: int) -> str:
+            s = (s or "").replace("\x00", " ")
+            s = re.sub(r"\s+", " ", s).strip()
+            return s[:n]
+
+        def _build_doc(title: str, content: str) -> str:
+            # Title is often highly informative—weight it implicitly by repetition
+            title = _norm(title, 512) or "<untitled>"
+            content = _norm(content, 40000)
+            return ((title + " ") * 3 + " " + content).strip()
+
+        def _map_to_score(sim: float) -> float:
+            # Ensure similarity in [0,1], then map to [1.0, 10.0]
+            sim = float(np.clip(sim, 0.0, 1.0))
+            return round(1.0 + 9.0 * sim, 1)
+
+        # -------- inputs --------
+        title = paper_title or ""
+        content = paper_content or ""
+        query = original_query or ""
+
+        if not query.strip() or (not title.strip() and not content.strip()):
+            return 1.0
+
+        doc_text = _build_doc(title, content)
+
+        # -------- try dense embeddings (sentence-transformers) --------
+        try:
+            from sentence_transformers import SentenceTransformer
+            # cache the model on the instance to avoid reloading
+            model = getattr(self, "_st_model", None)
+            if model is None:
+                # bge-small: fast & good; swap to 'BAAI/bge-base-en-v1.5' for a bit more accuracy
+                model = self._st_model = SentenceTransformer("BAAI/bge-small-en-v1.5")
+
+            q_vec = model.encode([query], normalize_embeddings=True, show_progress_bar=False)[0]
+            d_vec = model.encode([doc_text], normalize_embeddings=True, show_progress_bar=False)[0]
+            cosine = float(np.dot(q_vec, d_vec))  # normalized => cosine
+            return _map_to_score(cosine)
+
+        except Exception:
+            # -------- fallback: TF-IDF cosine --------
+            try:
+                from sklearn.feature_extraction.text import TfidfVectorizer
+                from sklearn.metrics.pairwise import cosine_similarity
+
+                vec = TfidfVectorizer(
+                    stop_words="english",
+                    ngram_range=(1, 2),
+                    max_df=0.95,
+                    sublinear_tf=True,
+                )
+                X = vec.fit_transform([query, doc_text])
+                cosine = float(cosine_similarity(X[0], X[1])[0, 0])  # [0,1]
+                return _map_to_score(cosine)
+            except Exception:
+                # Last-resort conservative default
+                return 1.0
+
 
     async def _rank_papers_by_relevance(self, papers: List[Dict], original_query: str) -> List[Dict]:
-        """Score and rank papers by relevance to the original query using concurrent scoring."""
-        print("\n🎯 Scoring papers for relevance concurrently...")
+        """Score and rank papers by relevance using cosine similarity (fast, deterministic)."""
+        print("\n🎯 Scoring papers for relevance using cosine similarity...")
         
-        # Create scoring tasks for all papers
+        # Create scoring tasks for all papers using the new cosine similarity method
         async def score_paper(i, paper):
             print(f"⏳ Scoring paper {i}/{len(papers)}: {paper['title'][:50]}...")
             
+            # Use the new cosine similarity scoring method
             relevance_score = await self._score_paper_relevance(
                 paper['title'], 
-                paper.get('summary', ''), 
+                paper.get('summary', ''),  # Use summary instead of content
                 original_query
             )
             
             paper['relevance_score'] = relevance_score
-            print(f"Score: {relevance_score:.1f}/10.0")
+            print(f"   📊 Cosine Similarity Score: {relevance_score:.1f}/10.0")
             return paper
         
         # Run all scoring tasks concurrently
@@ -458,8 +748,14 @@ class MLResearcherTool:
         # Sort by relevance score (highest first)
         ranked_papers = sorted(scored_papers, key=lambda x: x.get('relevance_score', 0), reverse=True)
         
-        print(f"\n✅ Papers ranked by relevance to: '{original_query}'")
-        return ranked_papers
+        ranked_top5 = sorted(
+            scored_papers,
+            key=lambda x: (x.get('relevance_score') is None, x.get('relevance_score', 0)),
+            reverse=True
+        )[:5]
+                
+        print(f"\n✅ Papers ranked by cosine similarity to: '{original_query}'")
+        return ranked_top5
 
     def _clean_text_for_json(self, text: str) -> str:
         """Clean text to remove invalid Unicode characters that cause JSON serialization issues."""
@@ -485,7 +781,89 @@ class MLResearcherTool:
             # If all else fails, keep only ASCII characters
             return ''.join(char for char in text if ord(char) < 128)
 
-    def _process_single_paper(self, entry, ns, index):
+    def _extract_basic_paper_info(self, entry, ns, index):
+        """Extract basic paper info without downloading PDF content."""
+        try:
+            # Extract basic info
+            title = entry.find('atom:title', ns).text.strip()
+            paper_id = entry.find('atom:id', ns).text.split('/')[-1]
+            
+            # Get published date
+            published = entry.find('atom:published', ns).text[:10] if entry.find('atom:published', ns) is not None else "Unknown"
+            
+            # Get abstract/summary
+            summary_elem = entry.find('atom:summary', ns)
+            summary = summary_elem.text.strip() if summary_elem is not None else ""
+            
+            # Get arXiv URL
+            arxiv_url = f"http://export.arxiv.org/api/query?id_list={paper_id}"
+            
+            # Store paper info without content
+            paper_info = {
+                "title": title,
+                "id": paper_id,
+                "published": published,
+                "summary": summary,
+                "content": None,  # Will be filled later for top papers
+                "url": arxiv_url,
+                "index": index,
+                "pdf_downloaded": False
+            }
+            
+            return paper_info
+            
+        except Exception as e:
+            print(f"❌ Error extracting basic info for paper #{index}: {e}")
+            return {
+                "title": f"Error processing paper #{index}",
+                "id": "error",
+                "published": "Unknown",
+                "summary": "",
+                "content": None,
+                "url": "error",
+                "index": index,
+                "pdf_downloaded": False,
+                "error": str(e)
+            }
+
+    def _download_paper_content(self, paper_info):
+        """Download and extract PDF content for a specific paper."""
+        import requests
+        import feedparser
+        
+        try:
+            paper_id = paper_info['id']
+            arxiv_url = f"http://export.arxiv.org/api/query?id_list={paper_id}"
+            
+            response = requests.get(arxiv_url)
+            feed = feedparser.parse(response.text)
+            
+            if not feed.entries:
+                return paper_info
+                
+            entry_data = feed.entries[0]
+            
+            # Find PDF link
+            pdf_link = None
+            for link in entry_data.links:
+                if link.type == 'application/pdf':
+                    pdf_link = link.href
+                    break
+            
+            # Extract text from PDF
+            if pdf_link:
+                pdf_txt = extract_pdf_text(pdf_link)
+                paper_info['content'] = pdf_txt
+                paper_info['pdf_downloaded'] = True
+                print(f"✅ Downloaded PDF content for: {paper_info['title'][:50]}...")
+            else:
+                print(f"⚠️ No PDF link found for: {paper_info['title'][:50]}...")
+            
+            return paper_info
+            
+        except Exception as e:
+            print(f"❌ Error downloading PDF for {paper_info['title'][:50]}...: {e}")
+            return paper_info
         """Process a single paper entry and extract its content."""
         import requests
         import feedparser
@@ -544,7 +922,7 @@ class MLResearcherTool:
                 "error": str(e)
             }
 
-    async def search_arxiv(self, search_query: str, max_results: int = 20) -> Dict[str, Any]:
+    async def search_arxiv(self, search_query: str, original_prompt: str, max_results: int = 20) -> Dict[str, Any]:
         """Search arXiv for papers using the formatted search query."""
         
         print(f"\n🔍 SEARCHING arXiv: {search_query}")
@@ -583,28 +961,40 @@ class MLResearcherTool:
                 # Get all paper entries
                 entries = root.findall('atom:entry', ns)
                 
-                print(f"🚀 Processing {len(entries)} papers in parallel...")
+                print(f"� Stage 1: Extracting basic info for {len(entries)} papers...")
                 
-                # Process papers in parallel
-                
+                # Stage 1: Extract basic info (title, abstract, metadata) without downloading PDFs
                 papers = []
-                with ThreadPoolExecutor(max_workers=5) as executor:  # Limit to 5 concurrent downloads
-                    # Submit all tasks
-                    future_to_index = {
-                        executor.submit(self._process_single_paper, entry, ns, i): i 
-                        for i, entry in enumerate(entries, 1)
+                for i, entry in enumerate(entries, 1):
+                    paper_info = self._extract_basic_paper_info(entry, ns, i)
+                    papers.append(paper_info)
+                    print(f"✅ Basic info extracted for paper #{i}: {paper_info['title'][:50]}...")
+                
+                print(f"\n🎯 Stage 2: Ranking papers by relevance (based on title + abstract)...")
+                # Stage 2: Rank papers by relevance using title + abstract only
+                papers = await self._rank_papers_by_relevance(papers, original_prompt)
+                
+                # Stage 3: Download full content for top 5 papers only
+                top_papers = papers[:5]  # Get top 5 papers
+                print(f"\n📥 Stage 3: Downloading full PDF content for top {len(top_papers)} papers...")
+                
+                with ThreadPoolExecutor(max_workers=3) as executor:  # Limit concurrent downloads
+                    # Submit download tasks for top papers only
+                    future_to_paper = {
+                        executor.submit(self._download_paper_content, paper): paper 
+                        for paper in top_papers
                     }
                     
                     # Collect results as they complete
-                    for future in as_completed(future_to_index):
-                        paper_info = future.result()
-                        papers.append(paper_info)
+                    for future in as_completed(future_to_paper):
+                        updated_paper = future.result()
+                        # Update the paper in the original list
+                        for i, paper in enumerate(papers):
+                            if paper['id'] == updated_paper['id']:
+                                papers[i] = updated_paper
+                                break
                 
-                # Sort papers back to original order
-                papers.sort(key=lambda x: x.get('index', 999))
-                
-                # Rank papers by relevance to the original query
-                papers = await self._rank_papers_by_relevance(papers, search_query)
+                print(f"✅ PDF download stage completed. Top 5 papers now have full content.")
                 
                 # Print final results (now ranked by relevance)
                 print("\n" + "=" * 80)
@@ -613,17 +1003,27 @@ class MLResearcherTool:
                 
                 for i, paper in enumerate(papers, 1):
                     relevance_score = paper.get('relevance_score', 0)
-                    print(f"\n📄 PAPER #{i} (Relevance: {relevance_score:.1f}/10.0)")
+                    has_content = paper.get('pdf_downloaded', False)
+                    content_status = "📄 FULL CONTENT" if has_content else "📝 TITLE+ABSTRACT"
+                    
+                    print(f"\n📄 PAPER #{i} ({content_status}) - Relevance: {relevance_score:.1f}/10.0")
                     print("-" * 60)
                     print(f"Title: {paper['title']}")
                     print(f"ID: {paper['id']}")
                     print(f"Published: {paper['published']}")
                     print(f"URL: {paper['url']}")
                     
-                    if paper['content']:
-                        print(f"Content:\n{paper['content'][:500]}")
+                    # Show summary for all papers
+                    if paper.get('summary'):
+                        print(f"Summary: {paper['summary'][:300]}...")
+                    
+                    # Show content preview only if downloaded
+                    if paper.get('content'):
+                        print(f"Full Content Preview:\n{paper['content'][:400]}...")
+                    elif not has_content and i <= 5:
+                        print("Full Content: [Available in top 5 - check PDF download status]")
                     else:
-                        print("Content: [No content extracted]")
+                        print("Full Content: [Not downloaded - not in top 5]")
                     print("-" * 60)
                    
                 
@@ -1104,16 +1504,16 @@ Provide a detailed, well-structured research plan that a graduate student or res
         
         # Step 4: Search arXiv for relevant papers
         print("\n📖 Step 4: Searching arXiv for relevant papers...")
-        arxiv_results = await self.search_arxiv(arxiv_search_query, max_results=5)
+        arxiv_results = await self.search_arxiv(arxiv_search_query, prompt,  max_results=15)
         
         # Step 5: Suggest models based on all evidence
         model_suggestions = self.suggest_models_from_arxiv(prompt, arxiv_results, llm_properties, llm_analysis)
         
         # Step 6: Identify open research problems based on all evidence and model suggestions
-        open_problems = self.suggest_open_problems(prompt, llm_properties, llm_analysis, arxiv_results, model_suggestions)
+        #open_problems = self.suggest_open_problems(prompt, llm_properties, llm_analysis, arxiv_results, model_suggestions)
         
         # Step 7: Generate comprehensive research plan synthesizing all analysis
-        research_plan = self.generate_comprehensive_research_plan(prompt, llm_properties, llm_analysis, arxiv_results, model_suggestions, open_problems)
+        #research_plan = self.generate_comprehensive_research_plan(prompt, llm_properties, llm_analysis, arxiv_results, model_suggestions, open_problems)
         
         # Compile results
         results = {
@@ -1123,8 +1523,8 @@ Provide a detailed, well-structured research plan that a graduate student or res
             "arxiv_search_query": arxiv_search_query,
             "arxiv_results": arxiv_results,
             "model_suggestions": model_suggestions,
-            "open_problems": open_problems,
-            "research_plan": research_plan,
+            #"open_problems": open_problems,
+            #"research_plan": research_plan,
             "summary": {
                 "total_categories_detected": len(llm_properties),
                 "high_confidence_categories": len([p for p in llm_properties if p.confidence > 0.7]),
@@ -1132,8 +1532,8 @@ Provide a detailed, well-structured research plan that a graduate student or res
                 "arxiv_search_successful": arxiv_results.get("search_successful", False),
                 "papers_found": arxiv_results.get("papers_returned", 0),
                 "model_suggestions_successful": model_suggestions.get("suggestions_successful", False),
-                "open_problems_successful": open_problems.get("problems_identification_successful", False),
-                "research_plan_successful": research_plan.get("research_plan_successful", False)
+                #"open_problems_successful": open_problems.get("problems_identification_successful", False),
+                #"research_plan_successful": research_plan.get("research_plan_successful", False)
             }
         }
         
