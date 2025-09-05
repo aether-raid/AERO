@@ -1,0 +1,51 @@
+graph TD
+    subgraph "📊 State Management System"
+        A[🔄 RouterState<br/>Workflow Decision] --> B{🎯 Route Decision}
+        B -->|Model Query| C[📊 ModelSuggestionState<br/>Literature Processing]
+        B -->|Research Query| D[🧪 ResearchPlanningState<br/>Iterative Validation]
+    end
+    
+    subgraph "📊 ModelSuggestionState Flow"
+        C --> C1[📚 arXiv Results<br/>Papers & Content]
+        C1 --> C2[🧠 Domain Analysis<br/>Research Landscape]
+        C2 --> C3[💡 Model Suggestions<br/>Recommendations]
+        C3 --> C4[📋 Final Output<br/>Structured Results]
+    end
+    
+    subgraph "🧪 ResearchPlanningState Flow"
+        D --> D1[🎯 Generated Problems<br/>All Attempts]
+        D1 --> D2[✅ Current Problem<br/>Being Validated]
+        D2 --> D3[🔍 Validation Results<br/>Accept/Reject Decision]
+        D3 --> D4[📥 Validated Problems<br/>Accepted Collection]
+        D4 --> D5[📊 Iteration Counter<br/>Progress Tracking]
+        D5 --> D6[📋 Research Plan<br/>Final Strategy]
+    end
+    
+    subgraph "🔍 Problem Validation Structure"
+        E[🎯 Problem Statement] --> E1[📝 Description<br/>Detailed Context]
+        E1 --> E2[❓ Research Question<br/>Specific Query]
+        E2 --> E3[🏷️ Keywords<br/>Domain Tags]
+        E3 --> E4[✅ Validation Result<br/>Status Assessment]
+        
+        E4 --> E5[📊 Status Classification<br/>solved|open|partial]
+        E4 --> E6[🎯 Confidence Score<br/>0.0 - 1.0]
+        E4 --> E7[💭 Reasoning<br/>Analysis Details]
+        E4 --> E8[🔍 Existing Solutions<br/>Known Approaches]
+        E4 --> E9[🎯 Research Gaps<br/>Open Opportunities]
+        E4 --> E10[✅ Recommendation<br/>accept|reject]
+    end
+    
+    %% Styling
+    classDef state fill:#E6F3FF,stroke:#0066CC,stroke-width:2px
+    classDef modelState fill:#E6F7FF,stroke:#00A0B0,stroke-width:2px
+    classDef researchState fill:#E6F0FF,stroke:#4169E1,stroke-width:2px
+    classDef validation fill:#F0FFF0,stroke:#228B22,stroke-width:2px
+    classDef decision fill:#FFF8DC,stroke:#DAA520,stroke-width:2px
+    classDef structure fill:#FFF0F5,stroke:#C71585,stroke-width:2px
+    
+    class A,B state
+    class C,C1,C2,C3,C4 modelState
+    class D,D1,D2,D3,D4,D5,D6 researchState
+    class E,E1,E2,E3,E4 validation
+    class B decision
+    class E5,E6,E7,E8,E9,E10 structure
