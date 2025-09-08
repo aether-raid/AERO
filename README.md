@@ -125,6 +125,110 @@ graph LR
     F --> B
 ```
 
+## 🤖 Evidence-Based Model Suggestion Workflow
+
+The Model Suggestion Workflow provides sophisticated ML model recommendations with academic paper integration:
+
+### What Makes It Special
+- **arXiv Integration**: Searches and analyzes recent academic papers for evidence-based recommendations
+- **Task-Specific Analysis**: Deep analysis of ML task properties and constraints
+- **Multi-Model Comparisons**: Evaluates multiple architectures with pros/cons analysis
+- **Implementation Guidance**: Provides concrete code examples and best practices
+- **Quality Assurance**: AI critique system ensures technical accuracy and completeness
+
+### Model Suggestion Workflow Breakdown
+
+#### **Phase 1: Requirement Analysis**
+```python
+# Example analysis output:
+{
+    "task_type": "image_classification",
+    "data_constraints": "limited_labeled_data",
+    "performance_requirements": "high_accuracy_mobile_deployment",
+    "computational_limits": "edge_device_inference",
+    "specific_requirements": ["real_time_processing", "low_memory_footprint"]
+}
+```
+
+#### **Phase 2: Academic Evidence Gathering**
+- **arXiv Search**: Queries recent papers using task-specific keywords
+- **Paper Analysis**: Extracts model architectures, performance metrics, and implementation details
+- **Evidence Compilation**: Creates knowledge base of proven approaches
+
+```python
+# Example evidence gathering:
+{
+    "papers_found": 15,
+    "relevant_papers": 8,
+    "evidence_sources": [
+        "EfficientNet: Rethinking Model Scaling (2019)",
+        "Vision Transformer for Small Datasets (2023)",
+        "MobileNetV3: Hardware-Aware Efficient Networks (2020)"
+    ],
+    "performance_benchmarks": {
+        "EfficientNet-B0": {"accuracy": "92.3%", "params": "5.3M"},
+        "ViT-Small": {"accuracy": "89.1%", "params": "22M"}
+    }
+}
+```
+
+#### **Phase 3: Model Recommendation Generation**
+- **Architecture Selection**: Chooses optimal models based on requirements and evidence
+- **Performance Prediction**: Estimates accuracy, speed, and resource usage
+- **Implementation Planning**: Provides step-by-step deployment guidance
+
+#### **Phase 4: AI Quality Critique**
+Each recommendation undergoes rigorous evaluation:
+
+1. **Relevance Assessment**: Does the model match task requirements?
+2. **Technical Accuracy**: Are architecture details and claims correct?
+3. **Evidence Integration**: Are paper findings properly utilized?
+4. **Implementation Completeness**: Is guidance sufficient for deployment?
+
+#### **Phase 5: Iterative Refinement**
+- **Issue Identification**: Critique identifies specific problems
+- **Context-Aware Revision**: Previous attempts inform improvements
+- **Quality Progression**: Tracks improvement across iterations
+- **Final Validation**: Ensures all major issues are resolved
+
+### Model Suggestion Output Structure
+
+**Standard Recommendation Sections:**
+1. **Executive Summary** - Evidence-informed model overview with performance expectations
+2. **Recommended Models** - Ranked list with detailed justifications
+3. **Implementation Guide** - Step-by-step deployment instructions with code examples
+4. **Performance Analysis** - Expected metrics based on paper benchmarks
+5. **Alternative Approaches** - Secondary options with trade-off analysis
+6. **Resource Requirements** - Hardware, memory, and computational needs
+7. **Evidence Bibliography** - Academic papers supporting recommendations
+
+**Quality Assurance Metadata:**
+- **Final Quality Score**: 8.7/10.0 (AI critique assessment)
+- **Revision History**: "Refined 2 times - added mobile optimization details and expanded evidence"
+- **Evidence Integration**: Number of papers analyzed and specific findings utilized
+- **Technical Validation**: Verification of architecture details and performance claims
+
+### **Example Quality Report:**
+```markdown
+📊 MODEL SUGGESTION QUALITY REPORT
+Final Score: 8.7/10.0 (High Quality)
+
+✅ Strengths:
+- Strong evidence base (8 recent arXiv papers)
+- Comprehensive implementation guidance
+- Accurate performance predictions
+- Clear trade-off analysis
+
+🔧 Addressed Issues:
+- Added mobile deployment considerations
+- Expanded transfer learning instructions
+- Included memory optimization techniques
+
+📚 Evidence Sources: 8 academic papers
+🔄 Refinement Cycles: 2/4 (Converged)
+⚡ Technical Accuracy: Verified ✅
+```
+
 ## 🚀 Quick Start
 
 ### 1. Install Dependencies
