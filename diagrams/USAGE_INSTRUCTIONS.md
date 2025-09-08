@@ -23,7 +23,7 @@ Your `diagrams/` folder now contains:
 5. Export as PNG/SVG if needed
 
 ### Option 2: Standalone HTML Viewer
-1. Open `diagrams/workflow_viewer.html` in your browser
+1. Open `diagrams/workflow_viewer.html` in your browser ('start diagrams/workflow_viewer.html)
 2. View all diagrams in one page
 3. Use navigation to jump between sections
 
