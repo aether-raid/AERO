@@ -25,10 +25,17 @@ Determines the best workflow path based on user input:
 - General queries → Direct LLM response
 
 ### 2. Model Suggestion Workflow
-Specialized for ML model and tool recommendations:
-- Analyzes requirements and constraints
-- Generates tailored model suggestions
-- Provides implementation guidance
+Advanced ML model and tool recommendation system with quality assurance:
+- **Requirement Analysis**: Analyzes task properties and constraints
+- **Evidence-Based Search**: Finds relevant academic papers from arXiv
+- **Model Generation**: Generates tailored model suggestions with implementation guidance
+- **AI Critique System**: Evaluates recommendations for:
+  - Relevance to task requirements
+  - Technical accuracy and feasibility
+  - Evidence utilization from papers
+  - Completeness of implementation guidance
+- **Iterative Revision**: Refines suggestions based on critique feedback (max 4 iterations)
+- **Quality Tracking**: Monitors cumulative issues and ensures continuous improvement
 
 ### 3. Research Planning Workflow
 Advanced research plan generation with critique and refinement:
@@ -71,9 +78,11 @@ View interactive diagrams: Open `diagrams/workflow_viewer.html` in your browser
 
 ## 🔍 AI Critique Agent & Quality Assurance
 
-The system includes a sophisticated AI critique agent that ensures research plan quality:
+The system includes sophisticated AI critique agents that ensure quality across both workflows:
 
-### **Multi-Dimensional Evaluation**
+### **Research Planning Quality Assurance**
+
+**Multi-Dimensional Evaluation**
 Each research plan is evaluated across 6 key dimensions:
 
 1. **Research Novelty & Impact** (25%) - Significance and innovation potential
@@ -83,20 +92,36 @@ Each research plan is evaluated across 6 key dimensions:
 5. **Practical Implementation** (10%) - Clear phases and achievable milestones
 6. **Academic Rigor** (10%) - Publication strategy and contribution clarity
 
-### **Intelligent Refinement Process**
+**Intelligent Refinement Process**
 - **Issue-Based Refinement**: Plans are refined until no major issues remain (not just score-based)
 - **Contextual Improvement**: Original plan generation node receives critique feedback as context
 - **Iterative Enhancement**: Up to 3 refinement cycles with improvement tracking
 - **Fallback Protection**: Accepts best version if maximum refinements reached
 
+### **Model Suggestion Quality Assurance**
+
+**Evidence-Based Evaluation**
+Each model recommendation is critiqued for:
+
+1. **Relevance Assessment** - Alignment with task requirements and constraints
+2. **Technical Accuracy** - Correctness of model architecture and implementation details
+3. **Evidence Utilization** - Proper integration of arXiv paper findings and citations
+4. **Completeness Check** - Comprehensive implementation guidance and comparisons
+
+**Revision Control System**
+- **Cumulative Issue Tracking**: Monitors fixed, recurring, and persistent issues across iterations
+- **Context-Aware Revision**: Previous responses and critique feedback guide improvements
+- **Iteration Limits**: Maximum 4 revision cycles with best attempt fallback
+- **Quality Metrics**: Tracks improvement progression and final quality scores
+
 ### **Quality Assurance Flow**
 ```mermaid
 graph LR
-    A[Research Plan] --> B[Critique Agent]
+    A[Generated Content] --> B[Critique Agent]
     B --> C{Major Issues?}
     C -->|No| D[✅ Finalize]
     C -->|Yes| E[Add Critique Context]
-    E --> F[Regenerate Plan]
+    E --> F[Regenerate Content]
     F --> B
 ```
 
@@ -178,10 +203,38 @@ Enter your choice (1-3): 2
 ✅ No major issues found - plan approved!
 ```
 
-### Model Recommendations
+### Model Recommendations with Quality Assurance
 ```powershell
 python ml_researcher_langgraph.py
 # Enter: "What's the best model for image classification with limited data?"
+
+# The system will:
+# 1. Analyze your specific requirements
+# 2. Search relevant arXiv papers for evidence
+# 3. Generate tailored model recommendations  
+# 4. Apply AI critique for quality assessment
+# 5. Revise suggestions based on feedback (up to 4 iterations)
+# 6. Provide final recommendations with quality scores
+
+📊 Example Output:
+✅ Final Model Recommendations (Quality Score: 8.7/10.0)
+
+🧠 Recommended Models:
+1. EfficientNet-B0 with Data Augmentation
+   - Justification: Optimal for limited data scenarios
+   - Evidence: Based on 3 recent arXiv papers
+   - Implementation: Transfer learning from ImageNet
+   
+2. Vision Transformer (ViT) with Self-Supervision  
+   - Justification: Strong performance with minimal labels
+   - Evidence: SimCLR and DINO approaches from literature
+   - Implementation: Pre-train on unlabeled data first
+
+📈 Quality Assurance Report:
+- Relevance: High ✅ (Requirements fully addressed)
+- Technical Accuracy: High ✅ (Implementation details verified)  
+- Evidence Integration: High ✅ (5 arXiv papers cited)
+- Completeness: High ✅ (Code examples and best practices included)
 ```
 
 ### View Workflow Diagrams
