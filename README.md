@@ -53,25 +53,57 @@ The system includes interactive workflow visualizations:
 
 ```mermaid
 graph TD
-    A[User Input] --> B{Router}
-    B --> C[Model Suggestion Workflow]
-    B --> D[Research Planning Workflow]  
-    B --> E[Direct LLM Response]
+    A[👤 User Input] --> B{🤖 Router}
+    B -->|Model/Tool Request| C[🤖 Model Suggestion Workflow]
+    B -->|Research Planning| D[📋 Research Planning Workflow]  
+    B -->|General Query| E[💬 Direct LLM Response]
     
-    D --> F[Generate Problems]
-    F --> G[Validate with Web Search]
-    G --> H{Accept Problem?}
-    H -->|Yes| I[Collect Problem]
+    %% Model Suggestion Workflow Detail
+    C --> C1[🎯 Analyze Task Properties]
+    C1 --> C2[🔍 Search arXiv Papers]
+    C2 --> C3[🤖 Generate Model Suggestions]
+    C3 --> C4[🔍 AI Critique Assessment]
+    C4 --> C5{📊 Quality Check}
+    C5 -->|✅ High Quality| C6[✅ Finalize Suggestions]
+    C5 -->|🔄 Needs Revision| C7[🔧 Add Revision Context]
+    C5 -->|⏱️ Max Iterations| C8[✅ Accept Best Version]
+    C7 --> C9{🔄 < 4 Attempts?}
+    C9 -->|✅ Continue| C3
+    C9 -->|❌ Max Reached| C8
+    
+    %% Research Planning Workflow Detail
+    D --> F[📝 Generate Problems]
+    F --> G[🔍 Validate with Web Search]
+    G --> H{✅ Accept Problem?}
+    H -->|Yes| I[📋 Collect Problem]
     H -->|No| F
-    I --> J{Need More Problems?}
+    I --> J{🔄 Need More Problems?}
     J -->|Yes| F
-    J -->|No| K[User Selects Problem]
-    K --> L[Create Research Plan]
-    L --> M[🆕 AI Critique Agent]
-    M --> N{Major Issues?}
-    N -->|No| O[Finalize Plan ✅]
-    N -->|Yes| P[🆕 Refine Plan]
+    J -->|No| K[👤 User Selects Problem]
+    K --> L[📋 Create Research Plan]
+    L --> M[🔍 AI Critique Agent]
+    M --> N{📊 Major Issues?}
+    N -->|No| O[✅ Finalize Plan]
+    N -->|Yes| P[🔧 Refine Plan]
     P --> L
+    
+    %% Styling
+    classDef router fill:#FFE4B5,stroke:#FF8C00,stroke-width:2px
+    classDef modelSuggestion fill:#96CEB4,stroke:#28A745,stroke-width:2px
+    classDef researchPlanning fill:#DDA0DD,stroke:#8A2BE2,stroke-width:2px
+    classDef critique fill:#9370DB,stroke:#663399,stroke-width:2px
+    classDef decision fill:#FECA57,stroke:#F39C12,stroke-width:2px
+    classDef success fill:#90EE90,stroke:#32CD32,stroke-width:2px
+    classDef revision fill:#FFA07A,stroke:#FF4500,stroke-width:2px
+    
+    class A,B router
+    class C,C1,C2,C3,C6,C8 modelSuggestion
+    class D,F,G,I,K,L,O researchPlanning
+    class C4,M critique
+    class C5,C9,H,J,N decision
+    class C6,C8,O success
+    class C7,P revision
+    class E router
 ```
 
 View interactive diagrams: Open `diagrams/workflow_viewer.html` in your browser
