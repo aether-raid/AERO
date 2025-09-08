@@ -1,36 +1,74 @@
 graph TD
-    A[🔍 Model Suggestion Start] --> B[📚 Search arXiv Papers<br/>Query Processing]
+    A[🎯 Analyze Properties & Task<br/>Extract Requirements] --> B[� Generate Search Query<br/>Create arXiv Query]
     
-    B --> C[📄 Download & Process PDFs<br/>Extract Content]
-    C --> D[🧹 Clean & Structure Data<br/>Remove Artifacts]
-    D --> E[🧠 Domain Analysis<br/>Current State Assessment]
-    E --> F[💡 Generate Model Suggestions<br/>Architecture Recommendations]
-    F --> G[📊 Format Output<br/>Structured Results]
+    B --> C[� Search arXiv<br/>Find Relevant Papers]
     
-    %% Sub-processes
-    B --> B1[🔑 Extract Keywords]
-    B --> B2[🔍 arXiv API Query]
-    B --> B3[📋 Filter Results]
+    C --> D[� Suggest Models<br/>Generate Recommendations]
     
-    C --> C1[⬇️ Download PDFs]
-    C --> C2[📖 Extract Text]
-    C --> C3[🧹 Clean Content]
+    D --> E[🔍 Critique Response<br/>AI Quality Assessment]
     
-    E --> E1[📈 Analyze Trends]
-    E --> E2[🎯 Identify Challenges]
-    E --> E3[💪 Assess Strengths]
+    E --> F{� Quality Check<br/>Revision Needed?}
     
-    F --> F1[🏗️ Architecture Options]
-    F --> F2[⚖️ Performance Comparisons]
-    F --> F3[🛠️ Implementation Guidance]
+    F -->|✅ Accept<br/>High Quality| G[✅ Finalize Suggestions<br/>Quality Approved]
+    F -->|🔄 Revise<br/>Has Issues| H[🔧 Add Revision Context<br/>Include Critique Feedback]
+    F -->|⏱️ Max Iterations<br/>4 Attempts Reached| I[✅ Accept Best Version<br/>Force Finalize]
     
-    G --> H[✅ Final Recommendations<br/>Complete Analysis]
+    H --> J{🔄 Iteration Check<br/>< 4 Attempts?}
+    J -->|✅ Continue| D
+    J -->|❌ Max Reached| I
+    
+    %% Evidence Processing Details
+    C --> C1[� Paper Processing]
+    C --> C2[🔍 Semantic Search]
+    C --> C3[� Evidence Extraction]
+    
+    %% Task Analysis Details  
+    A --> A1[🎯 Requirement Analysis]
+    A --> A2[📂 Category Detection]
+    A --> A3[🔧 Constraint Identification]
+    
+    %% Model Suggestion Details
+    D --> D1[🧠 Model Selection]
+    D --> D2[� Justification Generation]
+    D --> D3[⚙️ Implementation Guidance]
+    
+    %% Critique Details
+    E --> E1[� Relevance Assessment]
+    E --> E2[🔧 Technical Accuracy]
+    E --> E3[📚 Evidence Utilization]
+    E --> E4[� Completeness Check]
+    
+    %% Revision Context Details
+    H --> H1[📋 Previous Response]
+    H --> H2[⚠️ Critique Issues]
+    H --> H3[💡 Improvement Suggestions]
+    H --> H4[✅ Cumulative Memory]
+    
+    %% Quality Tracking
+    E -.->|Track Issues| K[📈 Cumulative Issues<br/>Fixed/Recurring/Persistent]
+    H -.->|Max 4 Iterations| L[⏹️ Iteration Limit]
+    
+    %% Final Outputs
+    G --> M[📄 Final Recommendations<br/>With Quality Score]
+    I --> N[📄 Best Attempt<br/>With Revision History]
     
     %% Styling
-    classDef process fill:#4ECDC4,stroke:#17A2B8,stroke-width:2px
-    classDef subprocess fill:#A8E6CF,stroke:#28A745,stroke-width:2px
-    classDef output fill:#DDA0DD,stroke:#8A2BE2,stroke-width:2px
+    classDef analysis fill:#FFE4B5,stroke:#FF8C00,stroke-width:2px
+    classDef search fill:#96CEB4,stroke:#28A745,stroke-width:2px
+    classDef generation fill:#4ECDC4,stroke:#17A2B8,stroke-width:2px
+    classDef critique fill:#9370DB,stroke:#663399,stroke-width:2px
+    classDef decision fill:#FECA57,stroke:#F39C12,stroke-width:2px
+    classDef revision fill:#FFA07A,stroke:#FF4500,stroke-width:2px
+    classDef success fill:#90EE90,stroke:#32CD32,stroke-width:2px
+    classDef subprocess fill:#F0F8FF,stroke:#4682B4,stroke-width:1px
+    classDef tracking fill:#FFE4E1,stroke:#CD5C5C,stroke-width:1px
     
-    class A,B,C,D,E,F,G process
-    class B1,B2,B3,C1,C2,C3,E1,E2,E3,F1,F2,F3 subprocess
-    class H output
+    class A analysis
+    class B,C search
+    class D generation
+    class E critique
+    class F,J decision
+    class H revision
+    class G,I,M,N success
+    class A1,A2,A3,C1,C2,C3,D1,D2,D3,E1,E2,E3,E4,H1,H2,H3,H4 subprocess
+    class K,L tracking

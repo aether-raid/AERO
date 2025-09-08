@@ -154,8 +154,13 @@ class ResearchPlanningState(BaseState):
     validated_problems: List[Dict[str, Any]]     # Problems verified as unsolved
     current_problem: Dict[str, Any]              # Currently being validated
     validation_results: Dict[str, Any]           # Web search and validation results
+    selected_problem: Dict[str, Any]             # User-selected problem for detailed planning
     research_plan: Dict[str, Any]                # Final research plan
     iteration_count: int                         # Track number of iterations
+    critique_results: Dict[str, Any]             # Critique agent feedback
+    critique_score_history: List[float]          # Track score improvements
+    refinement_count: int                        # Number of refinements attempted
+    previous_plans: List[Dict[str, Any]]         # Store previous plan versions
 
 class RouterState(TypedDict):
     """State object for the router agent."""
@@ -263,14 +268,17 @@ class MLResearcherLangGraph:
         return workflow.compile()
     
     def _build_research_planning_graph(self) -> StateGraph:
-        """Build the iterative research planning workflow."""
+        """Build the iterative research planning workflow with critique and refinement."""
         workflow = StateGraph(ResearchPlanningState)
         
         # Add nodes for iterative research planning pipeline
         workflow.add_node("generate_problem", self._generate_problem_node)
         workflow.add_node("validate_problem", self._validate_problem_node)
         workflow.add_node("collect_problem", self._collect_problem_node)
+        workflow.add_node("select_problem", self._select_problem_node)
         workflow.add_node("create_research_plan", self._create_research_plan_node)
+        workflow.add_node("critique_plan", self._critique_plan_node)
+        workflow.add_node("finalize_plan", self._finalize_plan_node)
         
         # Define the flow with conditional edges
         workflow.set_entry_point("generate_problem")
@@ -286,17 +294,32 @@ class MLResearcherLangGraph:
             }
         )
         
-        # After collecting, decide if we should continue generating or finalize
+        # After collecting, decide if we should continue generating or move to selection
         workflow.add_conditional_edges(
             "collect_problem", 
             self._should_continue_generating,
             {
                 "generate_problem": "generate_problem",    # Generate more if need more problems
-                "finalize_plan": "create_research_plan"    # Create plan if enough problems collected
+                "select_problem": "select_problem"         # Move to selection if enough problems collected
             }
         )
         
-        workflow.add_edge("create_research_plan", END)
+        workflow.add_edge("select_problem", "create_research_plan")
+        workflow.add_edge("create_research_plan", "critique_plan")
+        
+        # After critique, decide what to do based on issues
+        workflow.add_conditional_edges(
+            "critique_plan",
+            self._determine_refinement_path,
+            {
+                "finalize_plan": "finalize_plan",      # No major issues - finalize
+                "refine_plan": "create_research_plan", # Has issues - regenerate with critique context
+                "select_problem": "select_problem",    # Problem issues - select different
+                "generate_problem": "generate_problem" # Fundamental issues - restart
+            }
+        )
+        
+        workflow.add_edge("finalize_plan", END)
         
         return workflow.compile()
     
@@ -2339,45 +2362,65 @@ Based on your knowledge, is this problem already solved? Respond with JSON:
         return state
 
     def _create_research_plan_node(self, state: ResearchPlanningState) -> ResearchPlanningState:
-        """Node for creating comprehensive research plan based on validated problems."""
-        print(f"\n📋 Step 4: Generating comprehensive research plan from {len(state.get('validated_problems', []))} validated problems...")
+        """Node for creating comprehensive research plan based on the selected problem."""
+        selected_problem = state.get("selected_problem", {})
+        
+        # Check if this is a refinement iteration
+        is_refinement = state.get("critique_results") is not None and state.get("refinement_count", 0) > 0
+        
+        if is_refinement:
+            print(f"\n� Step: Refining research plan (iteration {state.get('refinement_count', 0) + 1})...")
+            # Increment refinement count
+            state["refinement_count"] = state.get("refinement_count", 0) + 1
+            print(f"🎯 Addressing critique feedback...")
+        else:
+            print(f"\n�📋 Step 4: Generating comprehensive research plan for selected problem...")
+            print(f"🎯 Selected Problem: {selected_problem.get('statement', 'N/A')[:100]}...")
+            # Initialize refinement tracking
+            state["refinement_count"] = 0
+            state["previous_plans"] = []
+            state["critique_score_history"] = []
+        
         state["current_step"] = "create_research_plan"
         
         try:
             # Clean all text inputs to avoid encoding issues
             clean_prompt = self._clean_text_for_encoding(state["original_prompt"])
-            validated_problems = state.get("validated_problems", [])
             
-            # Format validated problems for the prompt
-            problems_text = ""
-            for i, problem in enumerate(validated_problems, 1):
-                problems_text += f"\n**Problem {i}:**\n"
-                problems_text += f"- **Statement:** {problem.get('statement', 'N/A')}\n"
-                problems_text += f"- **Description:** {problem.get('description', 'N/A')}\n"
-                problems_text += f"- **Research Question:** {problem.get('research_question', 'N/A')}\n"
-                problems_text += f"- **Keywords:** {', '.join(problem.get('keywords', []))}\n"
+            if not selected_problem:
+                error_msg = "No problem selected for research plan generation"
+                state["errors"].append(error_msg)
+                print(f"❌ {error_msg}")
+                return state
+            
+            # Format the selected problem for the prompt
+            problems_text = "\n**Selected Research Problem:**\n"
+            problems_text += f"- **Statement:** {selected_problem.get('statement', 'N/A')}\n"
+            problems_text += f"- **Description:** {selected_problem.get('description', 'N/A')}\n"
+            problems_text += f"- **Research Question:** {selected_problem.get('research_question', 'N/A')}\n"
+            problems_text += f"- **Keywords:** {', '.join(selected_problem.get('keywords', []))}\n"
+            
+            validation = selected_problem.get('validation', {})
+            problems_text += f"- **Validation Status:** {validation.get('status', 'unknown')}\n"
+            problems_text += f"- **Validation Confidence:** {validation.get('confidence', 0.0):.2f}\n"
+            problems_text += f"- **Research Gaps:** {', '.join(validation.get('research_gaps', []))}\n"
+            
+            # Include web search findings if available
+            if validation.get('web_search_performed', False):
+                problems_text += f"- **Web Search Performed:** Yes\n"
+                problems_text += f"- **Search Results Found:** {validation.get('search_results_count', 0)}\n"
                 
-                validation = problem.get('validation', {})
-                problems_text += f"- **Validation Status:** {validation.get('status', 'unknown')}\n"
-                problems_text += f"- **Validation Confidence:** {validation.get('confidence', 0.0):.2f}\n"
-                problems_text += f"- **Research Gaps:** {', '.join(validation.get('research_gaps', []))}\n"
+                # Include relevant URLs found during validation
+                relevant_urls = validation.get('relevant_urls', [])
+                if relevant_urls:
+                    problems_text += f"- **Relevant Resources Found:**\n"
+                    for j, url in enumerate(relevant_urls[:5], 1):  # Limit to top 5 URLs
+                        problems_text += f"  {j}. {url}\n"
                 
-                # Include web search findings if available
-                if validation.get('web_search_performed', False):
-                    problems_text += f"- **Web Search Performed:** Yes\n"
-                    problems_text += f"- **Search Results Found:** {validation.get('search_results_count', 0)}\n"
-                    
-                    # Include relevant URLs found during validation
-                    relevant_urls = validation.get('relevant_urls', [])
-                    if relevant_urls:
-                        problems_text += f"- **Relevant Resources Found:**\n"
-                        for j, url in enumerate(relevant_urls[:5], 1):  # Limit to top 5 URLs
-                            problems_text += f"  {j}. {url}\n"
-                    
-                    # Include key findings from web search
-                    web_findings = validation.get('web_findings', '')
-                    if web_findings:
-                        problems_text += f"- **Current Research State:** {web_findings[:200]}...\n"
+                # Include key findings from web search
+                web_findings = validation.get('web_findings', '')
+                if web_findings:
+                    problems_text += f"- **Current Research State:** {web_findings[:200]}...\n"
                         
                     # Include existing solutions found
                     existing_solutions = validation.get('existing_solutions', [])
@@ -2390,69 +2433,117 @@ Based on your knowledge, is this problem already solved? Respond with JSON:
             
             clean_problems = self._clean_text_for_encoding(problems_text)
             
-            content = f"""
-You are an expert research project manager and academic research planner. Your task is to create a comprehensive, actionable research plan based on validated open problems that have been systematically identified and verified through web search analysis.
+            # Add refinement context if this is a refinement iteration
+            refinement_context = ""
+            if is_refinement:
+                critique = state.get("critique_results", {})
+                previous_plan = state.get("research_plan", {}).get("research_plan", "")
+                
+                refinement_context = f"""
 
+**REFINEMENT CONTEXT:**
+This is refinement iteration {state['refinement_count']}. You are improving a previous research plan based on expert critique feedback.
+
+**PREVIOUS RESEARCH PLAN:**
+{previous_plan}...
+
+**CRITIQUE FEEDBACK TO ADDRESS:**
+- Overall Score: {critique.get('overall_score', 0)}/10
+- Major Issues: {critique.get('major_issues', [])}
+- Specific Suggestions: {critique.get('suggestions', [])}
+- Identified Strengths to Preserve: {critique.get('strengths', [])}
+
+**REFINEMENT INSTRUCTIONS:**
+1. Address each major issue mentioned in the critique
+2. Implement the specific improvement suggestions
+3. Preserve and build upon the identified strengths
+4. Maintain the overall structure but enhance problematic areas
+5. Focus on making the plan more feasible, detailed, and academically rigorous
+
+"""
+            
+            content = f"""
+You are an expert research project manager and academic research planner. Your task is to create a comprehensive, actionable research plan based on a specifically selected research problem that has been systematically identified and verified through web search analysis.
+{refinement_context}
 **RESEARCH CONTEXT:**
 
 **Research Domain/Query:** {clean_prompt}
 
-**VALIDATED OPEN PROBLEMS (Web-Search Verified):**
+**SELECTED RESEARCH PROBLEM (Web-Search Validated):**
 {clean_problems[:4000]}
 
-**IMPORTANT NOTE:** Each problem above has been validated using real-time web search. Pay special attention to:
-- Problems marked with "Web Search Performed: Yes" have current market/research validation
-- Relevant resources and URLs have been identified for each problem
+**IMPORTANT NOTE:** This problem has been user-selected from multiple validated options and has been verified using real-time web search. Pay special attention to:
+- Web search validation provides current market/research validation
+- Relevant resources and URLs have been identified for immediate follow-up
 - Current research state information is based on actual web findings
 - Use the provided URLs and existing approaches as starting points for literature review
 
 **YOUR TASK:**
-Create a comprehensive research plan that leverages both the validated problems AND the web search findings. The plan should prioritize problems based on their research potential, feasibility, and the current state of research as revealed by web analysis.
+Create a comprehensive research plan that leverages both the selected problem AND the web search findings. The plan should focus deeply on this specific problem, utilizing its research potential, feasibility, and the current state of research as revealed by web analysis.
 
 **REQUIRED STRUCTURE:**
 
 ## EXECUTIVE SUMMARY
 - Brief overview of the research objectives
-- Summary of the {len(validated_problems)} web-validated open problems
+- Summary of the selected web-validated research problem
 - Research prioritization strategy based on web search findings
 - Expected timeline and outcomes
 
-## WEB-INFORMED PROBLEM PRIORITIZATION
-- Rank problems by research potential AND current research activity level
-- Explain selection criteria using web search insights
-- Identify which problems have the most/least existing research (based on search results)
-- Highlight problems with identified resource URLs for immediate follow-up
+## WEB-INFORMED PROBLEM ANALYSIS
+- Detailed analysis of the selected research problem
+- Current research activity level based on web search insights
+- Assessment of research gaps and opportunities
+- Key resources and URLs identified for immediate follow-up
 
-## PHASE 1: FOUNDATION & LITERATURE REVIEW (Months 1-3)
-- Comprehensive literature review strategy starting with URLs found during validation
-- Key papers and research groups to study (use provided relevant resources)
-- Knowledge gap validation through the identified web resources
-- Initial research question refinement based on current state analysis
-- Specific tasks and deliverables
+## PHASE 1: FOUNDATION & LITERATURE REVIEW (First ~15% of Project Timeline)
+Comprehensive literature review strategy starting with URLs found during validation.
 
-## PHASE 2: PROBLEM FORMULATION (Months 4-6)
-- Formalize specific research hypotheses for priority problems
-- Design initial experiments or theoretical approaches
-- Identify required datasets/tools/resources (leverage web-found resources)
-- Risk assessment for each chosen problem
-- Specific tasks and deliverables
+- Key papers and research groups to study (use provided relevant resources).
 
-## PHASE 3: ACTIVE RESEARCH (Months 7-18)
-- Research execution plan for each chosen problem
-- Experimental design and methodology informed by web-discovered approaches
-- Progress milestones and validation metrics
-- Collaboration strategies with research groups identified through web search
-- Build upon existing work found through URL analysis
-- Expected outcomes and publications plan
-- Specific tasks and deliverables
+- Knowledge gap validation through the identified web resources.
 
-## PHASE 4: EVALUATION & SYNTHESIS (Months 19-24)
-- Results evaluation framework comparing against current state identified via web search
-- Cross-problem synthesis opportunities leveraging interconnected research found online
-- Publication and dissemination strategy positioning against existing literature
-- Future research directions based on gaps identified through web analysis
-- Expected impact assessment relative to current research landscape
-- Specific tasks and deliverables
+- Initial research question refinement based on current state analysis.
+
+- Specific tasks and deliverables for this phase.
+
+## PHASE 2: PROBLEM FORMULATION & EXPERIMENTAL DESIGN (Next ~10% of Project Timeline)
+Formalize specific research hypotheses for priority problems.
+
+- Design initial experiments or theoretical approaches.
+
+- Identify required datasets, tools, and resources (leverage web-found resources).
+
+- Risk assessment for each chosen problem.
+
+- Specific tasks and deliverables for this phase.
+
+## PHASE 3: ACTIVE RESEARCH & DEVELOPMENT (Core ~50% of Project Timeline)
+Research execution plan for each chosen problem.
+
+- Experimental design and methodology informed by web-discovered approaches.
+
+- Progress milestones and validation metrics.
+
+- Collaboration strategies with research groups identified through web search.
+
+- Build upon existing work found through URL analysis.
+
+- Expected outcomes and publications plan.
+
+- Specific tasks and deliverables for this phase.
+
+## PHASE 4: EVALUATION, SYNTHESIS & DISSEMINATION (Final ~25% of Project Timeline)
+Results evaluation framework comparing against the current state identified via web search.
+
+- Validation of research contributions against existing work found online.
+
+- Publication and dissemination strategy positioning against existing literature.
+
+- Future research directions based on gaps identified through web analysis.
+
+- Expected impact assessment relative to the current research landscape.
+
+- Specific tasks and deliverables for this phase.
 
 ## WEB-INFORMED RESOURCE REQUIREMENTS
 - Computational resources needed (consider approaches found in web search)
@@ -2481,13 +2572,15 @@ Create a comprehensive research plan that leverages both the validated problems 
 - Future research enablement informed by current research directions
 - Clear differentiation from existing approaches found through web analysis
 
-**IMPLEMENTATION PRIORITY:** Focus first on problems with:
-1. High search result counts (indicating active research area)
-2. Quality URLs providing immediate research starting points
-3. Clear gaps identified through web analysis
-4. Existing foundations to build upon (identified through web search)
+**RESEARCH FOCUS:** The selected problem shows:
+- Web search validation with {validation.get('search_results_count', 0)} relevant results found
+- {validation.get('status', 'unknown')} status indicating research opportunities
+- Key resources available for immediate literature review via discovered URLs
+- Current research gaps that can be systematically addressed
 
 Remember: This plan leverages real-time web search validation to ensure relevance, avoid duplication, and build upon existing work. Each phase should incorporate insights from the web search findings, and the URLs discovered should serve as immediate action items for literature review and collaboration outreach.
+
+Provide a detailed, focused research plan that maximizes impact on this specific validated research problem.
 """
 
             response = self.client.chat.completions.create(
@@ -2498,9 +2591,19 @@ Remember: This plan leverages real-time web search validation to ensure relevanc
             # Clean the response to avoid encoding issues
             research_plan = self._clean_text_for_encoding(response.choices[0].message.content)
             
-            # Print readable summary
-            print("✅ Comprehensive research plan generated")
-            print(f"📊 Based on {len(validated_problems)} validated problems")
+            # Store previous plan if this is a refinement
+            if is_refinement:
+                current_plan = state.get("research_plan", {})
+                if current_plan and "previous_plans" not in state:
+                    state["previous_plans"] = []
+                if current_plan:
+                    state["previous_plans"].append(current_plan)
+                print(f"✅ Research plan refined (iteration {state['refinement_count']})")
+                print(f"📊 Addressing critique feedback...")
+            else:
+                print("✅ Initial research plan generated")
+                print(f"📊 Based on selected problem: {selected_problem.get('statement', 'N/A')[:100]}...")
+            
             print("\n" + "=" * 80)
             print("📋 COMPREHENSIVE RESEARCH PLAN")
             print("=" * 80)
@@ -2512,13 +2615,15 @@ Remember: This plan leverages real-time web search validation to ensure relevanc
                 "research_plan": research_plan,
                 "model_used": self.model,
                 "tokens_used": response.usage.total_tokens if response.usage else "unknown",
-                "problems_used": len(validated_problems),
-                "validated_problems": validated_problems
+                "selected_problem": selected_problem,
+                "refinement_iteration": state.get("refinement_count", 0),
+                "is_refinement": is_refinement,
+                "all_validated_problems": state.get("validated_problems", [])
             }
             
             # Add success message
             state["messages"].append(
-                AIMessage(content=f"Successfully generated comprehensive research plan based on {len(validated_problems)} validated open problems.")
+                AIMessage(content=f"Successfully generated comprehensive research plan for selected problem: {selected_problem.get('statement', 'N/A')[:100]}...")
             )
         
         except Exception as e:
@@ -2533,6 +2638,447 @@ Remember: This plan leverages real-time web search validation to ensure relevanc
             print(f"❌ {error_msg}")
         
         return state
+
+    def _critique_plan_node(self, state: ResearchPlanningState) -> ResearchPlanningState:
+        """Node for critiquing the generated research plan."""
+        print(f"\n🔍 Step: Critiquing research plan...")
+        state["current_step"] = "critique_plan"
+        
+        try:
+            research_plan = state.get("research_plan", {}).get("research_plan", "")
+            selected_problem = state.get("selected_problem", {})
+            
+            if not research_plan:
+                raise ValueError("No research plan to critique")
+            
+            # Initialize critique tracking
+            if "critique_score_history" not in state:
+                state["critique_score_history"] = []
+            if "refinement_count" not in state:
+                state["refinement_count"] = 0
+            if "previous_plans" not in state:
+                state["previous_plans"] = []
+            
+            critique_content = f"""
+You are a senior research advisor and peer reviewer with expertise in machine learning and academic research. Your task is to critically evaluate this research plan for a PhD-level project.
+
+**RESEARCH PROBLEM:**
+{selected_problem.get('statement', 'N/A')}
+
+**RESEARCH PLAN TO EVALUATE:**
+{research_plan}
+
+**EVALUATION CRITERIA:**
+
+Assess the plan across these dimensions (score each 1-10):
+
+1. **RESEARCH NOVELTY & IMPACT (25%):**
+   - Does this advance the field meaningfully?
+   - Are research questions well-formulated and significant?
+   - Clear differentiation from existing work?
+
+2. **TECHNICAL FEASIBILITY (20%):**
+   - Are proposed methods appropriate and sound?
+   - Is experimental design rigorous and achievable?
+   - Realistic resource and timeline estimates?
+
+3. **METHODOLOGY SOUNDNESS (20%):**
+   - Proper validation and evaluation frameworks?
+   - Appropriate success metrics and benchmarks?
+   - Comprehensive risk assessment?
+
+4. **LITERATURE INTEGRATION (15%):**
+   - Proper use of web search findings and URLs?
+   - Builds appropriately on existing work?
+   - Identifies genuine research gaps?
+
+5. **PRACTICAL IMPLEMENTATION (10%):**
+   - Clear phase structure and milestones?
+   - Realistic resource requirements?
+   - Achievable timeline (24 months)?
+
+6. **ACADEMIC RIGOR (10%):**
+   - Publication strategy well-defined?
+   - Proper evaluation against state-of-the-art?
+   - Clear contribution statements?
+
+**RECOMMENDATION GUIDELINES:**
+- **"finalize"**: Use when there are 0 major issues OR the plan is good enough despite minor issues
+- **"refine_plan"**: Use when there are 1-4 major issues that can be fixed by improving the current plan
+- **"select_different"**: Use when there are 5+ major issues indicating the problem itself may be flawed
+- **"restart"**: Use when there are fundamental conceptual problems requiring complete rethinking
+
+**OUTPUT FORMAT:**
+Return only a JSON object with this exact structure:
+{{
+    "overall_score": float,  // Weighted average (1-10)
+    "dimension_scores": {{
+        "novelty_impact": float,
+        "technical_feasibility": float, 
+        "methodology": float,
+        "literature_integration": float,
+        "implementation": float,
+        "academic_rigor": float
+    }},
+    "major_issues": [
+        "Issue 1 description",
+        "Issue 2 description"
+    ],
+    "suggestions": [
+        "Specific improvement 1",
+        "Specific improvement 2"
+    ],
+    "strengths": [
+        "Strength 1",
+        "Strength 2"
+    ],
+    "recommendation": "finalize|refine_plan|select_different|restart",
+    "reasoning": "Brief explanation of recommendation"
+}}
+"""
+
+            response = self.client.chat.completions.create(
+                model=self.model,
+                temperature=0.1,  # Low temperature for consistent critique
+                messages=[{"content": critique_content, "role": "user"}]
+            )
+            
+            critique_response = response.choices[0].message.content.strip()
+            
+            try:
+                # Parse critique response
+                if critique_response.startswith("```json"):
+                    critique_response = critique_response[7:]
+                if critique_response.endswith("```"):
+                    critique_response = critique_response[:-3]
+                critique_response = critique_response.strip()
+                
+                critique_data = json.loads(critique_response)
+                
+                # Store critique results
+                state["critique_results"] = critique_data
+                
+                # Track score history
+                overall_score = critique_data.get("overall_score", 0.0)
+                state["critique_score_history"].append(overall_score)
+                
+                # Enhanced critique logging
+                major_issues = critique_data.get("major_issues", [])
+                llm_recommendation = critique_data.get("recommendation", "unknown")
+                
+                print(f"\n📊 CRITIQUE RESULTS:")
+                print(f"   Score: {overall_score:.1f}/10.0")
+                print(f"   Major Issues Count: {len(major_issues)}")
+                print(f"   LLM Recommendation: {llm_recommendation.upper()}")
+                print(f"   Raw Issues List: {major_issues[:2] if major_issues else 'None'}")
+                
+                if major_issues:
+                    print(f"\n⚠️  MAJOR ISSUES TO ADDRESS:")
+                    for i, issue in enumerate(major_issues, 1):
+                        print(f"   {i}. {issue}")
+                
+                suggestions = critique_data.get("suggestions", [])
+                if suggestions:
+                    print(f"\n💡 IMPROVEMENT SUGGESTIONS:")
+                    for i, suggestion in enumerate(suggestions[:3], 1):
+                        print(f"   {i}. {suggestion}")
+                
+                strengths = critique_data.get("strengths", [])
+                if strengths:
+                    print(f"\n✅ IDENTIFIED STRENGTHS:")
+                    for i, strength in enumerate(strengths[:2], 1):
+                        print(f"   {i}. {strength}")
+                
+                # Clear decision summary
+                if len(major_issues) == 0:
+                    print(f"\n🎉 EXCELLENT! No major issues found - plan ready for finalization!")
+                elif len(major_issues) <= 2:
+                    print(f"\n🔧 REFINEMENT NEEDED: {len(major_issues)} issues to address")
+                elif len(major_issues) <= 4:
+                    print(f"\n⚠️  SIGNIFICANT ISSUES: {len(major_issues)} problems need attention")
+                else:
+                    print(f"\n❌ MAJOR PROBLEMS: {len(major_issues)} fundamental issues detected")
+                
+                state["messages"].append(
+                    AIMessage(content=f"Research plan critiqued. Score: {overall_score:.1f}/10, Issues: {len(major_issues)}, Recommendation: {critique_data.get('recommendation', 'unknown')}")
+                )
+                
+            except json.JSONDecodeError as e:
+                error_msg = f"Failed to parse critique JSON: {e}"
+                print(f"⚠️  {error_msg}")
+                # Default critique for parsing failures
+                state["critique_results"] = {
+                    "overall_score": 5.0,
+                    "recommendation": "refine_plan",
+                    "major_issues": ["Critique parsing failed"],
+                    "suggestions": ["Manual review recommended"],
+                    "reasoning": "Automatic critique failed, defaulting to refinement"
+                }
+                state["critique_score_history"].append(5.0)
+        
+        except Exception as e:
+            error_msg = f"Critique process failed: {str(e)}"
+            state["errors"].append(error_msg)
+            print(f"❌ {error_msg}")
+            # Default to accepting plan if critique fails
+            state["critique_results"] = {
+                "overall_score": 7.0,
+                "recommendation": "finalize",
+                "major_issues": [],
+                "suggestions": [],
+                "reasoning": "Critique failed, proceeding with original plan"
+            }
+            state["critique_score_history"].append(7.0)
+        
+        return state
+
+    def _refine_plan_node(self, state: ResearchPlanningState) -> ResearchPlanningState:
+        """Node for refining the research plan based on critique feedback."""
+        print(f"\n🔄 STARTING PLAN REFINEMENT")
+        print("=" * 60)
+        state["current_step"] = "refine_plan"
+        
+        try:
+            # Increment refinement count
+            previous_count = state.get("refinement_count", 0)
+            state["refinement_count"] = previous_count + 1
+            
+            print(f"🔢 Refinement iteration: {previous_count} → {state['refinement_count']}")
+            
+            # Store previous plan
+            current_plan = state.get("research_plan", {})
+            if "previous_plans" not in state:
+                state["previous_plans"] = []
+            state["previous_plans"].append(current_plan)
+            
+            # Get critique feedback
+            critique = state.get("critique_results", {})
+            selected_problem = state.get("selected_problem", {})
+            original_plan = current_plan.get("research_plan", "")
+            
+            # Create refinement prompt
+            refinement_content = f"""
+You are refining a research plan based on expert critique feedback. Your goal is to address the specific issues while maintaining the overall structure and strengths.
+
+**ORIGINAL RESEARCH PROBLEM:**
+{selected_problem.get('statement', 'N/A')}
+
+**ORIGINAL RESEARCH PLAN:**
+{original_plan}
+
+**CRITIQUE FEEDBACK:**
+- Overall Score: {critique.get('overall_score', 0)}/10
+- Major Issues: {critique.get('major_issues', [])}
+- Specific Suggestions: {critique.get('suggestions', [])}
+- Identified Strengths: {critique.get('strengths', [])}
+
+**REFINEMENT INSTRUCTIONS:**
+
+1. **Address Major Issues:** Fix each issue mentioned in the critique
+2. **Implement Suggestions:** Incorporate the specific improvement recommendations
+3. **Preserve Strengths:** Keep and build upon identified strong points
+4. **Maintain Structure:** Keep the overall plan organization and phase structure
+5. **Focus on Critiqued Dimensions:** Pay special attention to low-scoring areas
+
+**SPECIFIC AREAS TO IMPROVE:**
+{chr.join([f"- {issue}" for issue in critique.get('major_issues', [])[:3]])}
+
+**IMPLEMENTATION GUIDANCE:**
+{chr.join([f"- {suggestion}" for suggestion in critique.get('suggestions', [])[:3]])}
+
+Generate an improved version of the research plan that directly addresses the critique while maintaining the validated problem focus and web search integration. Keep the same overall structure but enhance the content based on the feedback.
+
+Provide the complete refined research plan:
+"""
+
+            response = self.client.chat.completions.create(
+                model=self.model,
+                temperature=0.3,  # Slightly higher temperature for creative refinement
+                messages=[{"content": refinement_content, "role": "user"}]
+            )
+            
+            # Clean and store refined plan
+            refined_plan = self._clean_text_for_encoding(response.choices[0].message.content)
+            
+            state["research_plan"] = {
+                "research_plan_successful": True,
+                "research_plan": refined_plan,
+                "model_used": self.model,
+                "tokens_used": response.usage.total_tokens if response.usage else "unknown",
+                "selected_problem": selected_problem,
+                "refinement_iteration": state["refinement_count"],
+                "previous_score": critique.get("overall_score", 0),
+                "addressed_issues": critique.get("major_issues", [])
+            }
+            
+            print(f"✅ Research plan refined (iteration {state['refinement_count']})")
+            
+            # Show specific progress on issues
+            previous_issues = critique.get("major_issues", [])
+            print(f"🎯 Targeted {len(previous_issues)} major issues:")
+            for i, issue in enumerate(previous_issues[:3], 1):
+                print(f"   {i}. {issue[:80]}...")
+            
+            print(f"💡 Implemented {len(critique.get('suggestions', []))} suggestions")
+            print(f"📈 Previous score: {critique.get('overall_score', 0):.1f}/10")
+            print("🔄 Re-evaluating refined plan...")
+            
+            state["messages"].append(
+                AIMessage(content=f"Research plan refined based on critique feedback (iteration {state['refinement_count']})")
+            )
+        
+        except Exception as e:
+            error_msg = f"Plan refinement failed: {str(e)}"
+            state["errors"].append(error_msg)
+            print(f"❌ {error_msg}")
+            # Keep original plan if refinement fails
+        
+        return state
+
+    def _finalize_plan_node(self, state: ResearchPlanningState) -> ResearchPlanningState:
+        """Node for finalizing the approved research plan."""
+        print(f"\n✅ Step: Finalizing research plan...")
+        state["current_step"] = "finalize_plan"
+        
+        try:
+            critique = state.get("critique_results", {})
+            final_score = critique.get("overall_score", 0)
+            refinement_count = state.get("refinement_count", 0)
+            final_issues = len(critique.get("major_issues", []))
+            
+            print("=" * 80)
+            print("🎉 RESEARCH PLAN FINALIZED")
+            print("=" * 80)
+            print(f"📊 Final Quality Score: {final_score:.1f}/10.0")
+            print(f"⚠️  Remaining Major Issues: {final_issues}")
+            print(f"🔄 Refinement Iterations: {refinement_count}")
+            print(f"🎯 Selected Problem: {state.get('selected_problem', {}).get('statement', 'N/A')[:100]}...")
+            
+            # Quality assessment message
+            if final_issues == 0:
+                print("✅ EXCELLENT QUALITY: No major issues remaining!")
+            elif final_issues <= 2:
+                print(f"✅ GOOD QUALITY: Only {final_issues} minor issues remaining")
+            else:
+                print(f"⚠️  ACCEPTABLE QUALITY: {final_issues} issues remain (refinement limit reached)")
+            
+            # Add finalization metadata
+            research_plan = state.get("research_plan", {})
+            research_plan.update({
+                "finalized": True,
+                "final_score": final_score,
+                "final_issues_count": final_issues,
+                "total_refinements": refinement_count,
+                "quality_status": "excellent" if final_issues == 0 else "good" if final_issues <= 2 else "acceptable",
+                "critique_summary": {
+                    "score": final_score,
+                    "remaining_issues": critique.get("major_issues", []),
+                    "strengths": critique.get("strengths", []),
+                    "final_recommendation": critique.get("recommendation", "finalize")
+                }
+            })
+            state["research_plan"] = research_plan
+            
+            # Print final plan
+            final_plan = research_plan.get("research_plan", "")
+            print("\n" + "=" * 80)
+            print("📋 FINAL RESEARCH PLAN")
+            print("=" * 80)
+            print(final_plan)
+            print("=" * 80)
+            
+            state["messages"].append(
+                AIMessage(content=f"✅ Research plan finalized with quality score {final_score:.1f}/10 after {refinement_count} refinement iterations.")
+            )
+        
+        except Exception as e:
+            error_msg = f"Plan finalization failed: {str(e)}"
+            state["errors"].append(error_msg)
+            print(f"❌ {error_msg}")
+        
+        return state
+
+    def _determine_refinement_path(self, state: ResearchPlanningState) -> str:
+        """Determine the next step based on major issues rather than score."""
+        critique = state.get("critique_results", {})
+        score = critique.get("overall_score", 0)
+        recommendation = critique.get("recommendation", "finalize")
+        refinement_count = state.get("refinement_count", 0)
+        major_issues = critique.get("major_issues", [])
+        
+        # Refinement limits
+        MAX_REFINEMENTS = 3
+        ACCEPTABLE_ISSUES_AFTER_REFINEMENT = 2
+        
+        num_issues = len(major_issues)
+        
+        print(f"\n🤔 REFINEMENT DECISION LOGIC:")
+        print(f"   📊 Score: {score:.1f}/10")
+        print(f"   ⚠️  Major Issues Count: {num_issues}")
+        print(f"   � Major Issues: {major_issues[:3] if major_issues else 'None'}")
+        print(f"   �🔄 Current Refinements: {refinement_count}")
+        print(f"   💡 LLM Recommendation: {recommendation}")
+        
+        # Check if we've hit refinement limits
+        if refinement_count >= MAX_REFINEMENTS:
+            decision = "finalize_plan"
+            print(f"⏱️  DECISION: {decision.upper()} (Maximum refinements reached)")
+            print(f"📋 Final state: {num_issues} issues remaining")
+            return decision
+        
+        # Primary decision logic: Focus on major issues
+        if num_issues == 0:
+            decision = "finalize_plan"
+            print(f"✅ DECISION: {decision.upper()} (No major issues found)")
+            return decision
+        
+        elif num_issues <= ACCEPTABLE_ISSUES_AFTER_REFINEMENT and refinement_count >= 1:
+            decision = "finalize_plan"
+            print(f"✅ DECISION: {decision.upper()} (Only {num_issues} issues after refinement)")
+            return decision
+        
+        elif num_issues <= 4:
+            decision = "refine_plan"
+            print(f"🔧 DECISION: {decision.upper()} ({num_issues} issues - attempting refinement)")
+            return decision
+        
+        elif num_issues <= 6:
+            if refinement_count == 0:
+                decision = "refine_plan"
+                print(f"⚠️  DECISION: {decision.upper()} ({num_issues} issues - trying refinement once)")
+                return decision
+            else:
+                decision = "select_problem"
+                print(f"❌ DECISION: {decision.upper()} (Too many persistent issues: {num_issues})")
+                return decision
+        
+        else:  # 7+ major issues
+            print(f"❌ Fundamental problems detected ({num_issues} major issues)")
+            if score < 3.0:
+                decision = "generate_problem"
+                print(f"🔄 DECISION: {decision.upper()} (Score critically low)")
+                return decision
+            else:
+                decision = "select_problem"
+                print(f"🔄 DECISION: {decision.upper()} (Too many issues)")
+                return decision
+        
+        # Fallback safety checks
+        if score < 2.0:
+            print("⚠️  Critical score failure - restarting")
+            return "generate_problem"
+        
+        # Check score improvement if this is a refinement (secondary consideration)
+        if refinement_count > 0:
+            score_history = state.get("critique_score_history", [])
+            if len(score_history) >= 2:
+                improvement = score_history[-1] - score_history[-2]
+                if improvement < 0.1 and num_issues >= 3:  # Not improving and still has issues
+                    print(f"📈 Insufficient improvement ({improvement:.1f}) with {num_issues} issues remaining")
+                    return "select_problem"
+        
+        # Default fallback
+        return "refine_plan"
 
     async def _collect_problem_node(self, state: ResearchPlanningState) -> ResearchPlanningState:
         """Node for collecting validated problems and deciding next steps."""
@@ -2573,6 +3119,89 @@ Remember: This plan leverages real-time web search validation to ensure relevanc
             
         except Exception as e:
             error_msg = f"Problem collection failed: {str(e)}"
+            state["errors"].append(error_msg)
+            print(f"❌ {error_msg}")
+        
+        return state
+    
+    async def _select_problem_node(self, state: ResearchPlanningState) -> ResearchPlanningState:
+        """Node for user to select which validated problem to focus on for detailed research plan."""
+        print(f"\n🎯 Step: Problem Selection")
+        state["current_step"] = "select_problem"
+        
+        try:
+            validated_problems = state.get("validated_problems", [])
+            
+            if not validated_problems:
+                error_msg = "No validated problems available for selection"
+                state["errors"].append(error_msg)
+                print(f"❌ {error_msg}")
+                return state
+            
+            print("\n" + "=" * 80)
+            print("🔬 VALIDATED RESEARCH PROBLEMS")
+            print("=" * 80)
+            print(f"Found {len(validated_problems)} validated research problems!")
+            print("Please select which problem you'd like to create a detailed research plan for:\n")
+            
+            # Display all validated problems with details
+            for i, problem in enumerate(validated_problems, 1):
+                print(f"【Problem {i}】")
+                print(f"📋 Statement: {problem.get('statement', 'N/A')}")
+                print(f"📝 Description: {problem.get('description', 'N/A')[:200]}...")
+                print(f"❓ Research Question: {problem.get('research_question', 'N/A')}")
+                
+                validation = problem.get('validation', {})
+                print(f"✅ Validation Status: {validation.get('status', 'unknown')}")
+                print(f"🎯 Confidence: {validation.get('confidence', 0.0):.2f}")
+                
+                if validation.get('web_search_performed', False):
+                    print(f"🌐 Search Results: {validation.get('search_results_count', 0)} URLs found")
+                    relevant_urls = validation.get('relevant_urls', [])
+                    if relevant_urls:
+                        print(f"🔗 Key Resources: {len(relevant_urls)} URLs available")
+                
+                print(f"🏷️ Keywords: {', '.join(problem.get('keywords', []))}")
+                print("-" * 80)
+            
+            # Get user selection
+            while True:
+                try:
+                    choice = input(f"\nEnter your choice (1-{len(validated_problems)}): ").strip()
+                    
+                    if not choice:
+                        print("Please enter a number.")
+                        continue
+                    
+                    choice_num = int(choice)
+                    if 1 <= choice_num <= len(validated_problems):
+                        selected_problem = validated_problems[choice_num - 1]
+                        state["selected_problem"] = selected_problem
+                        
+                        print(f"\n✅ Selected Problem {choice_num}:")
+                        print(f"📋 {selected_problem.get('statement', 'N/A')}")
+                        print("\n🚀 Proceeding to generate detailed research plan...")
+                        
+                        # Add success message
+                        state["messages"].append(
+                            AIMessage(content=f"Selected problem {choice_num} for detailed research planning: {selected_problem.get('statement', 'N/A')}")
+                        )
+                        break
+                    else:
+                        print(f"Please enter a number between 1 and {len(validated_problems)}.")
+                        
+                except ValueError:
+                    print("Please enter a valid number.")
+                except KeyboardInterrupt:
+                    print("\n\n⚠️ Selection cancelled by user.")
+                    state["errors"].append("Problem selection cancelled by user")
+                    return state
+                except Exception as e:
+                    print(f"Error during selection: {e}")
+                    continue
+            
+        except Exception as e:
+            error_msg = f"Problem selection failed: {str(e)}"
             state["errors"].append(error_msg)
             print(f"❌ {error_msg}")
         
@@ -2735,7 +3364,7 @@ Remember: This plan leverages real-time web search validation to ensure relevanc
 
     # Conditional edge functions for research planning workflow
     def _should_continue_generating(self, state: ResearchPlanningState) -> str:
-        """Determine if we should continue generating problems or move to final planning."""
+        """Determine if we should continue generating problems or move to problem selection."""
         iteration_count = state.get("iteration_count", 0)
         validated_problems = state.get("validated_problems", [])
         max_iterations = 10  # Maximum iterations to prevent infinite loops
@@ -2746,10 +3375,10 @@ Remember: This plan leverages real-time web search validation to ensure relevanc
         # Check if we have enough problems or hit max iterations
         if len(validated_problems) >= target_problems:
             print(f"✅ Target reached: {len(validated_problems)}/{target_problems} problems")
-            return "finalize_plan"
+            return "select_problem"
         elif iteration_count >= max_iterations:
             print(f"⏹️  Max iterations reached: {iteration_count}/{max_iterations}")
-            return "finalize_plan"
+            return "select_problem"
         else:
             print(f"🔄 Continue generating: {len(validated_problems)}/{target_problems} problems, iteration {iteration_count}/{max_iterations}")
             return "generate_problem"

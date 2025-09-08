@@ -1,7 +1,7 @@
 graph TD
     A[🔬 Research Planning Start] --> B[🎯 Generate Problem Statement<br/>Iteration: 1]
     
-    B --> C[🔍 Validate Problem<br/>LLM Analysis]
+    B --> C[🌐 Validate Problem<br/>Web Search + LLM Analysis]
     C --> D{🤔 Problem Assessment<br/>Solved vs Open}
     
     D -->|✅ Open/Novel<br/>Accept| E[📥 Collect Problem<br/>Add to Validated List]
@@ -9,17 +9,31 @@ graph TD
     
     E --> G{📊 Collection Check<br/>Have Enough Problems?}
     G -->|❌ Need More<br/>< 3 Problems| F
-    G -->|✅ Sufficient<br/>≥ 3 Problems| H[📋 Create Research Plan<br/>Comprehensive Analysis]
+    G -->|✅ Sufficient<br/>≥ 3 Problems| H[� Select Problem<br/>User Choice Interface]
     
     F --> I{⏰ Iteration Limit<br/>< 10 Attempts?}
     I -->|✅ Continue| B
     I -->|❌ Max Reached| H
     
-    H --> J[✅ Final Research Plan<br/>Validated Problems + Strategy]
+    H --> J[📋 Create Research Plan<br/>Comprehensive Analysis]
+    
+    %% NEW: Critique and Refinement Loop
+    J --> K[🔍 Critique Plan<br/>AI Quality Assessment]
+    
+    K --> L{📊 Quality Check<br/>Major Issues?}
+    
+    L -->|🎉 No Major Issues<br/>High Quality| M[✅ Finalize Plan<br/>Quality Approved]
+    L -->|🔄 Has Major Issues<br/>Refinable| N[🔧 Refinement Context<br/>Add Critique Feedback]
+    L -->|⚠️ Problem Issues<br/>Fundamental Problems| H
+    L -->|🔄 Deep Issues<br/>Start Over| B
+    
+    N --> O{🔄 Refinement Check<br/>< 3 Attempts?}
+    O -->|✅ Continue Refining| J
+    O -->|❌ Max Refinements| P[✅ Accept Best Version<br/>Force Finalize]
     
     %% Validation Details
     C --> C1[📚 Literature Check]
-    C --> C2[🧠 Solution Analysis]  
+    C --> C2[🌐 Web Search Results]  
     C --> C3[🎯 Gap Assessment]
     
     %% Problem Generation Details
@@ -27,11 +41,17 @@ graph TD
     B --> B2[🔍 Challenge Identification]
     B --> B3[❓ Question Formulation]
     
+    %% Critique Details
+    K --> K1[📊 Novelty Assessment]
+    K --> K2[🔧 Feasibility Check]
+    K --> K3[📝 Methodology Review]
+    K --> K4[⏰ Timeline Validation]
+    
     %% Research Plan Details
-    H --> H1[📋 Problem Prioritization]
-    H --> H2[⏰ Timeline Creation]
-    H --> H3[💰 Resource Planning]
-    H --> H4[📊 Success Metrics]
+    J --> J1[📋 Problem Analysis]
+    J --> J2[⏰ Phase Planning]
+    J --> J3[💰 Resource Estimation]
+    J --> J4[📊 Success Metrics]
     
     %% Styling
     classDef start fill:#FFE4B5,stroke:#FF8C00,stroke-width:2px
@@ -39,6 +59,9 @@ graph TD
     classDef validation fill:#96CEB4,stroke:#28A745,stroke-width:2px
     classDef decision fill:#FECA57,stroke:#F39C12,stroke-width:2px
     classDef collection fill:#DDA0DD,stroke:#8A2BE2,stroke-width:2px
+    classDef userAction fill:#FF6B6B,stroke:#DC143C,stroke-width:2px
+    classDef critique fill:#9370DB,stroke:#663399,stroke-width:2px
+    classDef refinement fill:#FFA07A,stroke:#FF4500,stroke-width:2px
     classDef output fill:#90EE90,stroke:#32CD32,stroke-width:3px
     classDef subprocess fill:#F0F8FF,stroke:#4682B4,stroke-width:1px
     classDef loop fill:#FFB6C1,stroke:#DC143C,stroke-width:2px
@@ -46,8 +69,11 @@ graph TD
     class A start
     class B,F process
     class C validation
-    class D,G,I decision
+    class D,G,I,L,O decision
     class E collection
-    class H,J output
-    class B1,B2,B3,C1,C2,C3,H1,H2,H3,H4 subprocess
-    class F loop
+    class H userAction
+    class J,M,P output
+    class K critique
+    class N refinement
+    class B1,B2,B3,C1,C2,C3,J1,J2,J3,J4,K1,K2,K3,K4 subprocess
+    class F,N loop
