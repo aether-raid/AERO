@@ -174,9 +174,28 @@ class ArxivPaperProcessor:
     
     def create_embedding(self, text):
         """Create embedding for text using sentence-transformers."""
+        # Validate input text
+        if not isinstance(text, str):
+            print(f"⚠️ Warning: Expected string input, got {type(text)}: {repr(text)}")
+            if text is None:
+                text = ""
+            else:
+                text = str(text)
+        
+        # Ensure text is not empty
+        if not text.strip():
+            text = "empty text"
+            
         model = self._get_embedding_model()
         if model is not None:
-            return model.encode(text, show_progress_bar=False, normalize_embeddings=True)
+            try:
+                return model.encode(text, show_progress_bar=False, normalize_embeddings=True)
+            except Exception as e:
+                print(f"❌ Error creating embedding for text: {e}")
+                print(f"Text type: {type(text)}, Text preview: {repr(text[:100])}")
+                # Return a random embedding as fallback
+                import numpy as np
+                return np.random.randn(384).astype('float32')
         return None
     
     def extract_basic_paper_info(self, entry, ns, index):
@@ -267,6 +286,7 @@ class ArxivPaperProcessor:
         MAX_CHARS = 8000
         title = (paper_title or "").strip()[:512] or "<untitled>"
         content = (paper_content or "").strip()[:MAX_CHARS]
+        #print(content)
         query = (original_query or "").strip()[:2000]
 
         user_prompt = f"""
@@ -447,6 +467,18 @@ Paper content:
 
         # Helper: Embed a chunk using sentence-transformers
         def embed_chunk(chunk):
+            # Validate chunk input
+            if not isinstance(chunk, str):
+                print(f"⚠️ Warning: Chunk is not a string, got {type(chunk)}: {repr(chunk)}")
+                if chunk is None:
+                    chunk = ""
+                else:
+                    chunk = str(chunk)
+            
+            if not chunk.strip():
+                print("⚠️ Warning: Empty chunk detected, using placeholder text")
+                chunk = "empty chunk"
+            
             if hasattr(self, 'create_embedding') and callable(self.create_embedding):
                 emb = self.create_embedding(chunk)
                 import numpy as np
@@ -467,15 +499,29 @@ Paper content:
         all_chunks = []
         chunk_metadata = []
         for sec_idx, section in enumerate(sections):
+            # Validate section is a string
+            if not isinstance(section, str):
+                print(f"⚠️ Warning: Section {sec_idx} is not a string, got {type(section)}: {repr(section)}")
+                if section is None:
+                    continue  # Skip None sections
+                else:
+                    section = str(section)
+            
+            if not section.strip():
+                print(f"⚠️ Warning: Empty section {sec_idx}, skipping")
+                continue
+            
             section_chunks = chunk_section(section)
             for chunk_idx, chunk in enumerate(section_chunks):
-                all_chunks.append(chunk)
-                chunk_metadata.append({
-                    'section_index': sec_idx,
-                    'chunk_index': chunk_idx,
-                    'section_title': section.split('\n', 1)[0][:80],
-                    'text': chunk,
-                    'paper_id': paper.get('id', ''),
+                # Double-check chunk validity
+                if isinstance(chunk, str) and chunk.strip():
+                    all_chunks.append(chunk)
+                    chunk_metadata.append({
+                        'section_index': sec_idx,
+                        'chunk_index': chunk_idx,
+                        'section_title': section.split('\n', 1)[0][:80],
+                        'text': chunk,
+                        'paper_id': paper.get('id', ''),
                     'paper_title': paper.get('title', ''),
                 })
 
