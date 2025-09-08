@@ -99,11 +99,11 @@ def generate_model_suggestion_mermaid():
     return mermaid_code
 
 def generate_research_planning_mermaid():
-    """Generate detailed mermaid diagram for research planning workflow."""
+    """Generate enhanced mermaid diagram for research planning workflow with critique and refinement."""
     mermaid_code = """graph TD
     A[🔬 Research Planning Start] --> B[🎯 Generate Problem Statement<br/>Iteration: 1]
     
-    B --> C[🔍 Validate Problem<br/>LLM Analysis]
+    B --> C[🌐 Validate Problem<br/>Web Search + LLM Analysis]
     C --> D{🤔 Problem Assessment<br/>Solved vs Open}
     
     D -->|✅ Open/Novel<br/>Accept| E[📥 Collect Problem<br/>Add to Validated List]
@@ -111,17 +111,31 @@ def generate_research_planning_mermaid():
     
     E --> G{📊 Collection Check<br/>Have Enough Problems?}
     G -->|❌ Need More<br/>< 3 Problems| F
-    G -->|✅ Sufficient<br/>≥ 3 Problems| H[📋 Create Research Plan<br/>Comprehensive Analysis]
+    G -->|✅ Sufficient<br/>≥ 3 Problems| H[� Select Problem<br/>User Choice Interface]
     
     F --> I{⏰ Iteration Limit<br/>< 10 Attempts?}
     I -->|✅ Continue| B
     I -->|❌ Max Reached| H
     
-    H --> J[✅ Final Research Plan<br/>Validated Problems + Strategy]
+    H --> J[📋 Create Research Plan<br/>Comprehensive Analysis]
+    
+    %% NEW: Critique and Refinement Loop
+    J --> K[🔍 Critique Plan<br/>AI Quality Assessment]
+    
+    K --> L{📊 Quality Check<br/>Major Issues?}
+    
+    L -->|🎉 No Major Issues<br/>High Quality| M[✅ Finalize Plan<br/>Quality Approved]
+    L -->|🔄 Has Major Issues<br/>Refinable| N[🔧 Refinement Context<br/>Add Critique Feedback]
+    L -->|⚠️ Problem Issues<br/>Fundamental Problems| H
+    L -->|🔄 Deep Issues<br/>Start Over| B
+    
+    N --> O{🔄 Refinement Check<br/>< 3 Attempts?}
+    O -->|✅ Continue Refining| J
+    O -->|❌ Max Refinements| P[✅ Accept Best Version<br/>Force Finalize]
     
     %% Validation Details
     C --> C1[📚 Literature Check]
-    C --> C2[🧠 Solution Analysis]  
+    C --> C2[🌐 Web Search Results]  
     C --> C3[🎯 Gap Assessment]
     
     %% Problem Generation Details
@@ -129,11 +143,17 @@ def generate_research_planning_mermaid():
     B --> B2[🔍 Challenge Identification]
     B --> B3[❓ Question Formulation]
     
+    %% Critique Details
+    K --> K1[📊 Novelty Assessment]
+    K --> K2[🔧 Feasibility Check]
+    K --> K3[📝 Methodology Review]
+    K --> K4[⏰ Timeline Validation]
+    
     %% Research Plan Details
-    H --> H1[📋 Problem Prioritization]
-    H --> H2[⏰ Timeline Creation]
-    H --> H3[💰 Resource Planning]
-    H --> H4[📊 Success Metrics]
+    J --> J1[📋 Problem Analysis]
+    J --> J2[⏰ Phase Planning]
+    J --> J3[💰 Resource Estimation]
+    J --> J4[📊 Success Metrics]
     
     %% Styling
     classDef start fill:#FFE4B5,stroke:#FF8C00,stroke-width:2px
@@ -141,6 +161,9 @@ def generate_research_planning_mermaid():
     classDef validation fill:#96CEB4,stroke:#28A745,stroke-width:2px
     classDef decision fill:#FECA57,stroke:#F39C12,stroke-width:2px
     classDef collection fill:#DDA0DD,stroke:#8A2BE2,stroke-width:2px
+    classDef userAction fill:#FF6B6B,stroke:#DC143C,stroke-width:2px
+    classDef critique fill:#9370DB,stroke:#663399,stroke-width:2px
+    classDef refinement fill:#FFA07A,stroke:#FF4500,stroke-width:2px
     classDef output fill:#90EE90,stroke:#32CD32,stroke-width:3px
     classDef subprocess fill:#F0F8FF,stroke:#4682B4,stroke-width:1px
     classDef loop fill:#FFB6C1,stroke:#DC143C,stroke-width:2px
@@ -148,11 +171,14 @@ def generate_research_planning_mermaid():
     class A start
     class B,F process
     class C validation
-    class D,G,I decision
+    class D,G,I,L,O decision
     class E collection
-    class H,J output
-    class B1,B2,B3,C1,C2,C3,H1,H2,H3,H4 subprocess
-    class F loop"""
+    class H userAction
+    class J,M,P output
+    class K critique
+    class N refinement
+    class B1,B2,B3,C1,C2,C3,J1,J2,J3,J4,K1,K2,K3,K4 subprocess
+    class F,N loop"""
     
     return mermaid_code
 
@@ -351,6 +377,94 @@ def generate_conditional_logic_mermaid():
     
     return mermaid_code
 
+def generate_critique_refinement_mermaid():
+    """Generate detailed critique and refinement workflow diagram."""
+    mermaid_code = """graph TD
+    A[📋 Research Plan Generated] --> B[🔍 Critique Agent<br/>Quality Assessment]
+    
+    B --> C[📊 Multi-Dimensional Analysis<br/>6 Evaluation Criteria]
+    
+    C --> D[🎯 Novelty & Impact<br/>25% Weight]
+    C --> E[🔧 Technical Feasibility<br/>20% Weight]
+    C --> F[📝 Methodology Soundness<br/>20% Weight]
+    C --> G[📚 Literature Integration<br/>15% Weight]
+    C --> H[⚙️ Practical Implementation<br/>10% Weight]
+    C --> I[🎓 Academic Rigor<br/>10% Weight]
+    
+    D --> J[📊 Scoring & Analysis<br/>1-10 Scale Each]
+    E --> J
+    F --> J
+    G --> J
+    H --> J
+    I --> J
+    
+    J --> K{🔍 Issue Analysis<br/>Major Issues Found?}
+    
+    K -->|🎉 No Major Issues<br/>Clean Plan| L[✅ Finalize Plan<br/>Quality Approved]
+    K -->|⚠️ 1-2 Major Issues<br/>Refinable| M[🔧 Refinement Mode<br/>Add Critique Context]
+    K -->|❌ 3+ Major Issues<br/>Fundamental Problems| N{🔄 Refinement Count<br/>< 3 Attempts?}
+    
+    M --> O[📝 Enhanced Prompt<br/>Previous Plan + Issues]
+    O --> P[🔄 Regenerate Plan<br/>Same Node, New Context]
+    P --> B
+    
+    N -->|✅ Try Again| Q[👤 Select Different Problem<br/>Back to Selection]
+    N -->|❌ Max Attempts| R[✅ Accept Best Version<br/>Force Finalize]
+    
+    %% Refinement Context Details
+    O --> O1[📋 Previous Plan Content]
+    O --> O2[⚠️ Specific Issues List]
+    O --> O3[💡 Improvement Suggestions]
+    O --> O4[✅ Strengths to Preserve]
+    
+    %% Evaluation Criteria Details
+    D --> D1[🔬 Research Significance]
+    D --> D2[🆕 Novel Contributions]
+    
+    E --> E1[💰 Resource Feasibility]
+    E --> E2[⏰ Timeline Realism]
+    
+    F --> F1[🧪 Experimental Design]
+    F --> F2[📊 Success Metrics]
+    
+    G --> G1[🌐 Web Search Usage]
+    G --> G2[📄 Citation Quality]
+    
+    H --> H1[🗂️ Phase Structure]
+    H --> H2[🎯 Clear Milestones]
+    
+    I --> I1[📑 Publication Strategy]
+    I --> I2[🏆 Impact Assessment]
+    
+    %% Iteration Tracking
+    M -.->|Track Refinements| S[📈 Refinement Counter<br/>Max: 3 Iterations]
+    B -.->|Score History| T[📊 Score Improvement<br/>Must Improve ≥0.3]
+    
+    %% Final Outputs
+    L --> U[📄 Final Plan<br/>With Quality Score]
+    R --> V[📄 Best Attempt<br/>With Refinement History]
+    
+    %% Styling
+    classDef generation fill:#4ECDC4,stroke:#17A2B8,stroke-width:2px
+    classDef critique fill:#9370DB,stroke:#663399,stroke-width:2px
+    classDef evaluation fill:#DDA0DD,stroke:#8A2BE2,stroke-width:2px
+    classDef decision fill:#FECA57,stroke:#F39C12,stroke-width:2px
+    classDef refinement fill:#FFA07A,stroke:#FF4500,stroke-width:2px
+    classDef success fill:#90EE90,stroke:#32CD32,stroke-width:2px
+    classDef context fill:#F0F8FF,stroke:#4682B4,stroke-width:1px
+    classDef tracking fill:#FFE4E1,stroke:#CD5C5C,stroke-width:1px
+    
+    class A,P generation
+    class B,C,J critique
+    class D,E,F,G,H,I evaluation
+    class K,N decision
+    class M,O refinement
+    class L,R,U,V success
+    class D1,D2,E1,E2,F1,F2,G1,G2,H1,H2,I1,I2,O1,O2,O3,O4 context
+    class S,T tracking"""
+    
+    return mermaid_code
+
 def save_mermaid_files():
     """Generate and save all mermaid diagram files."""
     create_diagrams_directory()
@@ -359,6 +473,7 @@ def save_mermaid_files():
         'router_workflow.mmd': generate_router_mermaid(),
         'model_suggestion_workflow.mmd': generate_model_suggestion_mermaid(),
         'research_planning_workflow.mmd': generate_research_planning_mermaid(),
+        'critique_refinement_workflow.mmd': generate_critique_refinement_mermaid(),
         'complete_system_overview.mmd': generate_complete_system_mermaid(),
         'state_flow_diagram.mmd': generate_state_flow_mermaid(),
         'conditional_logic_diagram.mmd': generate_conditional_logic_mermaid()
@@ -373,7 +488,7 @@ def save_mermaid_files():
             f.write(content)
         print(f"✅ Generated: {filepath}")
     
-    print("\n📊 Generated 6 mermaid diagram files!")
+    print("\n📊 Generated 7 mermaid diagram files!")
     return list(diagrams.keys())
 
 def generate_html_viewer():
@@ -494,12 +609,22 @@ def generate_html_viewer():
         </div>
 
         <div id="research" class="diagram">
-            <h2>🧪 Research Planning Workflow (Iterative)</h2>
+            <h2>🧪 Research Planning Workflow (Enhanced)</h2>
             <div class="description">
-                <strong>Purpose:</strong> Shows the iterative problem generation and validation loop for research planning.
+                <strong>Purpose:</strong> Shows the complete iterative research planning with critique and refinement loops.
             </div>
             <div class="mermaid">
 """ + generate_research_planning_mermaid() + """
+            </div>
+        </div>
+
+        <div id="critique" class="diagram">
+            <h2>🔍 Critique & Refinement Workflow</h2>
+            <div class="description">
+                <strong>Purpose:</strong> Detailed view of the AI critique agent and iterative refinement process.
+            </div>
+            <div class="mermaid">
+""" + generate_critique_refinement_mermaid() + """
             </div>
         </div>
 
