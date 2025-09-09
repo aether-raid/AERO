@@ -535,8 +535,8 @@ Paper content:
                         'section_title': section.split('\n', 1)[0][:80],
                         'text': chunk,
                         'paper_id': paper.get('id', ''),
-                    'paper_title': paper.get('title', ''),
-                })
+                        'paper_title': paper.get('title', ''),
+                    })
 
         # Embed all chunks
         embeddings = [embed_chunk(chunk) for chunk in all_chunks]
