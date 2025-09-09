@@ -1120,7 +1120,7 @@ class MLResearcherLangGraph:
                 try:
                     # Use the original prompt as the search query
                     search_query_for_chunks = original_prompt
-                    top_n_chunks = 10  # Get top 10 most relevant chunks
+                    top_n_chunks = 15  # Get top 10 most relevant chunks
                     
                     print(f"🔍 Debug: Search query: '{search_query_for_chunks[:100]}...'")
                     print(f"🔍 Debug: FAISS DB path: {faiss_db_path}")
@@ -1154,7 +1154,7 @@ class MLResearcherLangGraph:
                         "chunks_found": len(relevant_chunks),
                         "top_chunks": relevant_chunks
                     }
-                    '''
+                    
                     # Print preview of top chunks
                     if relevant_chunks:
                         print("\n📄 Top 3 Most Relevant Chunks:")
@@ -1166,7 +1166,7 @@ class MLResearcherLangGraph:
                             chunk_text = chunk.get('text', '')
                             
                             print(f"\n🔸 Chunk #{i} (Distance: {distance:.3f})")
-                            print(f"Paper: {paper_title[:60]}...")
+                            print(f"Paper: {paper_title}...")
                             print(f"Section: {section_title}")
                             print(f"Text: {chunk_text}...")
                             print("-" * 40)
@@ -1174,7 +1174,7 @@ class MLResearcherLangGraph:
                         print("⚠️ No relevant chunks found - this may indicate:")
                         print("  - No papers were successfully chunked and embedded")
                         print("  - FAISS database is empty")
-                        print("  - Embedding model issues")'''
+                        print("  - Embedding model issues")
                     
                 except Exception as e:
                     print(f"❌ Semantic search failed: {type(e).__name__}: {str(e)}")
@@ -1651,15 +1651,13 @@ Provide your assessment in a conversational, easy-to-understand format.
                 8) Clarity — is the response well-structured and easy to understand?
 
                 EVIDENCE RULES (REALISTIC APPROACH)
-                - Papers should be referenced by title when directly relevant to claims
+                - Papers must be referenced by title when directly relevant to claims
                 - General ML knowledge is acceptable and should be marked as "(general ML knowledge)"
                 - Only flag "factual_errors" for claims that directly contradict provided evidence
-                - Do NOT penalize for lack of external citations - focus on logical reasoning
+            
 
                 DECISION RULES
                 - Set "needs_revision": true if any “factual_errors” exist, or if major coverage gaps exist.
-             
-
                 - If “factual_errors” exist, set "recommendation": "major_revision".
                 - Set "overall_quality" to one of: "excellent","good","fair","poor".
                 - If "no-evidence" claims that obviously need support appear more than 3 times: "revise"
@@ -1854,7 +1852,7 @@ Provide your assessment in a conversational, easy-to-understand format.
         return len(keywords1 & keywords2) >= 2
 
     def _revise_suggestions_node(self, state: ModelSuggestionState) -> ModelSuggestionState:
-        """Node for revising model suggestions based on critique feedback."""
+        """Node for revising model suggestions based on critique feedback.""" 
         print(f"\n🔄 Step 6: Revising model suggestions based on critique...")
         state["current_step"] = "revise_suggestions"
         

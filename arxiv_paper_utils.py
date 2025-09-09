@@ -408,6 +408,7 @@ Paper content:
             import re
             # First, try to split by page markers (--- PAGE X ---)
             page_pattern = r'--- PAGE \d+ ---'
+        
             pages = re.split(page_pattern, text)
             
             # If we found page markers, use those as sections
@@ -495,7 +496,19 @@ Paper content:
             return np.random.randn(embedding_dim).astype('float32')
 
         # Split into sections
-        sections = split_into_sections(content)
+        body, refs = self.split_body_and_references(content)
+        sections = split_into_sections(body)
+
+        #print("==="*50)
+        #print("Body and References split:")
+       # print("==="*50)
+      #  print("Body:")
+     #   print(body)
+       # print("==="*20)
+        #print("References:")
+        #print(refs)
+
+        #print(content)
         all_chunks = []
         chunk_metadata = []
         for sec_idx, section in enumerate(sections):
@@ -547,3 +560,29 @@ Paper content:
             meta['faiss_index'] = index.ntotal - len(chunk_metadata) + i
 
         return chunk_metadata
+    
+    def split_body_and_references(self, text: str):
+        lines = text.splitlines()
+        n = len(lines)
+        
+        # Step 1: find candidate "References" heading near the end
+        candidates = [
+            i for i, line in enumerate(lines)
+            if re.match(r'^\s*(\d+\s+)?(references|bibliography)\b', line.strip(), re.I)
+        ]
+
+        if not candidates:
+            return text, ""
+        
+        # Pick the LAST occurrence, since refs are usually last
+        start_idx = candidates[-1]
+        
+        # Step 2: check if it's in last ~20% of the doc (to avoid false hits)
+        if start_idx < 0.8 * n:
+            return text, ""  # probably inline mention, not the section
+        
+        # Step 3: separate body vs refs
+        body = "\n".join(lines[:start_idx]).strip()
+        refs_block = "\n".join(lines[start_idx:]).strip()
+        
+        return body, refs_block
