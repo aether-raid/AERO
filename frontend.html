@@ -1,0 +1,1000 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ML Researcher LangGraph - Frontend</title>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://unpkg.com/axios/dist/axios.min.js"></script>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        .gradient-bg {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        .card-shadow {
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+        }
+        .workflow-badge {
+            @apply inline-flex items-center px-3 py-1 rounded-full text-sm font-medium;
+        }
+        .model-suggestion { @apply bg-green-100 text-green-800; }
+        .research-planning { @apply bg-purple-100 text-purple-800; }
+        .direct-llm { @apply bg-blue-100 text-blue-800; }
+        .unknown { @apply bg-gray-100 text-gray-800; }
+        
+        .result-animation {
+            animation: slideInUp 0.5s ease-out;
+        }
+        
+        @keyframes slideInUp {
+            from {
+                transform: translateY(30px);
+                opacity: 0;
+            }
+            to {
+                transform: translateY(0);
+                opacity: 1;
+            }
+        }
+        
+        .spinner {
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+
+        .code-block {
+            background: #1f2937;
+            color: #f9fafb;
+            border-radius: 0.5rem;
+            padding: 1rem;
+            font-family: 'Courier New', monospace;
+            font-size: 0.875rem;
+            overflow-x: auto;
+        }
+
+        .status-indicator {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 0.5rem;
+        }
+
+        .status-online { background-color: #10b981; }
+        .status-offline { background-color: #ef4444; }
+        .status-connecting { background-color: #f59e0b; animation: pulse 2s infinite; }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .terminal-output {
+            background: #000;
+            color: #00ff00;
+            font-family: 'Courier New', monospace;
+            padding: 1rem;
+            border-radius: 0.5rem;
+            max-height: 400px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+        }
+
+        .workflow-diagram {
+            text-align: center;
+            margin: 2rem 0;
+        }
+
+        .workflow-step {
+            display: inline-block;
+            background: white;
+            border: 2px solid #e5e7eb;
+            border-radius: 0.5rem;
+            padding: 1rem;
+            margin: 0.5rem;
+            min-width: 120px;
+        }
+
+        .workflow-arrow {
+            display: inline-block;
+            margin: 0 1rem;
+            font-size: 1.5rem;
+            color: #6b7280;
+        }
+    </style>
+</head>
+<body class="bg-gray-50">
+    <div id="app">
+        <!-- Header -->
+        <header class="gradient-bg text-white shadow-lg">
+            <div class="container mx-auto px-4 py-6">
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center space-x-3">
+                        <i class="fas fa-microscope text-3xl"></i>
+                        <div>
+                            <h1 class="text-3xl font-bold">ML Researcher LangGraph</h1>
+                            <p class="text-purple-200">AI-powered research assistant with multi-workflow orchestration</p>
+                        </div>
+                    </div>
+                    <div class="flex items-center space-x-4">
+                        <div class="flex items-center">
+                            <span :class="'status-indicator ' + connectionStatus"></span>
+                            <span class="text-sm">{{ connectionMessage }}</span>
+                        </div>
+                        <button 
+                            @click="showSettings = !showSettings"
+                            class="p-2 rounded-lg bg-white bg-opacity-20 hover:bg-opacity-30"
+                        >
+                            <i class="fas fa-cog"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <!-- Settings Panel -->
+        <div v-if="showSettings" class="bg-white border-b shadow-sm">
+            <div class="container mx-auto px-4 py-4">
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Backend URL</label>
+                        <input 
+                            v-model="backendUrl" 
+                            type="url" 
+                            placeholder="http://localhost:8000"
+                            class="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-purple-500 focus:border-purple-500"
+                        >
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Mode</label>
+                        <select v-model="operationMode" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-purple-500 focus:border-purple-500">
+                            <option value="api">API Mode</option>
+                            <option value="demo">Demo Mode</option>
+                        </select>
+                    </div>
+                    <div class="flex items-end">
+                        <button 
+                            @click="testConnection"
+                            class="px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700"
+                        >
+                            <i class="fas fa-plug mr-1"></i>
+                            Test Connection
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Workflow Overview -->
+        <section class="container mx-auto px-4 py-8">
+            <div class="card-shadow bg-white rounded-lg p-6 mb-8">
+                <h2 class="text-2xl font-bold text-gray-800 mb-4">
+                    <i class="fas fa-sitemap mr-2"></i>
+                    System Architecture Overview
+                </h2>
+                
+                <div class="workflow-diagram">
+                    <div class="workflow-step border-purple-300 bg-purple-50">
+                        <i class="fas fa-user text-purple-600 text-xl mb-2"></i>
+                        <div class="font-medium">User Input</div>
+                    </div>
+                    <span class="workflow-arrow">→</span>
+                    <div class="workflow-step border-blue-300 bg-blue-50">
+                        <i class="fas fa-route text-blue-600 text-xl mb-2"></i>
+                        <div class="font-medium">Router</div>
+                    </div>
+                    <span class="workflow-arrow">→</span>
+                    <div class="workflow-step border-green-300 bg-green-50">
+                        <i class="fas fa-robot text-green-600 text-xl mb-2"></i>
+                        <div class="font-medium">Model Suggestion</div>
+                    </div>
+                </div>
+
+                <div class="text-center">
+                    <span class="workflow-arrow">↓</span>
+                </div>
+
+                <div class="workflow-diagram">
+                    <div class="workflow-step border-purple-300 bg-purple-50">
+                        <i class="fas fa-clipboard-list text-purple-600 text-xl mb-2"></i>
+                        <div class="font-medium">Research Planning</div>
+                    </div>
+                    <span class="workflow-arrow">→</span>
+                    <div class="workflow-step border-yellow-300 bg-yellow-50">
+                        <i class="fas fa-star text-yellow-600 text-xl mb-2"></i>
+                        <div class="font-medium">AI Critique</div>
+                    </div>
+                    <span class="workflow-arrow">→</span>
+                    <div class="workflow-step border-green-300 bg-green-50">
+                        <i class="fas fa-check text-green-600 text-xl mb-2"></i>
+                        <div class="font-medium">Quality Output</div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Main Content -->
+        <main class="container mx-auto px-4">
+            <!-- Input Section -->
+            <div class="card-shadow bg-white rounded-lg p-6 mb-8">
+                <h2 class="text-2xl font-bold text-gray-800 mb-4">
+                    <i class="fas fa-search mr-2"></i>
+                    Research Task Analysis
+                </h2>
+                
+                <!-- Example Prompts -->
+                <div class="mb-4">
+                    <h3 class="text-lg font-medium text-gray-700 mb-2">Example Prompts:</h3>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+                        <button 
+                            v-for="example in examplePrompts"
+                            :key="example.text"
+                            @click="prompt = example.text"
+                            class="text-left p-3 bg-gray-50 rounded-lg hover:bg-gray-100 border border-gray-200"
+                        >
+                            <div class="flex items-center mb-1">
+                                <i :class="example.icon + ' mr-2 text-' + example.color + '-600'"></i>
+                                <span class="font-medium text-gray-800">{{ example.title }}</span>
+                            </div>
+                            <p class="text-sm text-gray-600">{{ example.text.substring(0, 100) }}...</p>
+                        </button>
+                    </div>
+                </div>
+                
+                <div class="space-y-4">
+                    <textarea
+                        v-model="prompt"
+                        @keydown.ctrl.enter="analyzeTask"
+                        placeholder="Enter your machine learning research task or question here..."
+                        class="w-full h-32 p-4 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent resize-none"
+                        :disabled="isAnalyzing"
+                    ></textarea>
+                    
+                    <div class="flex items-center justify-between">
+                        <div class="flex items-center space-x-4">
+                            <label class="flex items-center">
+                                <input type="checkbox" v-model="streamMode" class="mr-2">
+                                <span class="text-sm text-gray-600">Stream results</span>
+                            </label>
+                            <label class="flex items-center">
+                                <input type="checkbox" v-model="verboseMode" class="mr-2">
+                                <span class="text-sm text-gray-600">Verbose output</span>
+                            </label>
+                        </div>
+                        
+                        <div class="flex space-x-2">
+                            <button
+                                @click="clearAll"
+                                class="px-4 py-2 text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50"
+                            >
+                                <i class="fas fa-trash mr-1"></i>
+                                Clear
+                            </button>
+                            <button
+                                @click="analyzeTask"
+                                :disabled="!prompt.trim() || isAnalyzing"
+                                class="px-6 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
+                            >
+                                <i class="fas fa-spinner spinner" v-if="isAnalyzing"></i>
+                                <i class="fas fa-play" v-else></i>
+                                <span>{{ isAnalyzing ? 'Analyzing...' : 'Analyze Task' }}</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Progress/Status Section -->
+            <div v-if="isAnalyzing || analysisLog.length > 0" class="card-shadow bg-white rounded-lg p-6 mb-8">
+                <h3 class="text-lg font-bold text-gray-800 mb-4">
+                    <i class="fas fa-terminal mr-2"></i>
+                    Analysis Progress
+                </h3>
+                <div class="terminal-output">
+                    <div v-for="(log, index) in analysisLog" :key="index">
+                        {{ log }}
+                    </div>
+                    <span v-if="isAnalyzing" class="animate-pulse">█</span>
+                </div>
+            </div>
+
+            <!-- Results Section -->
+            <div v-if="analysisResult" class="result-animation card-shadow bg-white rounded-lg p-6 mb-8">
+                <div class="flex items-center justify-between mb-6">
+                    <h2 class="text-2xl font-bold text-gray-800">
+                        <i class="fas fa-chart-bar mr-2"></i>
+                        Analysis Results
+                    </h2>
+                    <div class="flex items-center space-x-2">
+                        <span :class="'workflow-badge ' + getWorkflowClass(analysisResult.workflow_type)">
+                            <i :class="getWorkflowIcon(analysisResult.workflow_type) + ' mr-1'"></i>
+                            {{ analysisResult.workflow_type.replace('_', ' ').toUpperCase() }}
+                        </span>
+                        <span class="text-sm text-gray-500" v-if="analysisResult.processing_time">
+                            {{ formatProcessingTime(analysisResult.processing_time) }}
+                        </span>
+                    </div>
+                </div>
+
+                <!-- Router Decision -->
+                <div class="bg-gray-50 rounded-lg p-4 mb-6" v-if="analysisResult.router_decision">
+                    <h3 class="font-semibold text-gray-800 mb-3">
+                        <i class="fas fa-route mr-2"></i>
+                        Router Decision
+                    </h3>
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div v-if="analysisResult.router_decision.confidence">
+                            <span class="text-sm text-gray-600">Confidence:</span>
+                            <div class="font-mono text-lg">{{ (analysisResult.router_decision.confidence * 100).toFixed(1) }}%</div>
+                        </div>
+                        <div class="md:col-span-2" v-if="analysisResult.router_decision.reasoning">
+                            <span class="text-sm text-gray-600">Reasoning:</span>
+                            <div class="text-gray-800">{{ analysisResult.router_decision.reasoning }}</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Results Content Tabs -->
+                <div class="mb-6">
+                    <div class="flex border-b border-gray-200">
+                        <button
+                            v-for="tab in availableTabs"
+                            :key="tab.key"
+                            @click="activeTab = tab.key"
+                            :class="[
+                                'px-4 py-2 font-medium text-sm border-b-2 transition-colors',
+                                activeTab === tab.key 
+                                    ? 'border-purple-500 text-purple-600' 
+                                    : 'border-transparent text-gray-500 hover:text-gray-700'
+                            ]"
+                        >
+                            <i :class="tab.icon + ' mr-2'"></i>
+                            {{ tab.label }}
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Tab Content -->
+                <div class="tab-content">
+                    <!-- Model Suggestions Tab -->
+                    <div v-if="activeTab === 'model_suggestions' && analysisResult.results.model_suggestions" class="space-y-4">
+                        <div class="bg-green-50 rounded-lg p-4">
+                            <pre class="whitespace-pre-wrap text-sm text-gray-800">{{ formatContent(analysisResult.results.model_suggestions) }}</pre>
+                        </div>
+                    </div>
+
+                    <!-- Research Plan Tab -->
+                    <div v-if="activeTab === 'research_plan' && analysisResult.results.research_plan" class="space-y-4">
+                        <div class="bg-purple-50 rounded-lg p-4">
+                            <pre class="whitespace-pre-wrap text-sm text-gray-800">{{ formatContent(analysisResult.results.research_plan) }}</pre>
+                        </div>
+                    </div>
+
+                    <!-- Quality Assessment Tab -->
+                    <div v-if="activeTab === 'quality' && analysisResult.results.critique_results" class="space-y-4">
+                        <div class="bg-blue-50 rounded-lg p-4">
+                            <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4" v-if="analysisResult.results.critique_results.total_score">
+                                <div class="text-center">
+                                    <div class="text-3xl font-bold text-blue-600">
+                                        {{ (analysisResult.results.critique_results.total_score || 0).toFixed(1) }}
+                                    </div>
+                                    <div class="text-sm text-gray-600">Overall Score</div>
+                                </div>
+                            </div>
+                            <pre class="whitespace-pre-wrap text-sm text-gray-800">{{ formatContent(analysisResult.results.critique_results) }}</pre>
+                        </div>
+                    </div>
+
+                    <!-- ArXiv Papers Tab -->
+                    <div v-if="activeTab === 'arxiv' && analysisResult.results.arxiv_results" class="space-y-4">
+                        <div class="bg-orange-50 rounded-lg p-4">
+                            <pre class="whitespace-pre-wrap text-sm text-gray-800">{{ formatContent(analysisResult.results.arxiv_results) }}</pre>
+                        </div>
+                    </div>
+
+                    <!-- Raw JSON Tab -->
+                    <div v-if="activeTab === 'raw'" class="space-y-4">
+                        <div class="code-block">
+                            <pre class="text-xs">{{ JSON.stringify(analysisResult.results, null, 2) }}</pre>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Export Options -->
+                <div class="mt-6 flex items-center space-x-2">
+                    <button
+                        @click="exportResults('json')"
+                        class="px-3 py-1 text-sm bg-gray-100 text-gray-700 rounded hover:bg-gray-200"
+                    >
+                        <i class="fas fa-download mr-1"></i>
+                        Export JSON
+                    </button>
+                    <button
+                        @click="exportResults('txt')"
+                        class="px-3 py-1 text-sm bg-gray-100 text-gray-700 rounded hover:bg-gray-200"
+                    >
+                        <i class="fas fa-file-text mr-1"></i>
+                        Export Text
+                    </button>
+                    <button
+                        @click="copyToClipboard"
+                        class="px-3 py-1 text-sm bg-gray-100 text-gray-700 rounded hover:bg-gray-200"
+                    >
+                        <i class="fas fa-copy mr-1"></i>
+                        Copy
+                    </button>
+                </div>
+            </div>
+
+            <!-- Analysis History -->
+            <div class="card-shadow bg-white rounded-lg p-6 mb-8">
+                <div class="flex items-center justify-between mb-4">
+                    <h2 class="text-2xl font-bold text-gray-800">
+                        <i class="fas fa-history mr-2"></i>
+                        Analysis History
+                    </h2>
+                    <div class="flex space-x-2">
+                        <button
+                            @click="clearHistory"
+                            class="px-3 py-1 text-red-600 border border-red-600 rounded hover:bg-red-50"
+                            v-if="history.length > 0"
+                        >
+                            <i class="fas fa-trash mr-1"></i>
+                            Clear
+                        </button>
+                        <button
+                            @click="loadHistory"
+                            class="px-4 py-2 text-purple-600 border border-purple-600 rounded-lg hover:bg-purple-50"
+                        >
+                            <i class="fas fa-refresh mr-1"></i>
+                            Refresh
+                        </button>
+                    </div>
+                </div>
+
+                <div v-if="history.length === 0" class="text-center text-gray-500 py-8">
+                    <i class="fas fa-inbox text-4xl mb-2"></i>
+                    <p>No analysis history yet. Start by analyzing a research task!</p>
+                </div>
+
+                <div v-else class="space-y-3">
+                    <div
+                        v-for="item in history.slice().reverse()"
+                        :key="item.id"
+                        class="border border-gray-200 rounded-lg p-4 hover:bg-gray-50 cursor-pointer transition-colors"
+                        @click="loadAnalysis(item)"
+                    >
+                        <div class="flex items-center justify-between">
+                            <div class="flex-1">
+                                <div class="font-medium text-gray-800 truncate">{{ item.prompt }}</div>
+                                <div class="flex items-center space-x-2 mt-1">
+                                    <span :class="'workflow-badge ' + getWorkflowClass(item.response?.workflow_type || 'unknown')">
+                                        {{ (item.response?.workflow_type || 'unknown').replace('_', ' ') }}
+                                    </span>
+                                    <span class="text-sm text-gray-500">
+                                        {{ formatTimestamp(item.timestamp) }}
+                                    </span>
+                                </div>
+                            </div>
+                            <i class="fas fa-chevron-right text-gray-400"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <!-- Footer -->
+        <footer class="bg-gray-800 text-white py-8 mt-12">
+            <div class="container mx-auto px-4 text-center">
+                <p>&copy; 2025 ML Researcher LangGraph. Powered by LangGraph and FastAPI.</p>
+                <div class="mt-2 space-x-4">
+                    <span class="text-sm text-gray-400">
+                        <i class="fas fa-code mr-1"></i>
+                        Built with Vue.js, FastAPI, and LangGraph
+                    </span>
+                </div>
+            </div>
+        </footer>
+    </div>
+
+    <script>
+        const { createApp } = Vue;
+
+        createApp({
+            data() {
+                return {
+                    // Connection settings
+                    backendUrl: 'http://localhost:8000',
+                    operationMode: 'api', // 'api' or 'demo'
+                    connectionStatus: 'status-offline',
+                    connectionMessage: 'Not connected',
+                    showSettings: false,
+
+                    // Input and analysis
+                    prompt: '',
+                    streamMode: false,
+                    verboseMode: false,
+                    isAnalyzing: false,
+                    analysisResult: null,
+                    analysisLog: [],
+                    
+                    // UI state
+                    activeTab: 'model_suggestions',
+                    history: [],
+                    
+                    // Example prompts
+                    examplePrompts: [
+                        {
+                            title: "Model Recommendation",
+                            text: "What's the best model for image classification with limited data and real-time constraints?",
+                            icon: "fas fa-robot",
+                            color: "green"
+                        },
+                        {
+                            title: "Research Planning",
+                            text: "Generate a comprehensive research plan for improving adversarial robustness in deep learning models",
+                            icon: "fas fa-clipboard-list",
+                            color: "purple"
+                        },
+                        {
+                            title: "Technical Question",
+                            text: "How can I optimize transformer models for mobile deployment while maintaining accuracy?",
+                            icon: "fas fa-mobile-alt",
+                            color: "blue"
+                        },
+                        {
+                            title: "State-of-the-Art",
+                            text: "What are the latest developments in federated learning for healthcare applications?",
+                            icon: "fas fa-search",
+                            color: "orange"
+                        }
+                    ]
+                }
+            },
+            computed: {
+                availableTabs() {
+                    if (!this.analysisResult || !this.analysisResult.results) return [];
+                    
+                    const tabs = [];
+                    const results = this.analysisResult.results;
+                    
+                    if (results.model_suggestions) {
+                        tabs.push({ key: 'model_suggestions', label: 'Model Suggestions', icon: 'fas fa-robot' });
+                    }
+                    if (results.research_plan) {
+                        tabs.push({ key: 'research_plan', label: 'Research Plan', icon: 'fas fa-clipboard-list' });
+                    }
+                    if (results.critique_results) {
+                        tabs.push({ key: 'quality', label: 'Quality Assessment', icon: 'fas fa-star' });
+                    }
+                    if (results.arxiv_results) {
+                        tabs.push({ key: 'arxiv', label: 'ArXiv Papers', icon: 'fas fa-book' });
+                    }
+                    tabs.push({ key: 'raw', label: 'Raw JSON', icon: 'fas fa-code' });
+                    
+                    return tabs;
+                }
+            },
+            async mounted() {
+                await this.testConnection();
+                this.loadLocalHistory();
+                
+                // Set default active tab
+                if (this.availableTabs.length > 0) {
+                    this.activeTab = this.availableTabs[0].key;
+                }
+            },
+            methods: {
+                async testConnection() {
+                    this.connectionStatus = 'status-connecting';
+                    this.connectionMessage = 'Testing connection...';
+                    
+                    try {
+                        const response = await axios.get(`${this.backendUrl}/health`, { timeout: 5000 });
+                        this.connectionStatus = 'status-online';
+                        this.connectionMessage = 'Connected to backend';
+                        this.operationMode = 'api';
+                    } catch (error) {
+                        console.warn('Backend not available, switching to demo mode:', error.message);
+                        this.connectionStatus = 'status-offline';
+                        this.connectionMessage = 'Running in demo mode';
+                        this.operationMode = 'demo';
+                    }
+                },
+
+                async analyzeTask() {
+                    if (!this.prompt.trim() || this.isAnalyzing) return;
+
+                    this.isAnalyzing = true;
+                    this.analysisResult = null;
+                    this.analysisLog = [];
+                    this.addLog('🔍 Starting analysis...');
+
+                    try {
+                        if (this.operationMode === 'api') {
+                            await this.analyzeWithAPI();
+                        } else {
+                            await this.analyzeWithDemo();
+                        }
+                    } catch (error) {
+                        console.error('Analysis failed:', error);
+                        this.addLog(`❌ Error: ${error.message}`);
+                        alert('Analysis failed: ' + error.message);
+                    } finally {
+                        this.isAnalyzing = false;
+                    }
+                },
+
+                async analyzeWithAPI() {
+                    this.addLog('🚦 Routing request to appropriate workflow...');
+                    
+                    const response = await axios.post(`${this.backendUrl}/analyze`, {
+                        prompt: this.prompt,
+                        stream: this.streamMode
+                    });
+
+                    this.addLog('✅ Analysis completed successfully');
+                    this.analysisResult = response.data;
+                    
+                    // Set active tab to first available
+                    if (this.availableTabs.length > 0) {
+                        this.activeTab = this.availableTabs[0].key;
+                    }
+                    
+                    // Save to local history
+                    this.saveToLocalHistory();
+                },
+
+                async analyzeWithDemo() {
+                    // Simulate different workflow routing based on prompt content
+                    this.addLog('🚦 [DEMO] Analyzing prompt for workflow routing...');
+                    await this.delay(1000);
+
+                    let workflowType = 'direct_llm';
+                    let routerConfidence = 0.95;
+                    let routerReasoning = '';
+
+                    if (this.prompt.toLowerCase().includes('model') || this.prompt.toLowerCase().includes('architecture')) {
+                        workflowType = 'model_suggestion';
+                        routerReasoning = 'Detected model/architecture recommendation request';
+                        this.addLog('🤖 [DEMO] Routing to Model Suggestion workflow...');
+                    } else if (this.prompt.toLowerCase().includes('research') || this.prompt.toLowerCase().includes('plan')) {
+                        workflowType = 'research_planning';
+                        routerReasoning = 'Detected research planning request';
+                        this.addLog('📋 [DEMO] Routing to Research Planning workflow...');
+                    } else {
+                        routerReasoning = 'General query, using direct LLM response';
+                        this.addLog('💬 [DEMO] Routing to Direct LLM workflow...');
+                    }
+
+                    await this.delay(1500);
+
+                    // Generate demo results based on workflow type
+                    let results = {};
+                    
+                    if (workflowType === 'model_suggestion') {
+                        this.addLog('🔍 [DEMO] Searching arXiv papers...');
+                        await this.delay(1000);
+                        this.addLog('🤖 [DEMO] Generating model recommendations...');
+                        await this.delay(1500);
+                        this.addLog('⭐ [DEMO] Applying AI critique assessment...');
+                        await this.delay(1000);
+                        
+                        results = {
+                            model_suggestions: `# Model Recommendations (Demo Mode)
+
+Based on your query: "${this.prompt}"
+
+## Recommended Models:
+
+### 1. EfficientNet-B0 (Primary Recommendation)
+- **Use Case**: Optimal for limited data scenarios with real-time constraints
+- **Accuracy**: ~92-94% on standard benchmarks
+- **Parameters**: 5.3M (lightweight)
+- **Implementation**: Transfer learning from ImageNet pretrained weights
+
+### 2. MobileNetV3-Small (Mobile-Optimized)
+- **Use Case**: Extreme resource constraints (mobile/edge devices)
+- **Accuracy**: ~89-91% with proper training
+- **Parameters**: 2.9M (very lightweight)
+- **Implementation**: Quantization-aware training recommended
+
+### 3. Vision Transformer (ViT-Small)
+- **Use Case**: If you have some unlabeled data for self-supervision
+- **Accuracy**: ~90-93% with self-supervised pretraining
+- **Parameters**: 22M (medium size)
+- **Implementation**: SimCLR or DINO for pretraining
+
+## Implementation Strategy:
+1. Start with EfficientNet-B0 for baseline
+2. Apply data augmentation (AutoAugment, Mixup)
+3. Use progressive resizing during training
+4. Consider knowledge distillation if deployment constraints are critical
+
+*Note: This is a demonstration. For real analysis, use API mode with backend running.*`,
+                            arxiv_results: {
+                                papers_found: 15,
+                                relevant_papers: 8,
+                                search_query: "image classification limited data efficient models"
+                            },
+                            critique_results: {
+                                total_score: 8.7,
+                                relevance: 9.2,
+                                technical_accuracy: 8.8,
+                                evidence_utilization: 8.5,
+                                completeness: 8.3,
+                                summary: "High-quality recommendations with strong evidence base and practical implementation guidance."
+                            }
+                        };
+                    } else if (workflowType === 'research_planning') {
+                        this.addLog('🔍 [DEMO] Generating research problems...');
+                        await this.delay(1000);
+                        this.addLog('🌐 [DEMO] Validating with web search...');
+                        await this.delay(1500);
+                        this.addLog('📋 [DEMO] Creating comprehensive research plan...');
+                        await this.delay(1500);
+                        this.addLog('⭐ [DEMO] Applying AI critique assessment...');
+                        await this.delay(1000);
+                        
+                        results = {
+                            research_plan: `# Research Plan: ${this.prompt} (Demo Mode)
+
+## Executive Summary
+This research plan addresses the critical challenge of ${this.prompt.toLowerCase()}. The field shows active development with several open problems remaining.
+
+## Phase 1: Literature Review and Foundation (Months 1-2)
+- Systematic review of current approaches
+- Analysis of existing limitations
+- Identification of research gaps
+
+## Phase 2: Problem Formulation (Months 3-4)
+- Define specific research objectives
+- Establish evaluation metrics
+- Design experimental framework
+
+## Phase 3: Method Development (Months 5-8)
+- Develop novel approach
+- Implement baseline comparisons
+- Conduct initial experiments
+
+## Phase 4: Evaluation and Analysis (Months 9-10)
+- Comprehensive evaluation
+- Statistical analysis of results
+- Comparison with state-of-the-art
+
+## Phase 5: Dissemination (Months 11-12)
+- Paper writing and submission
+- Conference presentation
+- Open-source implementation
+
+## Expected Outcomes
+- Novel methodology for the identified problem
+- Empirical validation and benchmarks
+- Open-source tools for the research community
+
+*Note: This is a demonstration. For real analysis, use API mode with backend running.*`,
+                            critique_results: {
+                                total_score: 8.4,
+                                novelty: 8.5,
+                                feasibility: 8.8,
+                                methodology: 8.2,
+                                literature_integration: 8.0,
+                                implementation: 8.6,
+                                rigor: 8.3,
+                                summary: "Well-structured research plan with clear phases and realistic timeline."
+                            }
+                        };
+                    } else {
+                        results = {
+                            llm_response: `This is a demo response for: "${this.prompt}"
+
+In a real implementation, this would be processed by the direct LLM workflow to provide a comprehensive answer to your question.
+
+To get actual AI-powered analysis, please:
+1. Start the backend server: python app.py
+2. Ensure the backend URL is correct in settings
+3. Test the connection and switch to API mode
+
+*Note: This is a demonstration. For real analysis, use API mode with backend running.*`
+                        };
+                    }
+
+                    this.addLog('✅ [DEMO] Analysis completed successfully');
+                    
+                    this.analysisResult = {
+                        workflow_type: workflowType,
+                        router_decision: {
+                            confidence: routerConfidence,
+                            reasoning: routerReasoning
+                        },
+                        results: results,
+                        processing_time: 3.2,
+                        timestamp: new Date().toISOString()
+                    };
+                    
+                    // Set active tab to first available
+                    if (this.availableTabs.length > 0) {
+                        this.activeTab = this.availableTabs[0].key;
+                    }
+                    
+                    // Save to local history
+                    this.saveToLocalHistory();
+                },
+
+                delay(ms) {
+                    return new Promise(resolve => setTimeout(resolve, ms));
+                },
+
+                addLog(message) {
+                    this.analysisLog.push(`[${new Date().toLocaleTimeString()}] ${message}`);
+                    // Auto-scroll to bottom
+                    this.$nextTick(() => {
+                        const logContainer = document.querySelector('.terminal-output');
+                        if (logContainer) {
+                            logContainer.scrollTop = logContainer.scrollHeight;
+                        }
+                    });
+                },
+
+                clearAll() {
+                    this.prompt = '';
+                    this.analysisResult = null;
+                    this.analysisLog = [];
+                },
+
+                saveToLocalHistory() {
+                    const historyItem = {
+                        id: Date.now(),
+                        prompt: this.prompt,
+                        response: this.analysisResult,
+                        timestamp: new Date().toISOString()
+                    };
+                    
+                    this.history.unshift(historyItem);
+                    if (this.history.length > 50) {
+                        this.history = this.history.slice(0, 50);
+                    }
+                    
+                    localStorage.setItem('mlresearcher_history', JSON.stringify(this.history));
+                },
+
+                loadLocalHistory() {
+                    try {
+                        const saved = localStorage.getItem('mlresearcher_history');
+                        if (saved) {
+                            this.history = JSON.parse(saved);
+                        }
+                    } catch (error) {
+                        console.warn('Failed to load local history:', error);
+                        this.history = [];
+                    }
+                },
+
+                clearHistory() {
+                    this.history = [];
+                    localStorage.removeItem('mlresearcher_history');
+                },
+
+                async loadHistory() {
+                    if (this.operationMode === 'api') {
+                        try {
+                            const response = await axios.get(`${this.backendUrl}/history`);
+                            this.history = response.data.history;
+                        } catch (error) {
+                            console.warn('Failed to load server history, using local:', error);
+                            this.loadLocalHistory();
+                        }
+                    } else {
+                        this.loadLocalHistory();
+                    }
+                },
+
+                loadAnalysis(item) {
+                    this.analysisResult = item.response;
+                    this.prompt = item.prompt;
+                    
+                    // Set active tab to first available
+                    if (this.availableTabs.length > 0) {
+                        this.activeTab = this.availableTabs[0].key;
+                    }
+                    
+                    // Scroll to results
+                    this.$nextTick(() => {
+                        document.querySelector('.result-animation')?.scrollIntoView({ behavior: 'smooth' });
+                    });
+                },
+
+                getWorkflowClass(workflowType) {
+                    const classes = {
+                        'model_suggestion': 'model-suggestion',
+                        'research_planning': 'research-planning',
+                        'direct_llm': 'direct-llm'
+                    };
+                    return classes[workflowType] || 'unknown';
+                },
+
+                getWorkflowIcon(workflowType) {
+                    const icons = {
+                        'model_suggestion': 'fas fa-robot',
+                        'research_planning': 'fas fa-clipboard-list',
+                        'direct_llm': 'fas fa-comments'
+                    };
+                    return icons[workflowType] || 'fas fa-question';
+                },
+
+                formatProcessingTime(seconds) {
+                    return `${seconds.toFixed(2)}s`;
+                },
+
+                formatTimestamp(timestamp) {
+                    return new Date(timestamp).toLocaleString();
+                },
+
+                formatContent(content) {
+                    if (typeof content === 'string') return content;
+                    return JSON.stringify(content, null, 2);
+                },
+
+                exportResults(format) {
+                    if (!this.analysisResult) return;
+
+                    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+                    const filename = `ml_research_analysis_${timestamp}.${format}`;
+                    
+                    let content;
+                    let mimeType;
+                    
+                    if (format === 'json') {
+                        content = JSON.stringify(this.analysisResult, null, 2);
+                        mimeType = 'application/json';
+                    } else if (format === 'txt') {
+                        content = `ML Research Analysis Results
+Generated: ${new Date().toLocaleString()}
+Prompt: ${this.prompt}
+
+Workflow: ${this.analysisResult.workflow_type}
+Router Confidence: ${(this.analysisResult.router_decision?.confidence * 100).toFixed(1)}%
+
+Results:
+${this.formatContent(this.analysisResult.results)}`;
+                        mimeType = 'text/plain';
+                    }
+                    
+                    const blob = new Blob([content], { type: mimeType });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = filename;
+                    a.click();
+                    URL.revokeObjectURL(url);
+                },
+
+                async copyToClipboard() {
+                    if (!this.analysisResult) return;
+                    
+                    const content = this.formatContent(this.analysisResult.results);
+                    
+                    try {
+                        await navigator.clipboard.writeText(content);
+                        // Show brief success indicator
+                        const button = event.target;
+                        const originalContent = button.innerHTML;
+                        button.innerHTML = '<i class="fas fa-check mr-1"></i>Copied!';
+                        setTimeout(() => {
+                            button.innerHTML = originalContent;
+                        }, 1500);
+                    } catch (error) {
+                        console.error('Failed to copy to clipboard:', error);
+                        alert('Failed to copy to clipboard');
+                    }
+                }
+            }
+        }).mount('#app');
+    </script>
+</body>
+</html>
