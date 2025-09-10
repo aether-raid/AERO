@@ -227,6 +227,21 @@ class ExperimentNode:
         return self.combined_score
 
 # Literature Grounding Functions
+def normalize_vector(vector):
+    """Normalize vector for cosine similarity with L2 distance"""
+    if vector is None:
+        return None
+    
+    vector = np.array(vector, dtype='float32')
+    if vector.ndim == 1:
+        vector = vector.reshape(1, -1)
+    
+    norms = np.linalg.norm(vector, axis=1, keepdims=True)
+    norms[norms == 0] = 1  # Avoid division by zero
+    normalized = vector / norms
+    
+    return normalized.flatten() if vector.shape[0] == 1 else normalized
+
 async def vectorize_hypothesis(hypothesis):
     """Vectorize hypothesis using sentence-transformers"""
     global arxiv_processor
@@ -240,7 +255,9 @@ async def vectorize_hypothesis(hypothesis):
     
     try:
         embedding = model.encode([hypothesis], convert_to_tensor=False, show_progress_bar=False)
-        return embedding[0]  # Return first (and only) embedding
+        # Normalize the embedding for proper cosine similarity with L2 distance
+        normalized_embedding = normalize_vector(embedding[0])
+        return normalized_embedding  # Return normalized embedding
     except Exception as e:
         print(f"❌ Failed to vectorize hypothesis: {e}")
         return None
@@ -276,40 +293,10 @@ async def cosine_similarity_search(hypothesis_vector, faiss_db_path='Faiss/arxiv
         
         print(f"📊 Total chunks available: {len(all_chunks)}")
         
-        # Check for index/metadata mismatch
+        # Simple validation - if mismatch is severe, warn but continue
         if index.ntotal != len(all_chunks):
             print(f"⚠️ Index/metadata mismatch: {index.ntotal} vectors vs {len(all_chunks)} chunks")
-            print(f"🔧 Rebuilding FAISS database to fix inconsistency...")
-            
-            # Rebuild FAISS index to match metadata
-            if all_chunks:
-                # Get embedding model to rebuild embeddings
-                global arxiv_processor
-                if not arxiv_processor:
-                    arxiv_processor = initialize_arxiv_processor()
-                
-                model = arxiv_processor._get_embedding_model()
-                if model is not None:
-                    try:
-                        # Re-embed all chunks
-                        texts = [chunk.get('text', '') for chunk in all_chunks]
-                        embeddings = model.encode(texts, convert_to_tensor=False, show_progress_bar=False)
-                        
-                        # Create new index
-                        new_index = faiss.IndexFlatL2(embeddings.shape[1])
-                        new_index.add(embeddings.astype('float32'))
-                        
-                        # Save corrected index
-                        faiss.write_index(new_index, faiss_db_path)
-                        index = new_index
-                        
-                        print(f"✅ Rebuilt FAISS index with {index.ntotal} vectors matching {len(all_chunks)} chunks")
-                    except Exception as e:
-                        print(f"❌ Failed to rebuild index: {e}")
-                        return []
-                else:
-                    print(f"❌ Cannot rebuild index - embedding model not available")
-                    return []
+            print(f"⚠️ Continuing with available data...")
         
         if len(all_chunks) == 0:
             return []
@@ -318,6 +305,12 @@ async def cosine_similarity_search(hypothesis_vector, faiss_db_path='Faiss/arxiv
         query_vec = np.array(hypothesis_vector, dtype='float32')
         if query_vec.ndim == 1:
             query_vec = query_vec.reshape(1, -1)
+        
+        # Normalize query vector for cosine similarity with L2 distance
+        query_norm = np.linalg.norm(query_vec, axis=1, keepdims=True)
+        if query_norm > 0:
+            query_vec = query_vec / query_norm
+            print(f"Normalized query vector for cosine similarity")
         
         # Adjust dimension if needed
         if query_vec.shape[1] != index.d:
@@ -353,8 +346,13 @@ async def cosine_similarity_search(hypothesis_vector, faiss_db_path='Faiss/arxiv
                 
             if 0 <= idx < len(all_chunks):
                 try:
-                    # Convert L2 distance to cosine similarity
-                    cosine_sim = 1 - (dist ** 2) / 2
+                    # Convert L2 distance to cosine similarity for normalized vectors
+                    # For normalized vectors: cosine_similarity = 1 - (L2_distance^2 / 2)
+                    # This is mathematically correct since ||a||=||b||=1
+                    cosine_sim = 1 - (dist * dist) / 2
+                    
+                    # Clamp to valid range [-1, 1] to handle numerical precision issues
+                    cosine_sim = max(-1.0, min(1.0, cosine_sim))
                     
                     if cosine_sim >= min_similarity:
                         chunk = dict(all_chunks[idx])
@@ -441,7 +439,7 @@ async def extract_keywords_from_hypothesis(hypothesis):
         print(f"❌ Keyword extraction failed: {e}")
         return ["machine learning"]
 
-async def filter_papers_by_relevance(papers, hypothesis, min_relevance=0.6):
+async def filter_papers_by_relevance(papers, hypothesis, min_relevance=0.4):
     """Filter papers by title+abstract relevance to hypothesis using cosine similarity"""
     try:
         global arxiv_processor
@@ -455,6 +453,7 @@ async def filter_papers_by_relevance(papers, hypothesis, min_relevance=0.6):
         
         # Vectorize hypothesis
         hypothesis_embedding = model.encode([hypothesis], convert_to_tensor=False, show_progress_bar=False)[0]
+        hypothesis_embedding = normalize_vector(hypothesis_embedding)
         
         relevant_papers = []
         for paper in papers:
@@ -468,12 +467,10 @@ async def filter_papers_by_relevance(papers, hypothesis, min_relevance=0.6):
                 
                 # Vectorize paper title + abstract
                 paper_embedding = model.encode([paper_text], convert_to_tensor=False, show_progress_bar=False)[0]
+                paper_embedding = normalize_vector(paper_embedding)
                 
-                # Calculate cosine similarity
-                import numpy as np
-                cos_sim = np.dot(hypothesis_embedding, paper_embedding) / (
-                    np.linalg.norm(hypothesis_embedding) * np.linalg.norm(paper_embedding)
-                )
+                # Calculate cosine similarity between normalized vectors
+                cos_sim = np.dot(hypothesis_embedding, paper_embedding)
                 
                 paper['relevance_score'] = float(cos_sim)
                 
@@ -653,6 +650,105 @@ async def extract_context_and_links(chunks):
     combined_context = " | ".join(contexts)
     return combined_context, source_links
 
+async def get_literature_chunks_for_hypothesis(hypothesis, max_chunks=15, min_similarity=0.7):
+    """
+    Get literature chunks for hypothesis with specific workflow:
+    1. Default: Rank and select all relevant chunks (max 15) with cosine similarity >0.7 from FAISS
+    2. Only if <5 chunks found: Download relevant PDFs (max 5) from ArXiv, preprocess, store in FAISS
+    3. LLM validation for relevance confirmation
+    """
+    global arxiv_processor
+    
+    if not arxiv_processor:
+        arxiv_processor = initialize_arxiv_processor()
+    
+    print(f"📚 Getting literature chunks for hypothesis (max {max_chunks}, similarity >{min_similarity})...")
+    print(f"    🔍 Hypothesis: {hypothesis[:60]}...")
+    
+    try:
+        # Step 1: Vectorize hypothesis
+        hypothesis_vector = await vectorize_hypothesis(hypothesis)
+        if hypothesis_vector is None:
+            print("❌ Failed to vectorize hypothesis")
+            return []
+        
+        faiss_db_path = 'Faiss/arxiv_chunks_faiss.index'
+        meta_db_path = 'Faiss/arxiv_chunks_meta.pkl'
+        
+        # Step 2: Default workflow - search existing FAISS database first
+        print(f"   📊 Searching existing FAISS database...")
+        similar_chunks = await cosine_similarity_search(
+            hypothesis_vector, faiss_db_path, meta_db_path, top_k=max_chunks*2, min_similarity=min_similarity
+        )
+        
+        print(f"   📈 Found {len(similar_chunks)} chunks with similarity >{min_similarity}")
+        
+        # Step 3: Only if insufficient chunks (<5), trigger ArXiv search and update database
+        if len(similar_chunks) < 5:
+            print(f"   🔍 Insufficient chunks ({len(similar_chunks)}<5), searching ArXiv for new papers...")
+            keywords = await extract_keywords_from_hypothesis(hypothesis)
+            success = await search_arxiv_and_add_to_faiss(keywords, hypothesis, faiss_db_path, meta_db_path, max_papers=5)
+            
+            if success:
+                print(f"   🔄 Searching updated FAISS database...")
+                # Retry search after adding new papers
+                similar_chunks = await cosine_similarity_search(
+                    hypothesis_vector, faiss_db_path, meta_db_path, top_k=max_chunks*2, min_similarity=min_similarity
+                )
+                print(f"   📈 Found {len(similar_chunks)} chunks after ArXiv update")
+            else:
+                print(f"   ❌ ArXiv search unsuccessful, proceeding with {len(similar_chunks)} chunks")
+        else:
+            print(f"   ✅ Sufficient chunks found, skipping ArXiv search")
+        
+        if not similar_chunks:
+            print("❌ No relevant literature chunks found")
+            return []
+        
+        # Step 4: LLM validation for relevance confirmation
+        print(f"🤖 Validating {len(similar_chunks)} chunks with LLM for hypothesis: {hypothesis[:40]}...")
+        
+        validated_chunks = []
+        
+        # Process validation in batches for efficiency
+        semaphore = asyncio.Semaphore(5)
+        
+        async def validate_chunk_with_semaphore(chunk):
+            async with semaphore:
+                is_relevant = await llm_relevance_validation(chunk, hypothesis)
+                return chunk, is_relevant
+        
+        validation_results = await asyncio.gather(*[
+            validate_chunk_with_semaphore(chunk) for chunk in similar_chunks
+        ])
+        
+        # Collect validated chunks
+        for chunk, is_relevant in validation_results:
+            if is_relevant:
+                validated_chunks.append(chunk)
+        
+        # Step 5: Rank by cosine similarity and limit to max_chunks
+        validated_chunks.sort(key=lambda x: x.get('cosine_similarity', 0), reverse=True)
+        final_chunks = validated_chunks[:max_chunks]  # Take top 15 by similarity
+        
+        # Count unique papers for reporting
+        unique_papers = len(set(chunk.get('paper_title', 'Unknown') for chunk in final_chunks))
+        
+        print(f"✅ Selected {len(final_chunks)} chunks from {unique_papers} papers (ranked by cosine similarity)")
+        print(f"    📊 Hypothesis: {hypothesis[:40]}... → {len(final_chunks)} chunks")
+        
+        if final_chunks:
+            for i, chunk in enumerate(final_chunks[:5]):
+                title = chunk.get('paper_title', 'Unknown')[:40]
+                similarity = chunk.get('cosine_similarity', 0)
+                print(f"   📄 {i+1}: {similarity:.3f} - {title}...")
+        
+        return final_chunks
+        
+    except Exception as e:
+        print(f"❌ Literature chunk retrieval failed: {e}")
+        return []
+
 async def literature_grounding_workflow(hypothesis, max_sources=3, min_similarity=0.7):
     """
     Complete literature grounding workflow:
@@ -784,28 +880,6 @@ async def literature_grounding_workflow(hypothesis, max_sources=3, min_similarit
         print(f"❌ Literature grounding failed: {e}")
         return "", []
 
-# Global cache for literature context to avoid redundant API calls
-literature_cache = {}
-
-async def get_literature_for_strategy_or_hypothesis(search_target):
-    """Get literature context for strategy or hypothesis with intelligent caching"""
-    cache_key = search_target[:100]  # Use first 100 chars as cache key
-    
-    if cache_key in literature_cache:
-        print(f"📚 Using cached literature...")
-        return literature_cache[cache_key]
-    
-    # Get literature context using the existing workflow
-    context, links = await literature_grounding_workflow(search_target, max_sources=3, min_similarity=0.7)
-    
-    # Cache result
-    literature_cache[cache_key] = (context, links)
-    return context, links
-
-async def get_literature_for_hypothesis(hypothesis):
-    """Get literature context for hypothesis with caching to reduce API calls"""
-    return await get_literature_for_strategy_or_hypothesis(hypothesis)
-
 async def extract_research_components(user_input):
     """Extract research goal, hypotheses, and relevant information"""
     prompt = f"""
@@ -840,23 +914,44 @@ async def extract_research_components(user_input):
     except Exception:
         return {"error": "Failed to parse", "hypotheses": [user_input]}
 
-async def generate_nodes(parent_description, node_type, hypothesis, relevant_info, user_input, count=3):
-    """Generate child nodes with dynamic literature context based on search target"""
+async def generate_nodes(parent_description, node_type, hypothesis, relevant_info, user_input, literature_chunks, count=3):
+    """Generate child nodes with literature chunks integrated into LLM prompts"""
     
-    # Determine search target for literature context
+    # Prepare literature context for LLM prompts
+    literature_context = ""
+    chunk_refs = {}  # Map chunk index to source info
+    
+    if literature_chunks:
+        print(f"    📚 Integrating {len(literature_chunks)} literature chunks into generation...")
+        literature_sections = []
+        for i, chunk in enumerate(literature_chunks):
+            title = chunk.get('paper_title', 'Unknown')
+            text = chunk.get('text', '')[:400]  # Limit chunk size for context
+            paper_id = chunk.get('paper_id', '')
+            
+            # Build reference info
+            if paper_id and paper_id != 'error':
+                clean_id = paper_id.split('v')[0] if 'v' in paper_id else paper_id
+                url = f"https://arxiv.org/abs/{clean_id}"
+            else:
+                url = ""
+            
+            chunk_refs[i] = {
+                'title': title,
+                'url': url,
+                'reference': f"[{title}]({url})" if url else f"[{title}]()"
+            }
+            
+            literature_sections.append(f"[CHUNK {i}] From '{title}': {text}")
+        
+        literature_context = "\n\n".join(literature_sections)
+    
     if node_type == "strategy":
-        # For strategies, search based on hypothesis
-        search_target = hypothesis
-        print(f"  📚 Getting literature context for hypothesis...")
-    else:
-        # For implementations, search based on strategy (parent node)
-        search_target = parent_description
-        print(f"    📚 Getting literature context for strategy...")
-    
-    # Get dynamic literature context
-    literature_context, source_links = await get_literature_for_strategy_or_hypothesis(search_target)
-    
-    if node_type == "strategy":
+        # Build literature section for prompt
+        lit_section = ""
+        if literature_context:
+            lit_section = f"Literature Context (reference by [CHUNK X] if relevant):\n{literature_context}\n"
+        
         prompt = f"""Generate {count} DISTINCT high-level experimental strategies to test: {hypothesis}
 
 Requirements:
@@ -868,6 +963,8 @@ Requirements:
 
 Original Research Context: {user_input}
 Additional Context/Constraints: {relevant_info}
+
+{lit_section}
 
 IMPORTANT: Design strategies that are realistic and appropriate for the research context described above.
 
@@ -884,6 +981,10 @@ Strategy 2 description here
 Strategy 3 description here"""
 
     else:  # implementation
+        # Build literature section for prompt
+        lit_section = ""
+        if literature_context:
+            lit_section = f"Literature Context (reference by [CHUNK X] if relevant):\n{literature_context}\n"
         prompt = f"""Generate {count} COMPLETELY DIFFERENT experimental designs that all follow this general strategy approach: 
 
 STRATEGY APPROACH: {parent_description}
@@ -892,11 +993,12 @@ Each experimental design should be a STANDALONE, COMPLETE experiment that uses t
 
 Requirements for each experimental design:
 - Each must be a COMPLETE, INDEPENDENT experimental study 
-- Focus PRIMARY on detailed step-by-step experimental procedures
+- Focus PRIMARY on detailed step-by-Step experimental procedures
 - Keep background information concise
 - Include specific methodologies, tools, datasets, and evaluation approaches
 - MUST consider practical constraints and available resources from the original research context
 - Tailor complexity and resource requirements to match the research setting
+- If you reference information from literature context, cite it as [CHUNK X]
 
 Structure each experimental design as follows:
 
@@ -916,6 +1018,8 @@ Step 3: [Detailed description]
 Original Research Context: {user_input}
 Additional Context/Constraints: {relevant_info}
 Hypothesis: {hypothesis}
+
+{lit_section}
 
 IMPORTANT: Design experiments that are feasible given the research context and constraints described above.
 
@@ -952,38 +1056,31 @@ Experimental Design 3: [Title]
             if len(section) < 100:  # Too short to be a complete experimental design
                 continue
                         
-            # Add source links at the end only if literature context was used and chunk info appears in content
-            if literature_context and source_links and node_type == "implementation":
-                # Check if any chunk information is actually referenced in the generated content
-                chunk_used = False
+            # Parse literature references from the generated content
+            implementation_source_links = []
+            
+            # Find [CHUNK X] references in the generated text
+            import re
+            chunk_refs_found = re.findall(r'\[CHUNK (\d+)\]', section)
+            
+            if chunk_refs_found:
+                # Convert to unique chunk indices
+                unique_chunks = list(set(int(x) for x in chunk_refs_found))
                 
-                # Extract key terms from literature chunks to check usage
-                for chunk in literature_context.split('\n\n'):
-                    if chunk.strip():
-                        # Extract key technical terms and concepts (longer than 4 chars, not common words)
-                        chunk_words = chunk.lower().split()
-                        key_terms = [word for word in chunk_words 
-                                   if len(word) > 4 and 
-                                   word not in ['methods', 'results', 'study', 'research', 'analysis', 'approach', 'using', 'based', 'findings', 'showed', 'demonstrate', 'conducted', 'performed', 'investigated']]
-                        
-                        # Check if any key terms appear in the generated content
-                        section_lower = section.lower()
-                        for term in key_terms[:10]:  # Check top 10 terms to avoid false positives
-                            if term in section_lower:
-                                chunk_used = True
-                                break
-                        
-                        if chunk_used:
-                            break
+                # Build source links for referenced chunks
+                for chunk_idx in unique_chunks:
+                    if chunk_idx in chunk_refs:
+                        implementation_source_links.append(chunk_refs[chunk_idx]['reference'])
                 
-                # Only add source links if chunk information was actually used
-                if chunk_used:
-                    source_text = "\n\n**Literature References:** " + " | ".join(source_links)
+                # Add literature references section if chunks were referenced
+                if implementation_source_links:
+                    source_text = "\n\n**Literature References:** " + " | ".join(implementation_source_links)
                     section += source_text
+                    print(f"      📖 Added {len(implementation_source_links)} literature references")
                 
             # Create node
             node = ExperimentNode(section, depth=(1 if node_type == "implementation" else 0), node_type=node_type)
-            node.source_links = source_links  # Keep source links for reference
+            node.source_links = implementation_source_links  # Keep specific source links for reference
             valid_nodes.append(node)
         
         if node_type == "strategy":
@@ -1048,7 +1145,7 @@ async def score_node(description, hypothesis, depth, user_input, relevant_info):
         content = await get_llm_response([
             {"role": "system", "content": "Provide objective scores. Return ONLY valid JSON with integer scores 0-10."},
             {"role": "user", "content": prompt}
-        ], temperature=0.1, max_tokens=50)  # Limit tokens for faster response
+        ], temperature=0.1)  
         
         cleaned_content = clean_json_string(content)
         scores = json.loads(cleaned_content)
@@ -1102,11 +1199,19 @@ async def build_experiment_tree(hypothesis, relevant_info, user_input, hypothesi
     await progress_tracker.add_task(f"hyp_{hypothesis_id}", f"Hypothesis {hypothesis_id}: {hypothesis_str[:40]}...")
     
     try:
-        # Level 1: Generate strategies in parallel with literature context
+        # Step 1: Get literature chunks for this hypothesis (single search)
+        literature_task_id = f"hyp_{hypothesis_id}_literature"
+        await progress_tracker.add_task(literature_task_id, f"  Getting literature for hypothesis {hypothesis_id}")
+        
+        literature_chunks = await get_literature_chunks_for_hypothesis(hypothesis_str, max_chunks=15, min_similarity=0.7)
+        
+        await progress_tracker.complete_task(literature_task_id)
+        
+        # Step 2: Generate strategies using literature chunks
         strategy_task_id = f"hyp_{hypothesis_id}_strategies"
         await progress_tracker.add_task(strategy_task_id, f"  Generating strategies for hypothesis {hypothesis_id}")
         
-        strategy_nodes = await generate_nodes("", "strategy", hypothesis_str, relevant_info, user_input, count=3)
+        strategy_nodes = await generate_nodes("", "strategy", hypothesis_str, relevant_info, user_input, literature_chunks, count=3)
         if not strategy_nodes:
             await progress_tracker.complete_task(strategy_task_id)
             await progress_tracker.complete_task(f"hyp_{hypothesis_id}")
@@ -1154,7 +1259,7 @@ async def build_experiment_tree(hypothesis, relevant_info, user_input, hypothesi
                 await progress_tracker.add_task(impl_task_id, f"  Generating implementations for strategy {i+1}")
                 
                 task = generate_and_score_implementations_parallel(
-                    strategy_node, hypothesis_str, relevant_info, user_input, child_count, impl_task_id
+                    strategy_node, hypothesis_str, relevant_info, user_input, literature_chunks, child_count, impl_task_id
                 )
                 impl_tasks.append(task)
                 remaining_budget -= child_count
@@ -1171,12 +1276,12 @@ async def build_experiment_tree(hypothesis, relevant_info, user_input, hypothesi
         await progress_tracker.complete_task(f"hyp_{hypothesis_id}")
         return []
 
-async def generate_and_score_implementations(strategy_node, hypothesis_str, relevant_info, user_input, child_count=2):
+async def generate_and_score_implementations(strategy_node, hypothesis_str, relevant_info, user_input, literature_chunks, child_count=2):
     """Generate and score implementation nodes for a strategy with dynamic child count"""
     print(f"    ⚙️ Generating {child_count} implementations...")
     
     impl_nodes = await generate_nodes(
-        strategy_node.description, "implementation", hypothesis_str, relevant_info, user_input, count=child_count
+        strategy_node.description, "implementation", hypothesis_str, relevant_info, user_input, literature_chunks, count=child_count
     )
     
     if not impl_nodes:
@@ -1210,11 +1315,11 @@ async def generate_and_score_implementations(strategy_node, hypothesis_str, rele
     strategy_node.children = promising_impls
     print(f"    📊 Selected {len(promising_impls)}/{len(impl_nodes)} implementations")
 
-async def generate_and_score_implementations_parallel(strategy_node, hypothesis_str, relevant_info, user_input, child_count, task_id):
+async def generate_and_score_implementations_parallel(strategy_node, hypothesis_str, relevant_info, user_input, literature_chunks, child_count, task_id):
     """Parallel version of generate_and_score_implementations with progress tracking"""
     try:
         impl_nodes = await generate_nodes(
-            strategy_node.description, "implementation", hypothesis_str, relevant_info, user_input, count=child_count
+            strategy_node.description, "implementation", hypothesis_str, relevant_info, user_input, literature_chunks, count=child_count
         )
         
         if not impl_nodes:
@@ -1352,20 +1457,6 @@ Complete experimental design tree with two levels and literature grounding:
 - **Total Implementations (Level 2):** {total_implementations}
 - **Literature-Grounded Implementations:** {literature_grounded}
 - **Processing Time:** {processing_time:.2f} seconds
-
-## Literature Grounding Workflow
-1. **Hypothesis Vectorization:** Used sentence-transformers for semantic embeddings
-2. **Similarity Search:** Cosine similarity > 0.3 threshold in FAISS database
-3. **LLM Validation:** Each chunk validated for relevance to hypothesis
-4. **ArXiv Fallback:** If <3 validated chunks, search ArXiv and add to database
-5. **Context Integration:** Literature context included in experimental designs
-
-## Supervision Notes
-1. **Strategy Diversity:** Review Level 1 nodes for comprehensive coverage
-2. **Implementation Completeness:** Verify Level 2 nodes contain detailed execution steps
-3. **Literature Integration:** Check that literature context enhances experimental design
-4. **Score Validation:** Assess if scores align with domain expertise
-5. **Source Verification:** Validate literature sources and links
 
 ---
 *Generated by Enhanced Two-Level Tree-Based Experiment Design System with Literature Grounding*
