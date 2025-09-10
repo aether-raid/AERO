@@ -142,6 +142,12 @@ class ModelSuggestionState(BaseState):
     detailed_analysis: Dict[str, Any]
     arxiv_search_query: str
     arxiv_results: Dict[str, Any]
+    # Added fields to ensure validation + routing info isn't dropped between nodes
+    validation_results: Dict[str, Any]          # Paper validation results structure
+    paper_validation_decision: str              # Simple string decision (continue/search_backup/search_new)
+    search_iteration: int                       # Iteration counter for search/validation cycles
+    all_seen_paper_ids: set                     # For cross-search deduplication
+    arxiv_chunk_metadata: List[Dict[str, Any]]  # Chunk-level metadata for semantic retrieval
     model_suggestions: Dict[str, Any]
     critique_results: Dict[str, Any]
     suggestion_iteration: int                    # Track number of suggestion iterations
@@ -181,7 +187,8 @@ class MLResearcherLangGraph:
         self.api_key = self._load_from_env_file("OPENAI_API_KEY")
         self.base_url = self._load_from_env_file("BASE_URL") or "https://agents.aetherraid.dev"
         self.model = self._load_from_env_file("DEFAULT_MODEL") or "gemini/gemini-2.5-flash"
-        self.model_2= "anthropic.claude-3-sonnet-20240229-v1:0"
+        self.model_cheap = "gemini/gemini-2.5-flash-lite"
+        
         if not self.api_key:
             raise ValueError("API key not found. Check env.example file or set OPENAI_API_KEY environment variable.")
         
@@ -192,7 +199,7 @@ class MLResearcherLangGraph:
         )
         try:
             # Initialize ArXiv paper processor
-            self.arxiv_processor = ArxivPaperProcessor(self.client, self.model)
+            self.arxiv_processor = ArxivPaperProcessor(self.client, self.model_cheap)
             print("ArXiv paper processor initialized successfully.")
         except Exception as e:
             self.arxiv_processor = None
@@ -1009,11 +1016,6 @@ class MLResearcherLangGraph:
             with libreq.urlopen(url) as response:
                 xml_data = response.read()
             
-            # Debug: Check XML content
-            xml_str = xml_data.decode('utf-8')
-            entry_count = xml_str.count('<entry>')
-            print(f"🔍 Debug: Found {entry_count} <entry> elements in XML response")
-            
             # Parse XML
             root = ET.fromstring(xml_data)
             
@@ -1035,11 +1037,9 @@ class MLResearcherLangGraph:
                 
                 # Get all paper entries
                 entries = root.findall('atom:entry', ns)
-                print(f"🔍 Debug: XML parsing found {len(entries)} entries using namespace search")
                 
-                # Alternative debugging - try without namespace  
+                # Alternative - try without namespace as fallback
                 entries_no_ns = root.findall('.//entry')
-                print(f"🔍 Debug: Found {len(entries_no_ns)} entries without namespace")
                 
                 # If no entries found with namespace, try alternative approach
                 if len(entries) == 0 and len(entries_no_ns) > 0:
@@ -1097,7 +1097,7 @@ class MLResearcherLangGraph:
                 
                 print(f"\n📥 Stage 3: Downloading full PDF content for top {len(top_papers)} papers...")
                 
-                with ThreadPoolExecutor(max_workers=3) as executor:  # Limit concurrent downloads
+                with ThreadPoolExecutor(max_workers=5) as executor:  # Limit concurrent downloads
                     # Submit download tasks for top papers only
                     future_to_paper = {
                         executor.submit(self.arxiv_processor.download_paper_content, paper): paper 
@@ -1225,11 +1225,6 @@ class MLResearcherLangGraph:
                     # Use the original prompt as the search query
                     search_query_for_chunks = original_prompt
                     top_n_chunks = 15  # Get top 10 most relevant chunks
-                    
-                    print(f"🔍 Debug: Search query: '{search_query_for_chunks[:100]}...'")
-                    print(f"🔍 Debug: FAISS DB path: {faiss_db_path}")
-                    print(f"🔍 Debug: Meta DB path: {meta_db_path}")
-                    print(f"🔍 Debug: Looking for top {top_n_chunks} chunks")
                     
                     # Check if embedding model is ready
                     if hasattr(self.arxiv_processor, 'embedding_model') and self.arxiv_processor.embedding_model is None:
@@ -1412,7 +1407,7 @@ class MLResearcherLangGraph:
     def _validate_papers_node(self, state: ModelSuggestionState) -> ModelSuggestionState:
         """Node to validate if retrieved papers can answer the user's query and decide next steps."""
         
-        print("\n🔍 Step 3.5: Validating paper relevance and determining next steps...")
+        print("�🔍 Step 3.5: Validating paper relevance and determining next steps...")
         state["current_step"] = "validate_papers"
         
         try:
@@ -1484,7 +1479,7 @@ Return only the JSON object, no additional text.
             # Call LLM for validation
             response = self.client.chat.completions.create(
                 model=self.model,
-                temperature=0.3,
+                temperature=0,
                 messages=[{"content": validation_prompt, "role": "user"}]
             )
             
@@ -1499,16 +1494,9 @@ Return only the JSON object, no additional text.
                     validation_response = validation_response[:-3]
                 validation_response = validation_response.strip()
                 
-                # Debug: Show the raw LLM response
-                print(f"🔧 DEBUG: Raw LLM validation response: {validation_response[:500]}...")
-                
                 validation_data = json.loads(validation_response)
                 
-                # Debug: Show parsed JSON keys and decision value
-                print(f"🔧 DEBUG: JSON keys: {list(validation_data.keys())}")
-                print(f"🔧 DEBUG: Decision in JSON: '{validation_data.get('decision', 'NOT_FOUND')}'")
-                
-                # Store validation results in state
+                # Store validation results in state - use unique key to avoid conflicts
                 state["validation_results"] = {
                     "validation_successful": True,
                     "validation_data": validation_data,
@@ -1518,6 +1506,9 @@ Return only the JSON object, no additional text.
                     "search_guidance": validation_data.get("search_guidance", {}),
                     "iteration": search_iteration + 1
                 }
+                
+                # ALSO store decision in a separate key to avoid conflicts with other workflows
+                state["paper_validation_decision"] = validation_data.get("decision", "continue")
                 
                 # Print validation results
                 print("\n" + "=" * 70)
@@ -1545,6 +1536,9 @@ Return only the JSON object, no additional text.
                 # Increment search iteration counter
                 state["search_iteration"] = search_iteration + 1
                 
+                # Return state after successful validation
+                return state
+                
             except json.JSONDecodeError as e:
                 error_msg = f"Failed to parse validation JSON: {e}"
                 print(f"⚠️ {error_msg}")
@@ -1561,7 +1555,11 @@ Return only the JSON object, no additional text.
                     "iteration": search_iteration + 1
                 }
                 
+                # ALSO store decision in backup key for error cases
+                state["paper_validation_decision"] = decision
+                
                 state["search_iteration"] = search_iteration + 1
+                
                 
         except Exception as e:
             error_msg = f"Validation failed: {str(e)}"
@@ -1576,6 +1574,9 @@ Return only the JSON object, no additional text.
                 "iteration": state.get("search_iteration", 0) + 1
             }
             
+            # ALSO store decision in backup key for error cases
+            state["paper_validation_decision"] = "continue"
+            
             state["search_iteration"] = state.get("search_iteration", 0) + 1
         
         return state
@@ -1583,12 +1584,13 @@ Return only the JSON object, no additional text.
     def _should_continue_with_papers(self, state: ModelSuggestionState) -> str:
         """Determine whether to continue with current papers or search again."""
         
-        validation_results = state.get("validation_results", {})
-        decision = validation_results.get("decision", "continue")
-        search_iteration = state.get("search_iteration", 0)
+        # First try the backup decision key, then fall back to validation_results
+        decision = state.get("paper_validation_decision")
+        if decision is None:
+            validation_results = state.get("validation_results", {})
+            decision = validation_results.get("decision", "continue")
         
-        # Debug: Print exact decision value and type
-        print(f"🔧 DEBUG: Raw decision = '{decision}' (type: {type(decision)})")
+        search_iteration = state.get("search_iteration", 0)
         
         # Safety check: After 3 iterations, force continue to avoid infinite loops
         if search_iteration >= 3:
@@ -1597,7 +1599,6 @@ Return only the JSON object, no additional text.
         
         # Clean up decision string
         decision = str(decision).strip().upper()
-        print(f"🔧 DEBUG: Cleaned decision = '{decision}'")
         
         # Map validation decisions to workflow routing
         if decision == "SEARCH_BACKUP":
@@ -1610,10 +1611,6 @@ Return only the JSON object, no additional text.
             print(f"🔄 Validation decision: {decision} -> Continuing with current papers")
             return "continue"
 
-    async def _validate_papers_relevance(self, papers, user_query):
-        """Legacy method - now replaced by _validate_papers_node."""
-        print("⚠️ Legacy validation method called - this should not happen in the new workflow")
-        pass
 
     def _suggest_models_node(self, state: ModelSuggestionState) -> ModelSuggestionState:
         """Node for suggesting suitable models based on analysis."""
@@ -1661,7 +1658,12 @@ Return only the JSON object, no additional text.
                 semantic_evidence += f"Found {len(chunks)} highly relevant chunks from the research papers:\n\n"
                 
                 for i, chunk in enumerate(chunks[:8], 1):  # Use top 8 chunks for model suggestions
-                    distance = chunk.get('distance', 'N/A')
+                    # Safely format distance score (may be missing or non-numeric)
+                    raw_distance = chunk.get('distance', None)
+                    if isinstance(raw_distance, (int, float)):
+                        distance_str = f"{raw_distance:.3f}"
+                    else:
+                        distance_str = "N/A"
                     paper_title = self._clean_text_for_utf8(chunk.get('paper_title', 'Unknown Paper'))
                     section_title = self._clean_text_for_utf8(chunk.get('section_title', 'Unknown Section'))
                     chunk_text = self._clean_text_for_utf8(chunk.get('text', ''))
@@ -1670,7 +1672,7 @@ Return only the JSON object, no additional text.
                     truncated_text = chunk_text[:500] + "..." if len(chunk_text) > 500 else chunk_text
                     
                     semantic_evidence += f"""
-                        Chunk {i} (Relevance Score: {distance:.3f}):
+                        Chunk {i} (Relevance Score: {distance_str}):
                         Paper: {paper_title[:80]}{"..." if len(paper_title) > 80 else ""}
                         Section: {section_title}
                         Content: {truncated_text}
@@ -3561,6 +3563,11 @@ Provide the complete refined research plan:
                 "detailed_analysis": {},
                 "arxiv_search_query": "",
                 "arxiv_results": {},
+                "validation_results": {},
+                "paper_validation_decision": "",
+                "search_iteration": 0,
+                "all_seen_paper_ids": set(),
+                "arxiv_chunk_metadata": [],
                 "model_suggestions": {},
                 "critique_results": {},
                 "suggestion_iteration": 0,
