@@ -196,3 +196,6 @@ wandb/
 # TensorBoard logs
 runs/
 tensorboard_logs/
+
+# Faiss and metadata databases
+Faiss/
