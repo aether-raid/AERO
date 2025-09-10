@@ -241,6 +241,7 @@ class MLResearcherLangGraph:
         workflow.add_node("analyze_properties_and_task", self._analyze_properties_and_task_node)
         workflow.add_node("generate_search_query", self._generate_search_query_node)
         workflow.add_node("search_arxiv", self._search_arxiv_node)
+        workflow.add_node("validate_papers", self._validate_papers_node)
         workflow.add_node("suggest_models", self._suggest_models_node)
         workflow.add_node("critique_response", self._critique_response_node)
         workflow.add_node("revise_suggestions", self._revise_suggestions_node)
@@ -249,7 +250,19 @@ class MLResearcherLangGraph:
         workflow.set_entry_point("analyze_properties_and_task")
         workflow.add_edge("analyze_properties_and_task", "generate_search_query")
         workflow.add_edge("generate_search_query", "search_arxiv")
-        workflow.add_edge("search_arxiv", "suggest_models")
+        workflow.add_edge("search_arxiv", "validate_papers")
+        
+        # Conditional edge after validation - decide whether to continue or search again
+        workflow.add_conditional_edges(
+            "validate_papers",
+            self._should_continue_with_papers,
+            {
+                "continue": "suggest_models",           # Papers are good, continue with model suggestions
+                "search_backup": "search_arxiv",       # Keep current papers, search for backup
+                "search_new": "generate_search_query"  # Start fresh with new search query
+            }
+        )
+        
         workflow.add_edge("suggest_models", "critique_response")
         
         # Conditional edge after critique - decide whether to revise or finalize
@@ -813,8 +826,16 @@ class MLResearcherLangGraph:
         return state
     
     def _generate_search_query_node(self, state: ModelSuggestionState) -> ModelSuggestionState:
-        """Node for generating arXiv search query."""
-        print("\n📚 Step 2: Generating arXiv search query...")
+        """Node for generating arXiv search query with optional guidance from validation."""
+        
+        search_iteration = state.get("search_iteration", 0)
+        validation_results = state.get("validation_results", {})
+        
+        if search_iteration == 0:
+            print("\n📚 Step 2: Generating initial arXiv search query...")
+        else:
+            print(f"\n🔄 Step 2 (Iteration {search_iteration + 1}): Generating refined search query based on validation guidance...")
+            
         state["current_step"] = "generate_search_query"
         
         try:
@@ -822,14 +843,35 @@ class MLResearcherLangGraph:
             high_confidence_props = [prop for prop in state["detected_categories"] if prop.get("confidence", 0) > 0.7]
             prop_names = [prop["name"] for prop in high_confidence_props]
             
+            # Prepare guidance from validation if available
+            guidance_context = ""
+            if search_iteration > 0 and validation_results.get("search_guidance"):
+                search_guidance = validation_results["search_guidance"]
+                missing_aspects = validation_results.get("missing_aspects", [])
+                
+                guidance_context = f"""
+                
+                ## SEARCH REFINEMENT GUIDANCE (from validation)
+                Previous search was insufficient. Please incorporate this guidance:
+                
+                Missing Aspects: {', '.join(missing_aspects)}
+                Suggested New Terms: {', '.join(search_guidance.get('new_search_terms', []))}
+                Focus Areas: {', '.join(search_guidance.get('focus_areas', []))}
+                Terms to Avoid: {', '.join(search_guidance.get('avoid_terms', []))}
+                
+                IMPORTANT: Generate a DIFFERENT query that addresses these missing aspects.
+                """
+            
             content = f"""
                 Based on the following machine learning research task analysis, generate ONE concise arXiv API search query (exactly 4 terms, separated by forward slashes).
+                The query should be optimized to find the most relevant papers that are able to suggest models that can be used to address the task.
 
                 Original Task: {state["original_prompt"]}
 
                 Detected Categories: {', '.join(prop_names)}
 
                 Detailed Analysis: {state["detailed_analysis"].get('llm_analysis', 'Not available')}
+                {guidance_context}
 
                 Rules for constructing the query:
                 - EXACTLY 4 terms, separated by "/" (no quotes, no extra spaces).
@@ -854,18 +896,27 @@ class MLResearcherLangGraph:
 
             response = self.client.chat.completions.create(
                 model=self.model,
-                temperature=0,
+                temperature=0 if search_iteration == 0 else 0.3,  # Add some randomness for refinements
                 messages=[{"content": content, "role": "user"}]
             )
             
             search_query = response.choices[0].message.content.strip()
+            
+            # Store search query with iteration tracking
+            if "search_queries" not in state:
+                state["search_queries"] = []
+            state["search_queries"].append(search_query)
             state["arxiv_search_query"] = search_query
             
-            print(f"Generated search query: '{search_query}'")
+            if search_iteration == 0:
+                print(f"Generated initial search query: '{search_query}'")
+            else:
+                print(f"Generated refined search query: '{search_query}'")
+                print(f"Previous queries: {', '.join(state['search_queries'][:-1])}")
             
             # Add success message
             state["messages"].append(
-                AIMessage(content=f"Generated arXiv search query: '{search_query}'")
+                AIMessage(content=f"Generated arXiv search query (iteration {search_iteration + 1}): '{search_query}'")
             )
         
         except Exception as e:
@@ -895,8 +946,19 @@ class MLResearcherLangGraph:
         return state
     
     async def _search_arxiv_node(self, state: ModelSuggestionState) -> ModelSuggestionState:
-        """Node for searching arXiv papers using optimized 3-stage workflow."""
-        print(f"\n📖 Step 3: Searching arXiv for relevant papers...")
+        """Node for searching arXiv papers using optimized workflow with backup search support."""
+        
+        search_iteration = state.get("search_iteration", 0)
+        validation_results = state.get("validation_results", {})
+        is_backup_search = validation_results.get("decision") == "search_backup"
+        
+        if search_iteration == 0:
+            print(f"\n📖 Step 3: Searching arXiv for relevant papers...")
+        elif is_backup_search:
+            print(f"\n🔄 Step 3 (Backup Search): Searching for additional papers to supplement existing ones...")
+        else:
+            print(f"\n🔄 Step 3 (New Search {search_iteration + 1}): Searching arXiv with refined query...")
+            
         state["current_step"] = "search_arxiv"
         
         # Initialize variables
@@ -904,22 +966,45 @@ class MLResearcherLangGraph:
         total_results = 0
         formatted_query = ""
         
+        # For backup searches, preserve existing papers
+        existing_papers = []
+        if is_backup_search and state.get("arxiv_results", {}).get("papers"):
+            existing_papers = state["arxiv_results"]["papers"]
+            print(f"📚 Preserving {len(existing_papers)} papers from previous search")
+        
         try:
             search_query = state["arxiv_search_query"]
             original_prompt = state["original_prompt"]
-            max_results = 100# Get more papers initially for better selection
             
-            print(f"🔍 SEARCHING arXiv: {search_query}")
+            # Determine search parameters based on search type and iteration
+            if search_iteration == 0:
+                # Initial search: get 100 papers
+                max_results = 100
+                start_offset = 0
+                print(f"🔍 INITIAL SEARCH - arXiv: {search_query}")
+            elif is_backup_search:
+                # Backup search: get additional papers with offset to avoid duplicates
+                # Use offset based on how many papers we already have
+                existing_count = len(existing_papers) if existing_papers else 0
+                start_offset = max(100, existing_count)  # Start after existing papers
+                max_results = 50  # Get additional papers
+                print(f"🔍 BACKUP SEARCH - arXiv: {search_query} (offset: {start_offset}, additional: {max_results})")
+            else:
+                # New search with different query: get 100 fresh papers
+                max_results = 100  
+                start_offset = 0
+                print(f"🔍 NEW SEARCH #{search_iteration + 1} - arXiv: {search_query}")
+            
             print("=" * 80)
             
             # Format the search query
-            
             formatted_query = format_search_string(search_query)
             print(f"Formatted query: {formatted_query}")
             
-            # Build the URL
-            url = f"http://export.arxiv.org/api/query?search_query={formatted_query}&start=0&max_results={max_results}"
+            # Build the URL with proper offset
+            url = f"http://export.arxiv.org/api/query?search_query={formatted_query}&start={start_offset}&max_results={max_results}"
             print(f"🌐 Full URL: {url}")
+            print(f"📊 Search Parameters: max_results={max_results}, start_offset={start_offset}")
             
             with libreq.urlopen(url) as response:
                 xml_data = response.read()
@@ -1008,7 +1093,8 @@ class MLResearcherLangGraph:
                 papers = await self.arxiv_processor.rank_papers_by_relevance(papers, original_prompt)
                 
                 # Stage 3: Download full content for top 5 papers only
-                top_papers = papers[:5]  # Get top 5 papers
+                top_papers = papers  # Get top 5 papers
+                
                 print(f"\n📥 Stage 3: Downloading full PDF content for top {len(top_papers)} papers...")
                 
                 with ThreadPoolExecutor(max_workers=3) as executor:  # Limit concurrent downloads
@@ -1029,16 +1115,20 @@ class MLResearcherLangGraph:
                 
                 print(f"✅ PDF download stage completed. Top 5 papers now have full content.")
                 
-                # Checkpoint: Validate if papers can answer the user's query
-                await self._validate_papers_relevance(papers, state["original_prompt"])
-                
                 # Print final results (now ranked by relevance)
                 print("\n" + "=" * 80)
                 print("📋 RANKED RESULTS (by relevance):")
                 print("=" * 80)
+                ttl=0
                 
+                
+                
+                ttl = 0
+                scores = []
                 for i, paper in enumerate(papers, 1):
                     relevance_score = paper.get('relevance_score', 0)
+                    ttl += float(relevance_score)
+                    scores.append(float(relevance_score))
                     has_content = paper.get('pdf_downloaded', False)
                     content_status = "📄 FULL CONTENT" if has_content else "📝 TITLE+ABSTRACT"
                     
@@ -1062,6 +1152,20 @@ class MLResearcherLangGraph:
                     else:
                         print("Full Content: [Not downloaded - not in top 5]")
                     print("-" * 60)
+                
+                # Calculate statistics
+                if scores:
+                    avg = ttl / len(scores)
+                    max_score = max(scores)
+                    min_score = min(scores)
+                    print(f"\n📊 RELEVANCE SCORE STATISTICS:")
+                    print(f"Average score: {avg:.2f}/10.0")
+                    print(f"Maximum score: {max_score:.2f}/10.0")
+                    print(f"Minimum score: {min_score:.2f}/10.0")
+                    print(f"Score range: {min_score:.2f} - {max_score:.2f}")
+                else:
+                    print(f"Average score: 0.00/10.0")
+                
                     
                 
                 # stage 4: chunk and embedd full papers
@@ -1154,7 +1258,7 @@ class MLResearcherLangGraph:
                         "chunks_found": len(relevant_chunks),
                         "top_chunks": relevant_chunks
                     }
-                    
+                    '''
                     # Print preview of top chunks
                     if relevant_chunks:
                         print("\n📄 Top 3 Most Relevant Chunks:")
@@ -1175,6 +1279,7 @@ class MLResearcherLangGraph:
                         print("  - No papers were successfully chunked and embedded")
                         print("  - FAISS database is empty")
                         print("  - Embedding model issues")
+                '''
                     
                 except Exception as e:
                     print(f"❌ Semantic search failed: {type(e).__name__}: {str(e)}")
@@ -1192,13 +1297,62 @@ class MLResearcherLangGraph:
                     }
                 
                 
+                # Enhanced deduplication and paper management
+                final_papers = papers
+                
+                # Track all seen paper IDs across searches
+                if "all_seen_paper_ids" not in state:
+                    state["all_seen_paper_ids"] = set()
+                
+                if is_backup_search and existing_papers:
+                    # For backup searches: merge with existing papers
+                    existing_ids = {p.get('id') for p in existing_papers}
+                    new_papers = [p for p in papers if p.get('id') not in existing_ids]
+                    final_papers = existing_papers + new_papers
+                    
+                    # Update seen IDs
+                    state["all_seen_paper_ids"].update(p.get('id') for p in final_papers if p.get('id'))
+                    
+                    print(f"🔗 Backup search results:")
+                    print(f"   - Existing papers: {len(existing_papers)}")
+                    print(f"   - New papers found: {len(new_papers)}")
+                    print(f"   - Duplicates avoided: {len(papers) - len(new_papers)}")
+                    print(f"   - Total combined papers: {len(final_papers)}")
+                    
+                elif search_iteration > 0:
+                    # For new searches: check against all previously seen papers
+                    previously_seen = state["all_seen_paper_ids"]
+                    truly_new_papers = [p for p in papers if p.get('id') not in previously_seen]
+                    final_papers = truly_new_papers
+                    
+                    # Update seen IDs
+                    state["all_seen_paper_ids"].update(p.get('id') for p in final_papers if p.get('id'))
+                    
+                    print(f"🔄 New search results:")
+                    print(f"   - Papers from API: {len(papers)}")
+                    print(f"   - Previously seen (removed): {len(papers) - len(truly_new_papers)}")
+                    print(f"   - Truly new papers: {len(truly_new_papers)}")
+                    
+                else:
+                    # Initial search: just track the IDs
+                    state["all_seen_paper_ids"].update(p.get('id') for p in final_papers if p.get('id'))
+                    
+                    print(f"📊 Initial search results:")
+                    print(f"   - Papers retrieved: {len(final_papers)}")
+                    print(f"   - Total papers tracked: {len(state['all_seen_paper_ids'])}")
+                
+                # Sort final papers by relevance score (highest first)
+                final_papers.sort(key=lambda x: x.get('relevance_score', 0), reverse=True)
+                
                 state["arxiv_results"] = {
                     "search_successful": True,
                     "total_results": str(total_results),
-                    "papers_returned": len(papers),
-                    "papers": papers,
+                    "papers_returned": len(final_papers),
+                    "papers": final_papers,
                     "formatted_query": formatted_query,
-                    "original_query": search_query
+                    "original_query": search_query,
+                    "search_type": "backup" if is_backup_search else "new",
+                    "iteration": search_iteration + 1
                 }
                 
             else:
@@ -1255,69 +1409,211 @@ class MLResearcherLangGraph:
         
         return text
 
-    async def _validate_papers_relevance(self, papers, user_query):
-        """Checkpoint: Validate if retrieved papers can answer the user's query."""
+    def _validate_papers_node(self, state: ModelSuggestionState) -> ModelSuggestionState:
+        """Node to validate if retrieved papers can answer the user's query and decide next steps."""
         
-        print("\n🔍 Checkpoint: Validating paper relevance to user query...")
+        print("\n🔍 Step 3.5: Validating paper relevance and determining next steps...")
+        state["current_step"] = "validate_papers"
         
         try:
+            papers = state["arxiv_results"].get("papers", [])
+            user_query = state["original_prompt"]
+            search_iteration = state.get("search_iteration", 0)
+            
             # Prepare paper summaries for validation
             papers_summary = ""
             full_content_papers = [p for p in papers if p.get('pdf_downloaded', False)]
             
-            for i, paper in enumerate(full_content_papers[:5], 1):  # Top 5 papers with full content
+            # Include information about all papers (not just those with full content)
+            for i, paper in enumerate(papers[:10], 1):  # Top 10 papers
                 clean_title = self._clean_text_for_utf8(paper.get('title', 'Unknown Title'))
                 clean_abstract = self._clean_text_for_utf8(paper.get('summary', 'No abstract available'))
-                clean_content = self._clean_text_for_utf8(paper.get('content', 'No content available'))
-                
-                # Truncate content for prompt efficiency
-                content_preview = clean_content
+                relevance_score = paper.get('relevance_score', 0)
+                has_content = paper.get('pdf_downloaded', False)
+                content_status = "FULL CONTENT" if has_content else "TITLE+ABSTRACT"
                 
                 papers_summary += f"""
-Paper {i}: {clean_title}
+Paper {i} [{content_status}] - Relevance: {relevance_score:.1f}/10.0:
+Title: {clean_title}
 Abstract: {clean_abstract}
-Content Preview: {content_preview}
 ---
 """
             
-            # Create validation prompt
+            # Create enhanced validation prompt with decision guidance
             validation_prompt = f"""
-You are an expert research analyst. Evaluate whether the following retrieved papers can adequately answer the user's research query.
+You are an expert research analyst. Evaluate the retrieved papers and determine the best course of action.
 
 USER'S QUERY: {self._clean_text_for_utf8(user_query)}
+CURRENT SEARCH ITERATION: {search_iteration + 1}
 
 RETRIEVED PAPERS:
 {papers_summary}
 
-Please provide a clear assessment in plain text format:
+SEARCH STATISTICS:
+- Total papers found: {len(papers)}
+- Papers with full content: {len(full_content_papers)}
+- Average relevance score: {sum(p.get('relevance_score', 0) for p in papers) / len(papers) if papers else 0:.2f}/10.0
 
-1. RELEVANCE ASSESSMENT: Can these papers answer the user's query? (Yes/Partially/No)
-2. COVERAGE ANALYSIS: What aspects of the query are well-covered vs. what might be missing?
-3. QUALITY EVALUATION: Are the papers of sufficient quality and depth for the query?
-4. RECOMMENDATION: Should we proceed with these papers or search for additional ones?
+Please provide your assessment in the following JSON format:
 
-Provide your assessment in a conversational, easy-to-understand format.
+{{
+    "relevance_assessment": "excellent" | "good" | "fair" | "poor",
+    "coverage_analysis": "complete" | "partial" | "insufficient",
+    "quality_evaluation": "high" | "medium" | "low",
+    "decision": "continue" | "search_backup" | "search_new",
+    "confidence": 0.0-1.0,
+    "reasoning": "Brief explanation of the decision",
+    "missing_aspects": ["list", "of", "missing", "aspects"],
+    "search_guidance": {{
+        "new_search_terms": ["alternative", "search", "terms"],
+        "focus_areas": ["areas", "to", "focus", "on"],
+        "avoid_terms": ["terms", "to", "avoid"]
+    }}
+}}
+
+DECISION CRITERIA:
+- "continue": Papers are sufficient (relevance ≥7.0, good coverage)
+- "search_backup": Papers are decent but could use backup (relevance 5.0-6.9, partial coverage)  
+- "search_new": Papers are insufficient (relevance <5.0, poor coverage, or major gaps)
+
+If search_iteration ≥ 2, bias toward "continue" unless papers are truly inadequate.
+
+Return only the JSON object, no additional text.
 """
 
             # Call LLM for validation
             response = self.client.chat.completions.create(
-                model=self.model,  # Use primary model, not model_2
+                model=self.model,
+                temperature=0.3,
                 messages=[{"content": validation_prompt, "role": "user"}]
             )
             
-            validation_result = response.choices[0].message.content
+            validation_response = response.choices[0].message.content.strip()
             
-            # Print validation results
-            print("\n" + "=" * 60)
-            print("📋 PAPER RELEVANCE VALIDATION RESULTS")
-            print("=" * 60)
-            print(validation_result)
-            print("=" * 60)
-            print("✅ Validation checkpoint completed - proceeding with workflow...\n")
-            
+            # Parse validation response
+            try:
+                # Remove any markdown formatting
+                if validation_response.startswith("```json"):
+                    validation_response = validation_response[7:]
+                if validation_response.endswith("```"):
+                    validation_response = validation_response[:-3]
+                validation_response = validation_response.strip()
+                
+                # Debug: Show the raw LLM response
+                print(f"🔧 DEBUG: Raw LLM validation response: {validation_response[:500]}...")
+                
+                validation_data = json.loads(validation_response)
+                
+                # Debug: Show parsed JSON keys and decision value
+                print(f"🔧 DEBUG: JSON keys: {list(validation_data.keys())}")
+                print(f"🔧 DEBUG: Decision in JSON: '{validation_data.get('decision', 'NOT_FOUND')}'")
+                
+                # Store validation results in state
+                state["validation_results"] = {
+                    "validation_successful": True,
+                    "validation_data": validation_data,
+                    "decision": validation_data.get("decision", "continue"),
+                    "reasoning": validation_data.get("reasoning", "No reasoning provided"),
+                    "missing_aspects": validation_data.get("missing_aspects", []),
+                    "search_guidance": validation_data.get("search_guidance", {}),
+                    "iteration": search_iteration + 1
+                }
+                
+                # Print validation results
+                print("\n" + "=" * 70)
+                print("📋 PAPER VALIDATION & DECISION RESULTS")
+                print("=" * 70)
+                print(f"🎯 Relevance Assessment: {validation_data.get('relevance_assessment', 'unknown').title()}")
+                print(f"📊 Coverage Analysis: {validation_data.get('coverage_analysis', 'unknown').title()}")
+                print(f"⭐ Quality Evaluation: {validation_data.get('quality_evaluation', 'unknown').title()}")
+                print(f"🚀 Decision: {validation_data.get('decision', 'continue').upper()}")
+                print(f"🎲 Confidence: {validation_data.get('confidence', 0):.2f}")
+                print(f"💭 Reasoning: {validation_data.get('reasoning', 'No reasoning provided')}")
+                
+                if validation_data.get('missing_aspects'):
+                    print(f"🔍 Missing Aspects: {', '.join(validation_data['missing_aspects'])}")
+                
+                if validation_data.get('decision') != 'continue':
+                    search_guidance = validation_data.get('search_guidance', {})
+                    if search_guidance.get('new_search_terms'):
+                        print(f"🔄 Suggested Search Terms: {', '.join(search_guidance['new_search_terms'])}")
+                    if search_guidance.get('focus_areas'):
+                        print(f"🎯 Focus Areas: {', '.join(search_guidance['focus_areas'])}")
+                
+                print("=" * 70)
+                
+                # Increment search iteration counter
+                state["search_iteration"] = search_iteration + 1
+                
+            except json.JSONDecodeError as e:
+                error_msg = f"Failed to parse validation JSON: {e}"
+                print(f"⚠️ {error_msg}")
+                
+                # Fallback decision based on paper quality
+                avg_score = sum(p.get('relevance_score', 0) for p in papers) / len(papers) if papers else 0
+                decision = "continue" if avg_score >= 6.0 else "search_backup"
+                
+                state["validation_results"] = {
+                    "validation_successful": False,
+                    "error": error_msg,
+                    "decision": decision,
+                    "reasoning": f"Fallback decision based on average score: {avg_score:.2f}",
+                    "iteration": search_iteration + 1
+                }
+                
+                state["search_iteration"] = search_iteration + 1
+                
         except Exception as e:
-            print(f"⚠️ Validation checkpoint failed: {str(e)}")
-            print("Continuing with workflow despite validation error...\n")
+            error_msg = f"Validation failed: {str(e)}"
+            print(f"❌ {error_msg}")
+            
+            # Default to continue on error
+            state["validation_results"] = {
+                "validation_successful": False,
+                "error": error_msg,
+                "decision": "continue",
+                "reasoning": "Error occurred, defaulting to continue",
+                "iteration": state.get("search_iteration", 0) + 1
+            }
+            
+            state["search_iteration"] = state.get("search_iteration", 0) + 1
+        
+        return state
+
+    def _should_continue_with_papers(self, state: ModelSuggestionState) -> str:
+        """Determine whether to continue with current papers or search again."""
+        
+        validation_results = state.get("validation_results", {})
+        decision = validation_results.get("decision", "continue")
+        search_iteration = state.get("search_iteration", 0)
+        
+        # Debug: Print exact decision value and type
+        print(f"🔧 DEBUG: Raw decision = '{decision}' (type: {type(decision)})")
+        
+        # Safety check: After 3 iterations, force continue to avoid infinite loops
+        if search_iteration >= 3:
+            print("🛑 Maximum search iterations reached (3), forcing continue...")
+            return "continue"
+        
+        # Clean up decision string
+        decision = str(decision).strip().upper()
+        print(f"🔧 DEBUG: Cleaned decision = '{decision}'")
+        
+        # Map validation decisions to workflow routing
+        if decision == "SEARCH_BACKUP":
+            print(f"🔄 Validation decision: {decision} -> Performing backup search")
+            return "search_backup"
+        elif decision == "SEARCH_NEW":
+            print(f"🔄 Validation decision: {decision} -> Performing new search")
+            return "search_new"
+        else:
+            print(f"🔄 Validation decision: {decision} -> Continuing with current papers")
+            return "continue"
+
+    async def _validate_papers_relevance(self, papers, user_query):
+        """Legacy method - now replaced by _validate_papers_node."""
+        print("⚠️ Legacy validation method called - this should not happen in the new workflow")
+        pass
 
     def _suggest_models_node(self, state: ModelSuggestionState) -> ModelSuggestionState:
         """Node for suggesting suitable models based on analysis."""
