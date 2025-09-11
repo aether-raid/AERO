@@ -173,11 +173,42 @@ class ResearchPlanningState(BaseState):
     generation_attempts: int                     # Track failed generation attempts
     feedback_context: str                        # Accumulated feedback for next generation
 
+class PaperWritingState(BaseState):
+    """🆕 State object for the paper writing workflow - inspired by Sakana AI's AI-Scientist."""
+    # Step 1: Structure Inputs & Define Key Narrative
+    experimental_results: Dict[str, Any]         # CSV, logs, tables data
+    figures_plots: List[Dict[str, Any]]          # Figure descriptions and paths
+    user_analysis: str                           # High-level summary from user
+    structured_narrative: Dict[str, Any]         # Main claim, key findings, story
+    
+    # Step 2: Select Target Venue & Template
+    target_venue: str                            # e.g., "NeurIPS", "IEEE", "Nature"
+    template_rules: Dict[str, Any]               # Section names, citation style, word limits
+    template_file: Optional[str]                 # Path to template file (.cls, .docx)
+    
+    # Step 3: Generate Structured Outline
+    paper_outline: Dict[str, Any]                # Section headings and bullet points
+    
+    # Step 4: Draft Sections Iteratively
+    drafted_sections: Dict[str, str]             # Section content keyed by section name
+    section_order: List[str]                     # Ordered list of sections
+    current_section: str                         # Currently being drafted
+    
+    # Step 5: Compile Full Draft
+    compiled_draft: str                          # Full assembled document
+    bibliography: List[Dict[str, Any]]           # Reference information
+    
+    # Step 6: Critique & Refine Loop
+    critique_feedback: List[Dict[str, Any]]      # Feedback from critique agent
+    revision_count: int                          # Number of revision iterations
+    draft_history: List[str]                     # Previous draft versions
+    final_document: Optional[str]                # Final compiled document
+
 class RouterState(TypedDict):
     """State object for the router agent."""
     messages: Annotated[List[BaseMessage], add_messages]
     original_prompt: str
-    routing_decision: str  # "model_suggestion" or "research_planning"
+    routing_decision: str  # "model_suggestion", "research_planning", or "paper_writing"
     routing_confidence: float
     routing_reasoning: str
     errors: List[str]
@@ -210,10 +241,11 @@ class MLResearcherLangGraph:
             self.arxiv_processor = None
             print(f"Loading ArXiv paper processor failed: {e}")
 
-        # Build the three workflows
+        # Build the four workflows
         self.router_graph = self._build_router_graph()
         self.model_suggestion_graph = self._build_model_suggestion_graph()
         self.research_planning_graph = self._build_research_planning_graph()
+        self.paper_writing_graph = self._build_paper_writing_graph()
     
     def _load_from_env_file(self, key: str) -> Optional[str]:
         """Load configuration value from env.example file."""
@@ -353,6 +385,40 @@ class MLResearcherLangGraph:
         
         return workflow.compile()
     
+    def _build_paper_writing_graph(self) -> StateGraph:
+        """🆕 Build the simplified paper writing workflow (no critique loop)."""
+        workflow = StateGraph(PaperWritingState)
+        
+        # Add nodes for the simplified 5-step paper writing pipeline
+        workflow.add_node("structure_inputs", self._structure_inputs_node)
+        workflow.add_node("select_template", self._select_template_node)
+        workflow.add_node("generate_outline", self._generate_outline_node)
+        workflow.add_node("draft_sections", self._draft_sections_node)
+        workflow.add_node("compile_draft", self._compile_draft_node)
+        workflow.add_node("finalize_paper", self._finalize_paper_node)
+        
+        # Define the simplified flow
+        workflow.set_entry_point("structure_inputs")
+        workflow.add_edge("structure_inputs", "select_template")
+        workflow.add_edge("select_template", "generate_outline")
+        workflow.add_edge("generate_outline", "draft_sections")
+        
+        # After drafting sections, check if all sections are complete
+        workflow.add_conditional_edges(
+            "draft_sections",
+            self._sections_complete_check,
+            {
+                "continue_drafting": "draft_sections",  # More sections to draft
+                "compile": "compile_draft"              # All sections ready
+            }
+        )
+        
+        # Skip critique - go directly from compilation to finalization
+        workflow.add_edge("compile_draft", "finalize_paper")
+        workflow.add_edge("finalize_paper", END)
+        
+        return workflow.compile()
+    
     async def _route_request_node(self, state: RouterState) -> RouterState:
         """Router node to decide which workflow to use based on user prompt."""
         print("\n🤖 Router: Analyzing user request to determine workflow...")
@@ -382,14 +448,26 @@ class MLResearcherLangGraph:
                    - Research gap identification
                    - Academic research planning
 
+                3. **PAPER_WRITING**: For requests asking about:
+                   - "How to compile a report of our work?"
+                   - "Generate a paper from experimental results"
+                   - "Write up research findings"
+                   - "Create academic paper from data"
+                   - "Compile research into publication format"
+                   - "Draft paper using conference template"
+                   - Converting research work to publication
+
                 Analyze the user's request and respond with a JSON object containing:
                 {{
-                    "workflow": "MODEL_SUGGESTION" or "RESEARCH_PLANNING",
+                    "workflow": "MODEL_SUGGESTION" or "RESEARCH_PLANNING" or "PAPER_WRITING",
                     "confidence": 0.0-1.0,
                     "reasoning": "Brief explanation of why this workflow was chosen"
                 }}
 
-                Consider the intent and focus of the request. If the user wants practical implementation advice, choose MODEL_SUGGESTION. If they want to understand research gaps and plan academic research, choose RESEARCH_PLANNING.
+                Consider the intent and focus of the request:
+                - For practical implementation advice, choose MODEL_SUGGESTION
+                - For research gap identification and planning, choose RESEARCH_PLANNING  
+                - For converting existing work/results into academic papers, choose PAPER_WRITING
 
                 Return only the JSON object, no additional text.
             """
@@ -426,6 +504,8 @@ class MLResearcherLangGraph:
                     workflow_decision = "model_suggestion"
                 elif workflow_decision.upper() in ["RESEARCH_PLANNING", "RESEARCH_PLAN"]:
                     workflow_decision = "research_planning"
+                elif workflow_decision.upper() in ["PAPER_WRITING", "PAPER_WRITE"]:
+                    workflow_decision = "paper_writing"
                 else:
                     workflow_decision = "model_suggestion"  # Default fallback
                 
@@ -3754,6 +3834,69 @@ Provide the complete refined research plan:
         
         return cleaned
 
+    async def write_paper(self, prompt: str, experimental_data: Dict[str, Any] = None, 
+                          figures: List[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """🆕 Generate academic paper from experimental results and analysis."""
+        print(f"📝 Writing paper from: {prompt}")
+        print("=" * 50)
+        
+        # Initialize paper writing state
+        paper_state: PaperWritingState = {
+            "messages": [HumanMessage(content=prompt)],
+            "original_prompt": prompt,
+            "experimental_results": experimental_data or {},
+            "figures_plots": figures or [],
+            "user_analysis": prompt,
+            "structured_narrative": {},
+            "target_venue": "",
+            "template_rules": {},
+            "template_file": None,
+            "paper_outline": {},
+            "drafted_sections": {},
+            "section_order": [],
+            "current_section": "",
+            "compiled_draft": "",
+            "bibliography": [],
+            "critique_feedback": [],
+            "revision_count": 0,
+            "draft_history": [],
+            "final_document": None,
+            "current_step": "",
+            "errors": [],
+            "workflow_type": "paper_writing"
+        }
+        
+        # Run the paper writing workflow
+        final_state = await self.paper_writing_graph.ainvoke(paper_state)
+        
+        # Return structured results
+        return {
+            "success": True,
+            "workflow_used": "Paper Writing Pipeline",
+            "paper_narrative": final_state["structured_narrative"],
+            "template_info": {
+                "venue": final_state["target_venue"],
+                "rules": final_state["template_rules"]
+            },
+            "paper_outline": final_state["paper_outline"],
+            "drafted_sections": final_state["drafted_sections"],
+            "compiled_draft": final_state["compiled_draft"],
+            "final_document": final_state["final_document"],
+            "critique_feedback": final_state["critique_feedback"],
+            "bibliography": final_state["bibliography"],
+            "errors": final_state["errors"],
+            "summary": {
+                "narrative_successful": bool(final_state["structured_narrative"]),
+                "template_selected": bool(final_state["target_venue"]),
+                "outline_generated": bool(final_state["paper_outline"]),
+                "sections_drafted": len(final_state["drafted_sections"]),
+                "compilation_successful": bool(final_state["compiled_draft"]),
+                "critique_rounds": len(final_state["critique_feedback"]),
+                "final_document_ready": bool(final_state["final_document"]),
+                "total_errors": len(final_state["errors"])
+            }
+        }
+
     async def analyze_research_task(self, prompt: str) -> Dict[str, Any]:
         """Main method to analyze a research task using multi-workflow LangGraph architecture."""
         print(f"🔍 Analyzing research task: {prompt}")
@@ -3843,29 +3986,136 @@ Provide the complete refined research plan:
                 }
             }
             
-        else:  # research_planning
-            print("\n📋 STEP 2: EXECUTING RESEARCH PLANNING WORKFLOW")
-            print("=" * 50)
+        else:  # research_planning or paper_writing
+            if workflow_decision == "research_planning":
+                print("\n📋 STEP 2: EXECUTING RESEARCH PLANNING WORKFLOW")
+                print("=" * 50)
+                
+                # Initialize research planning state
+                research_state: ResearchPlanningState = {
+                    "messages": [HumanMessage(content=prompt)],
+                    "original_prompt": prompt,
+                    "generated_problems": [],
+                    "validated_problems": [],
+                    "current_problem": {},
+                    "validation_results": {},
+                    "selected_problem": {},
+                    "iteration_count": 0,
+                    "research_plan": {},
+                    "critique_results": {},
+                    "critique_score_history": [],
+                    "refinement_count": 0,
+                    "previous_plans": [],
+                    "rejection_feedback": [],
+                    "generation_attempts": 0,
+                    "feedback_context": "",
+                    "current_step": "",
+                    "errors": [],
+                    "workflow_type": "research_planning"
+                }
+                
+                # Run the research planning workflow
+                final_research_state = await self.research_planning_graph.ainvoke(research_state)
+                
+                # Compile results
+                
+            elif workflow_decision == "paper_writing":
+                print("\n📝 STEP 2: EXECUTING PAPER WRITING WORKFLOW")
+                print("=" * 50)
+                
+                # Initialize paper writing state
+                paper_state: PaperWritingState = {
+                    "messages": [HumanMessage(content=prompt)],
+                    "original_prompt": prompt,
+                    "experimental_results": {},
+                    "figures_plots": [],
+                    "user_analysis": prompt,  # Start with user's request as initial analysis
+                    "structured_narrative": {},
+                    "target_venue": "",
+                    "template_rules": {},
+                    "template_file": None,
+                    "paper_outline": {},
+                    "drafted_sections": {},
+                    "section_order": [],
+                    "current_section": "",
+                    "compiled_draft": "",
+                    "bibliography": [],
+                    "critique_feedback": [],
+                    "revision_count": 0,
+                    "draft_history": [],
+                    "final_document": None,
+                    "current_step": "",
+                    "errors": [],
+                    "workflow_type": "paper_writing"
+                }
+                
+                # Run the paper writing workflow
+                final_paper_state = await self.paper_writing_graph.ainvoke(paper_state)
+                
+                # Compile results
+                result = {
+                    "success": True,
+                    "routing": {
+                        "decision": final_router_state["routing_decision"],
+                        "confidence": final_router_state["routing_confidence"], 
+                        "reasoning": final_router_state["routing_reasoning"]
+                    },
+                    "paper_narrative": final_paper_state["structured_narrative"],
+                    "template_info": {
+                        "venue": final_paper_state["target_venue"],
+                        "rules": final_paper_state["template_rules"]
+                    },
+                    "paper_outline": final_paper_state["paper_outline"],
+                    "drafted_sections": final_paper_state["drafted_sections"],
+                    "compiled_draft": final_paper_state["compiled_draft"],
+                    "final_document": final_paper_state["final_document"],
+                    "critique_feedback": final_paper_state["critique_feedback"],
+                    "bibliography": final_paper_state["bibliography"],
+                    "errors": final_router_state["errors"] + final_paper_state["errors"],
+                    "summary": {
+                        "workflow_used": "Paper Writing Pipeline",
+                        "narrative_successful": bool(final_paper_state["structured_narrative"]),
+                        "template_selected": bool(final_paper_state["target_venue"]),
+                        "outline_generated": bool(final_paper_state["paper_outline"]),
+                        "sections_drafted": len(final_paper_state["drafted_sections"]),
+                        "compilation_successful": bool(final_paper_state["compiled_draft"]),
+                        "critique_rounds": len(final_paper_state["critique_feedback"]),
+                        "final_document_ready": bool(final_paper_state["final_document"]),
+                        "total_errors": len(final_router_state["errors"]) + len(final_paper_state["errors"])
+                    }
+                }
+                
+                return result
             
-            # Initialize research planning state
-            research_state: ResearchPlanningState = {
-                "messages": [HumanMessage(content=prompt)],
-                "original_prompt": prompt,
-                "generated_problems": [],
-                "validated_problems": [],
-                "current_problem": {},
-                "validation_results": {},
-                "iteration_count": 0,
-                "research_plan": {},
-                "current_step": "",
-                "errors": [],
-                "workflow_type": "research_planning"
-            }
-            
-            # Run the research planning workflow
-            final_research_state = await self.research_planning_graph.ainvoke(research_state)
-            
-            # Compile results
+            else:  # Default to research_planning
+                print("\n📋 STEP 2: EXECUTING RESEARCH PLANNING WORKFLOW (DEFAULT)")
+                print("=" * 50)
+                
+                # Initialize research planning state
+                research_state: ResearchPlanningState = {
+                    "messages": [HumanMessage(content=prompt)],
+                    "original_prompt": prompt,
+                    "generated_problems": [],
+                    "validated_problems": [],
+                    "current_problem": {},
+                    "validation_results": {},
+                    "selected_problem": {},
+                    "iteration_count": 0,
+                    "research_plan": {},
+                    "critique_results": {},
+                    "critique_score_history": [],
+                    "refinement_count": 0,
+                    "previous_plans": [],
+                    "rejection_feedback": [],
+                    "generation_attempts": 0,
+                    "feedback_context": "",
+                    "current_step": "",
+                    "errors": [],
+                    "workflow_type": "research_planning"
+                }
+                
+                # Run the research planning workflow
+                final_research_state = await self.research_planning_graph.ainvoke(research_state)
             results = {
                 "workflow_type": "research_planning",
                 "router_decision": {
@@ -3946,6 +4196,550 @@ Provide the complete refined research plan:
         else:
             return "continue_generation"
     
+    # ================================================================================
+    # 🆕 PAPER WRITING WORKFLOW NODES
+    # ================================================================================
+    
+    async def _structure_inputs_node(self, state: PaperWritingState) -> PaperWritingState:
+        """Step 1: Structure inputs and define key narrative."""
+        print("\n📊 Step 1: Structuring inputs and defining key narrative...")
+        
+        try:
+            content = f"""
+            You are an expert academic research assistant helping structure experimental data for paper writing.
+            
+            User's Request: "{state["original_prompt"]}"
+            User Analysis: "{state["user_analysis"]}"
+            
+            Based on the user's request, help structure the research narrative by identifying:
+            
+            1. **Main Claim/Hypothesis**: What is the core contribution or claim?
+            2. **Key Findings**: What are the most important results from the data?
+            3. **Research Story**: What narrative do the results tell?
+            4. **Figure Descriptions**: What figures/tables would best illustrate the findings?
+            5. **Limitations**: What are the main limitations of this work?
+            
+            Respond with a JSON object containing:
+            {{
+                "main_hypothesis": "The core research claim",
+                "key_findings": ["Finding 1", "Finding 2", "Finding 3"],
+                "research_story": "The narrative that connects hypothesis to findings",
+                "suggested_figures": [
+                    {{"title": "Figure title", "description": "What it shows", "type": "plot/table/diagram"}},
+                ],
+                "limitations": ["Limitation 1", "Limitation 2"],
+                "data_requirements": "What experimental data would be needed"
+            }}
+            
+            Return only the JSON object.
+            """
+            
+            response = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: self.client.chat.completions.create(
+                    model=self.model,
+                    temperature=0.1,
+                    messages=[{"content": content, "role": "user"}]
+                )
+            )
+            
+            response_text = response.choices[0].message.content.strip()
+            
+            # Parse JSON response
+            if response_text.startswith("```json"):
+                response_text = response_text[7:]
+            if response_text.endswith("```"):
+                response_text = response_text[:-3]
+            response_text = response_text.strip()
+            
+            narrative_data = json.loads(response_text)
+            
+            state["structured_narrative"] = narrative_data
+            state["current_step"] = "inputs_structured"
+            
+            print(f"✅ Structured narrative with hypothesis: {narrative_data.get('main_hypothesis', 'N/A')[:100]}...")
+            print(f"📊 Identified {len(narrative_data.get('key_findings', []))} key findings")
+            
+        except Exception as e:
+            error_msg = f"Failed to structure inputs: {str(e)}"
+            state["errors"].append(error_msg)
+            print(f"❌ {error_msg}")
+        
+        return state
+    
+    async def _select_template_node(self, state: PaperWritingState) -> PaperWritingState:
+        """Step 2: Select target venue and template."""
+        print("\n📋 Step 2: Selecting target venue and template...")
+        
+        try:
+            content = f"""
+            You are an expert academic publishing assistant. Based on the research described below, recommend the most appropriate publication venue and template rules.
+            
+            Research Summary:
+            - Hypothesis: {state["structured_narrative"].get("main_hypothesis", "Not specified")}
+            - Key Findings: {state["structured_narrative"].get("key_findings", [])}
+            - Research Story: {state["structured_narrative"].get("research_story", "Not specified")}
+            
+            Consider these popular venues and their characteristics:
+            - **NeurIPS**: Machine learning advances, 8-page limit, LaTeX
+            - **ICML**: Machine learning research, 8-page limit, LaTeX  
+            - **ICLR**: Deep learning focus, OpenReview format
+            - **AAAI**: AI applications, 7-page limit
+            - **IEEE**: Engineering focus, 2-column format
+            - **Nature/Science**: High-impact, very selective, ~3000 words
+            - **JMLR**: Theoretical ML, no page limit
+            - **ACL**: NLP focus, 8-page limit
+            
+            Respond with JSON:
+            {{
+                "recommended_venue": "Venue name",
+                "venue_reasoning": "Why this venue fits",
+                "template_rules": {{
+                    "page_limit": 8,
+                    "format": "LaTeX/Word",
+                    "citation_style": "Author-year/Numbered",
+                    "section_structure": ["Abstract", "Introduction", "Methods", "Results", "Discussion", "Conclusion"],
+                    "special_requirements": ["Any special formatting rules"]
+                }},
+                "alternative_venues": ["Alternative 1", "Alternative 2"]
+            }}
+            """
+            
+            response = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: self.client.chat.completions.create(
+                    model=self.model,
+                    temperature=0.1,
+                    messages=[{"content": content, "role": "user"}]
+                )
+            )
+            
+            response_text = response.choices[0].message.content.strip()
+            
+            # Parse JSON response
+            if response_text.startswith("```json"):
+                response_text = response_text[7:]
+            if response_text.endswith("```"):
+                response_text = response_text[:-3]
+            response_text = response_text.strip()
+            
+            template_data = json.loads(response_text)
+            
+            state["target_venue"] = template_data.get("recommended_venue", "Generic Conference")
+            state["template_rules"] = template_data.get("template_rules", {})
+            state["current_step"] = "template_selected"
+            
+            print(f"✅ Selected venue: {state['target_venue']}")
+            print(f"📄 Template format: {state['template_rules'].get('format', 'Unknown')}")
+            
+        except Exception as e:
+            error_msg = f"Failed to select template: {str(e)}"
+            state["errors"].append(error_msg)
+            print(f"❌ {error_msg}")
+            
+            # Default template
+            state["target_venue"] = "Generic Academic Conference"
+            state["template_rules"] = {
+                "page_limit": 8,
+                "format": "LaTeX",
+                "citation_style": "Author-year",
+                "section_structure": ["Abstract", "Introduction", "Methods", "Results", "Discussion", "Conclusion"]
+            }
+        
+        return state
+    
+    async def _generate_outline_node(self, state: PaperWritingState) -> PaperWritingState:
+        """Step 3: Generate structured outline."""
+        print("\n📝 Step 3: Generating structured outline...")
+        
+        try:
+            template_sections = state["template_rules"].get("section_structure", 
+                ["Abstract", "Introduction", "Methods", "Results", "Discussion", "Conclusion"])
+            
+            content = f"""
+            You are an expert academic writer creating a detailed paper outline.
+            
+            Research Details:
+            - Venue: {state["target_venue"]}
+            - Hypothesis: {state["structured_narrative"].get("main_hypothesis", "")}
+            - Key Findings: {state["structured_narrative"].get("key_findings", [])}
+            - Story: {state["structured_narrative"].get("research_story", "")}
+            
+            Template Requirements:
+            - Sections: {template_sections}
+            - Page Limit: {state["template_rules"].get("page_limit", "Not specified")}
+            - Format: {state["template_rules"].get("format", "LaTeX")}
+            
+            Create a detailed outline with specific content for each section. For each section, provide:
+            1. Key points to cover
+            2. Approximate word count
+            3. Specific content guidance
+            
+            Respond with JSON:
+            {{
+                "outline": {{
+                    "Abstract": {{
+                        "key_points": ["Point 1", "Point 2"],
+                        "word_count": 200,
+                        "content_guidance": "Specific guidance for this section"
+                    }},
+                    "Introduction": {{...}},
+                    ...
+                }},
+                "total_estimated_words": 6000,
+                "writing_priorities": ["Which sections to focus on first"]
+            }}
+            """
+            
+            response = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: self.client.chat.completions.create(
+                    model=self.model,
+                    temperature=0.1,
+                    messages=[{"content": content, "role": "user"}]
+                )
+            )
+            
+            response_text = response.choices[0].message.content.strip()
+            
+            # Parse JSON response
+            if response_text.startswith("```json"):
+                response_text = response_text[7:]
+            if response_text.endswith("```"):
+                response_text = response_text[:-3]
+            response_text = response_text.strip()
+            
+            outline_data = json.loads(response_text)
+            
+            state["paper_outline"] = outline_data.get("outline", {})
+            state["section_order"] = list(state["paper_outline"].keys())
+            state["current_step"] = "outline_generated"
+            
+            print(f"✅ Generated outline with {len(state['section_order'])} sections")
+            print(f"📊 Estimated total words: {outline_data.get('total_estimated_words', 'Unknown')}")
+            
+        except Exception as e:
+            error_msg = f"Failed to generate outline: {str(e)}"
+            state["errors"].append(error_msg)
+            print(f"❌ {error_msg}")
+        
+        return state
+    
+    async def _draft_sections_node(self, state: PaperWritingState) -> PaperWritingState:
+        """Step 4: Draft sections iteratively."""
+        if not state["current_section"]:
+            # Start with the first undrafted section
+            for section in state["section_order"]:
+                if section not in state["drafted_sections"]:
+                    state["current_section"] = section
+                    break
+        
+        if not state["current_section"]:
+            print("✅ All sections already drafted")
+            return state
+            
+        section = state["current_section"]
+        print(f"\n✍️  Step 4: Drafting section '{section}'...")
+        
+        try:
+            section_outline = state["paper_outline"].get(section, {})
+            
+            content = f"""
+            You are an expert academic writer drafting the {section} section of a research paper.
+            
+            Paper Context:
+            - Venue: {state["target_venue"]}
+            - Hypothesis: {state["structured_narrative"].get("main_hypothesis", "")}
+            - Key Findings: {state["structured_narrative"].get("key_findings", [])}
+            
+            Section Outline:
+            - Key Points: {section_outline.get("key_points", [])}
+            - Target Words: {section_outline.get("word_count", "Not specified")}
+            - Guidance: {section_outline.get("content_guidance", "")}
+            
+            Other Drafted Sections (for context):
+            {chr(10).join([f"- {sec}: {content[:100]}..." for sec, content in state["drafted_sections"].items()])}
+            
+            Write a complete, well-structured {section} section that:
+            1. Follows academic writing standards
+            2. Integrates seamlessly with other sections
+            3. Meets the target word count
+            4. Uses appropriate technical language
+            5. Includes placeholder citations where needed (e.g., [1], [2])
+            
+            Return only the section content, no additional formatting or explanations.
+            """
+            
+            response = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: self.client.chat.completions.create(
+                    model=self.model,
+                    temperature=0.2,
+                    messages=[{"content": content, "role": "user"}]
+                )
+            )
+            
+            section_content = response.choices[0].message.content.strip()
+            
+            state["drafted_sections"][section] = section_content
+            
+            # Move to next section
+            current_index = state["section_order"].index(section)
+            if current_index + 1 < len(state["section_order"]):
+                next_section = state["section_order"][current_index + 1]
+                if next_section not in state["drafted_sections"]:
+                    state["current_section"] = next_section
+                else:
+                    state["current_section"] = ""
+            else:
+                state["current_section"] = ""
+            
+            print(f"✅ Drafted {section} section ({len(section_content)} characters)")
+            
+        except Exception as e:
+            error_msg = f"Failed to draft {section} section: {str(e)}"
+            state["errors"].append(error_msg)
+            print(f"❌ {error_msg}")
+        
+        return state
+    
+    async def _compile_draft_node(self, state: PaperWritingState) -> PaperWritingState:
+        """Step 5: Compile full draft in target format."""
+        print("\n📑 Step 5: Compiling full draft...")
+        
+        try:
+            # Compile sections in order
+            compiled_sections = []
+            
+            for section in state["section_order"]:
+                if section in state["drafted_sections"]:
+                    compiled_sections.append(f"\n\n## {section}\n\n{state['drafted_sections'][section]}")
+                else:
+                    compiled_sections.append(f"\n\n## {section}\n\n[Section not yet drafted]")
+            
+            # Add title and metadata
+            title = f"Research Paper: {state['structured_narrative'].get('main_hypothesis', 'Untitled')[:100]}"
+            
+            compiled_draft = f"""# {title}
+
+**Target Venue**: {state['target_venue']}
+**Format**: {state['template_rules'].get('format', 'LaTeX')}
+**Page Limit**: {state['template_rules'].get('page_limit', 'Not specified')} pages
+
+{''.join(compiled_sections)}
+
+## References
+
+[1] Placeholder reference 1
+[2] Placeholder reference 2
+[3] Placeholder reference 3
+
+---
+*Draft compiled automatically. References need to be populated with actual citations.*
+"""
+            
+            state["compiled_draft"] = compiled_draft
+            state["current_step"] = "draft_compiled"
+            
+            # Store in draft history
+            state["draft_history"].append(compiled_draft)
+            
+            print(f"✅ Compiled full draft ({len(compiled_draft)} characters)")
+            print(f"📄 Sections included: {len([s for s in state['section_order'] if s in state['drafted_sections']])}/{len(state['section_order'])}")
+            
+        except Exception as e:
+            error_msg = f"Failed to compile draft: {str(e)}"
+            state["errors"].append(error_msg)
+            print(f"❌ {error_msg}")
+        
+        return state
+    
+    async def _critique_paper_node(self, state: PaperWritingState) -> PaperWritingState:
+        """Step 6: Critique and analyze the paper draft."""
+        print("\n🔍 Step 6: Critiquing paper draft...")
+        
+        try:
+            content = f"""
+            You are an expert academic peer reviewer evaluating this research paper draft.
+            
+            Paper Title: {state['structured_narrative'].get('main_hypothesis', 'Untitled')[:100]}
+            Target Venue: {state['target_venue']}
+            
+            Paper Draft:
+            {state['compiled_draft']}
+            
+            Evaluate the paper on these dimensions (score 1-10):
+            1. **Clarity and Flow**: Is the narrative clear and logical?
+            2. **Technical Rigor**: Are methods and results technically sound?
+            3. **Novelty**: Does it present novel contributions?
+            4. **Completeness**: Are all necessary sections well-developed?
+            5. **Writing Quality**: Is it well-written and professional?
+            6. **Venue Fit**: Does it match the target venue's scope?
+            
+            For each issue found, provide:
+            - **Severity**: critical/major/minor
+            - **Section**: Which section has the issue
+            - **Description**: What the problem is
+            - **Suggestion**: How to fix it
+            
+            Respond with JSON:
+            {{
+                "overall_score": 7.5,
+                "dimension_scores": {{
+                    "clarity_flow": 8,
+                    "technical_rigor": 7,
+                    "novelty": 6,
+                    "completeness": 8,
+                    "writing_quality": 7,
+                    "venue_fit": 8
+                }},
+                "issues": [
+                    {{
+                        "severity": "major",
+                        "section": "Methods",
+                        "description": "Problem description",
+                        "suggestion": "How to fix"
+                    }}
+                ],
+                "strengths": ["Strength 1", "Strength 2"],
+                "recommendation": "accept/revise/reject",
+                "revision_priority": "sections/compilation/finalize"
+            }}
+            """
+            
+            response = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: self.client.chat.completions.create(
+                    model=self.model,
+                    temperature=0.1,
+                    messages=[{"content": content, "role": "user"}]
+                )
+            )
+            
+            response_text = response.choices[0].message.content.strip()
+            
+            # Parse JSON response
+            if response_text.startswith("```json"):
+                response_text = response_text[7:]
+            if response_text.endswith("```"):
+                response_text = response_text[:-3]
+            response_text = response_text.strip()
+            
+            critique_data = json.loads(response_text)
+            
+            state["critique_feedback"].append(critique_data)
+            state["current_step"] = "paper_critiqued"
+            
+            print(f"✅ Paper critique completed")
+            print(f"📊 Overall score: {critique_data.get('overall_score', 'N/A')}/10")
+            print(f"⚠️  Issues found: {len(critique_data.get('issues', []))}")
+            print(f"📋 Recommendation: {critique_data.get('recommendation', 'N/A')}")
+            
+        except Exception as e:
+            error_msg = f"Failed to critique paper: {str(e)}"
+            state["errors"].append(error_msg)
+            print(f"❌ {error_msg}")
+        
+        return state
+    
+    async def _revise_paper_node(self, state: PaperWritingState) -> PaperWritingState:
+        """Revise paper based on critique feedback."""
+        print("\n✏️  Revising paper based on feedback...")
+        
+        if not state["critique_feedback"]:
+            print("No critique feedback available for revision")
+            return state
+        
+        latest_critique = state["critique_feedback"][-1]
+        issues = latest_critique.get("issues", [])
+        
+        if not issues:
+            print("No specific issues to address")
+            return state
+        
+        state["revision_count"] += 1
+        
+        # Focus on critical and major issues first
+        critical_issues = [i for i in issues if i.get("severity") == "critical"]
+        major_issues = [i for i in issues if i.get("severity") == "major"]
+        priority_issues = critical_issues + major_issues
+        
+        if priority_issues:
+            print(f"Addressing {len(priority_issues)} priority issues...")
+            # Reset current_section to trigger re-drafting
+            state["current_section"] = priority_issues[0].get("section", "")
+        
+        return state
+    
+    async def _finalize_paper_node(self, state: PaperWritingState) -> PaperWritingState:
+        """Step 5: Finalize the paper and save to file."""
+        print("\n🎯 Step 5: Finalizing paper...")
+        
+        state["final_document"] = state["compiled_draft"]
+        state["current_step"] = "paper_finalized"
+        
+        # Save paper to file
+        import datetime
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"generated_paper_{timestamp}.md"
+        
+        try:
+            with open(filename, 'w', encoding='utf-8') as f:
+                f.write(state["final_document"])
+            print(f"💾 Paper saved to: {filename}")
+        except Exception as e:
+            print(f"⚠️  Could not save paper to file: {e}")
+        
+        print("✅ Paper finalized successfully!")
+        print(f"📄 Final document length: {len(state['final_document'])} characters")
+        print(f"� Sections drafted: {len(state['drafted_sections'])}")
+        
+        # Print preview of the paper
+        if state["final_document"]:
+            print("\n📖 Paper Preview (first 500 characters):")
+            print("-" * 50)
+            print(state["final_document"][:500] + "...")
+            print("-" * 50)
+        
+        return state
+    
+    # Paper writing workflow decision functions
+    def _sections_complete_check(self, state: PaperWritingState) -> str:
+        """Check if all sections have been drafted."""
+        drafted_count = len(state["drafted_sections"])
+        total_count = len(state["section_order"])
+        
+        if drafted_count < total_count:
+            return "continue_drafting"
+        else:
+            return "compile"
+    
+    def _paper_revision_decision(self, state: PaperWritingState) -> str:
+        """Decide whether to revise sections, recompile, or finalize."""
+        if not state["critique_feedback"]:
+            return "finalize"
+        
+        latest_critique = state["critique_feedback"][-1]
+        overall_score = latest_critique.get("overall_score", 0)
+        issues = latest_critique.get("issues", [])
+        
+        # Check for critical issues
+        critical_issues = [i for i in issues if i.get("severity") == "critical"]
+        if critical_issues:
+            return "revise_sections"
+        
+        # Check for major issues
+        major_issues = [i for i in issues if i.get("severity") == "major"]
+        if major_issues and state["revision_count"] < 3:
+            return "revise_sections"
+        
+        # Check overall score
+        if overall_score < 7.0 and state["revision_count"] < 2:
+            return "revise_compilation"
+        
+        # Otherwise finalize
+        return "finalize"
+
     async def interactive_mode(self):
         """Run the tool in interactive mode."""
         print("🔬 ML Research Task Analyzer (Multi-Workflow LangGraph Version)")
@@ -4000,19 +4794,44 @@ Provide the complete refined research plan:
                 print(f"❌ An error occurred: {str(e)}")
 
 
+class MLResearcherTool:
+    """🆕 Simplified wrapper for easy access to all workflows."""
+    
+    def __init__(self):
+        """Initialize the comprehensive ML research tool."""
+        self.core = MLResearcherLangGraph()
+    
+    async def suggest_models(self, prompt: str) -> Dict[str, Any]:
+        """Get model suggestions for a research task."""
+        return await self.core.analyze_research_task(prompt)
+    
+    async def plan_research(self, prompt: str) -> Dict[str, Any]:
+        """Generate research plans and identify open problems.""" 
+        return await self.core.analyze_research_task(prompt)
+    
+    async def write_paper(self, prompt: str, experimental_data: Dict[str, Any] = None, 
+                          figures: List[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """🆕 Generate academic paper from experimental results."""
+        return await self.core.write_paper(prompt, experimental_data, figures)
+    
+    async def analyze_task(self, prompt: str) -> Dict[str, Any]:
+        """Analyze any research task using intelligent routing."""
+        return await self.core.analyze_research_task(prompt)
+
+
 async def main():
     """Main function to run the ML Researcher Tool."""
     try:
-        tool = MLResearcherLangGraph()
+        tool = MLResearcherTool()
         
         if len(sys.argv) > 1:
             # Command line mode
             prompt = " ".join(sys.argv[1:])
-            results = await tool.analyze_research_task(prompt)
+            results = await tool.analyze_task(prompt)
             print("\n" + json.dumps(results, indent=2))
         else:
             # Interactive mode
-            await tool.interactive_mode()
+            await tool.core.interactive_mode()
     
     except Exception as e:
         print(f"❌ Failed to initialize ML Researcher Tool: {str(e)}")
