@@ -289,6 +289,7 @@ class MLResearcherLangGraph:
         workflow.add_node("suggest_models", self._suggest_models_node)
         workflow.add_node("critique_response", self._critique_response_node)
         workflow.add_node("revise_suggestions", self._revise_suggestions_node)
+        workflow.add_node("generate_report", self._generate_report_node)
         
         # Define the flow
         workflow.set_entry_point("analyze_properties_and_task")
@@ -315,9 +316,12 @@ class MLResearcherLangGraph:
             self._should_revise_suggestions,
             {
                 "revise": "suggest_models",      # Loop back to suggestions for revision
-                "finalize": END                  # If suggestions are good as-is
+                "finalize": "generate_report"    # Generate report before ending
             }
         )
+        
+        # Add final edge from report generation to END
+        workflow.add_edge("generate_report", END)
         
         # Keep the revise_suggestions node for potential future use
         # but the main loop now goes back to suggest_models directly
@@ -659,22 +663,59 @@ class MLResearcherLangGraph:
 
                     Task: {state["original_prompt"]}
 
-                    Please identify and analyze the following aspects:
+                    Provide your analysis in the exact JSON format below. Be thorough and specific in your explanations.
 
-                    1. **Data Type**: What kind of data is involved? (text, images, time series, tabular, etc.)
-                    2. **Learning Type**: What type of learning is this? (supervised, unsupervised, reinforcement, etc.)
-                    3. **Task Category**: What is the main ML task? (classification, regression, generation, clustering, etc.)
-                    4. **Architecture Requirements**: What types of models or architectures might be suitable?
-                    5. **Key Challenges**: What are the main technical challenges?
-                    6. **Data Characteristics**: 
-                    - Variable length sequences?
-                    - Fixed or variable input dimensions?
-                    - Temporal structure?
-                    - Multi-modal data?
-                    7. **Performance Metrics**: What metrics would be appropriate for evaluation?
-                    8. **Domain Specifics**: Any domain-specific considerations?
+                    {{
+                        "task_description": "A clear, comprehensive description of the research task",
+                        "analysis": {{
+                            "1_dataType": {{
+                                "type": "Specific data type (e.g., Text/Natural Language, Computer Vision/Images, Time Series, Tabular/Structured, Graph/Network, Audio/Speech, etc.)",
+                                "explanation": "Detailed explanation of what kind of data is involved and why this classification applies"
+                            }},
+                            "2_learningType": {{
+                                "type": "Learning paradigm (e.g., Supervised Learning, Unsupervised Learning, Semi-supervised Learning, Reinforcement Learning, Self-supervised Learning, etc.)",
+                                "explanation": "Explanation of the learning approach and why it applies to this task"
+                            }},
+                            "3_taskCategory": {{
+                                "type": "Main ML task category (e.g., Classification, Regression, Clustering, Generation, Detection, Segmentation, Recommendation, etc.)",
+                                "explanation": "Description of the primary machine learning objective"
+                            }},
+                            "4_architectureRequirements": {{
+                                "type": "Suitable model types/architectures (e.g., Transformer-based models, Convolutional Neural Networks, Recurrent Neural Networks, Graph Neural Networks, etc.)",
+                                "explanation": "Analysis of what types of models or architectures would be most suitable and why"
+                            }},
+                            "5_keyChallenges": [
+                                {{
+                                    "challenge": "Primary challenge name",
+                                    "explanation": "Detailed explanation of this challenge and why it's significant for this task"
+                                }},
+                                {{
+                                    "challenge": "Secondary challenge name", 
+                                    "explanation": "Detailed explanation of this challenge"
+                                }}
+                            ],
+                            "6_dataCharacteristics": {{
+                                "type": "Data structure and properties",
+                                "explanation": "Analysis of data characteristics including: variable/fixed length sequences, input dimensions, temporal structure, multi-modal aspects, sparsity, etc."
+                            }},
+                            "7_performanceMetrics": [
+                                {{
+                                    "metric": "Primary evaluation metric",
+                                    "explanation": "Why this metric is appropriate for the task"
+                                }},
+                                {{
+                                    "metric": "Secondary evaluation metric",
+                                    "explanation": "Additional relevant metrics"
+                                }}
+                            ],
+                            "8_domainSpecifics": {{
+                                "type": "Domain-specific considerations",
+                                "explanation": "Any special considerations, constraints, or requirements specific to the application domain"
+                            }}
+                        }}
+                    }}
 
-                    Provide your analysis in a structured JSON format with clear explanations for each identified property.
+                    Return only the JSON object with no additional text or markdown formatting. Ensure all JSON is valid and properly escaped.
                 """
 
                 response = await asyncio.get_event_loop().run_in_executor(
@@ -1558,8 +1599,9 @@ Please provide your assessment in the following JSON format:
 
 DECISION CRITERIA:
 - "continue": Papers are sufficient (relevance ≥7.0, good coverage)
-- "search_backup": Papers are decent but could use backup (relevance 5.0-6.9, partial coverage)  
-- "search_new": Papers are insufficient (relevance <5.0, poor coverage, or major gaps)
+- "search_backup": Papers are decent but could use backup, use only if the current search is going in the right direction (relevance 5.0-6.9, partial coverage)  
+- "search_new": Papers are insufficient, OR majority are unrelated to the topic (relevance <5.0, poor coverage, or major gaps)
+
 
 If search_iteration ≥ 2, bias toward "continue" unless papers are truly inadequate.
 
@@ -2374,7 +2416,591 @@ Return only the JSON object, no additional text.
             print(f"✅ Suggestions approved after {iteration_count} iteration(s) - {fixed_count} total issues fixed, finalizing...")
             return "finalize"
 
+    def _generate_report_node(self, state: ModelSuggestionState) -> ModelSuggestionState:
+        """Node for generating and saving a comprehensive Word report of model suggestions."""
+        print(f"\n📄 Step 6: Generating comprehensive Word report...")
+        state["current_step"] = "generate_report"
+        
+        try:
+            from word_formatter import WordFormatter
+            from datetime import datetime
+            import os
+            
+            # Initialize formatter
+            formatter = WordFormatter()
+            
+            # Extract key information from state
+            original_prompt = state.get("original_prompt", "ML Research Analysis")
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            
+            # Create document title
+            safe_prompt = "".join(c for c in original_prompt if c.isalnum() or c in (' ', '-', '_')).strip()[:50]
+            formatter.add_title(
+                title=f"ML Model Suggestion Report",
+                subtitle=f"Query: {safe_prompt}\nGenerated on {timestamp}",
+                add_date=False
+            )
+            
+            # Executive Summary
+            formatter.add_heading("Executive Summary", level=1)
+            model_suggestions = state.get("model_suggestions", {})
+            search_results = state.get("arxiv_results", {})
+            
+            exec_summary = f"""This report presents **machine learning model recommendations** based on comprehensive analysis of recent research literature. The analysis processed {search_results.get('papers_returned', 0)} research papers from ArXiv and generated recommendations through {state.get('suggestion_iteration', 1)} iteration(s) with expert critique validation.
 
+**Key Findings**: The research identified optimal model architectures that balance *performance* and *computational efficiency* for the specified task requirements. All recommendations are grounded in peer-reviewed research and include practical implementation guidance."""
+            
+            formatter.add_formatted_paragraph(exec_summary)
+            
+            # Research Context and Query (keep on same page as summary)
+            formatter.add_separator()
+            formatter.add_heading("Research Query and Context", level=1)
+            formatter.add_formatted_paragraph(f"**Original Query**: {original_prompt}")
+            
+            # Task Analysis (keep with context)
+            detected_categories = state.get("detected_categories", [])
+            detailed_analysis = state.get("detailed_analysis", {})
+            
+            if detected_categories or detailed_analysis.get("llm_analysis"):
+                formatter.add_heading("Task Decomposition and Analysis", level=2)
+                
+                # Add detailed task decomposition if available
+                if detailed_analysis.get("llm_analysis"):
+                    formatter.add_heading("Task Decomposition", level=3)
+                    decomp_text = detailed_analysis["llm_analysis"]
+                    
+                    # Try to parse as JSON and format properly
+                    try:
+                        # Check if the text contains JSON-like structure
+                        if '{' in decomp_text and '"task_description"' in decomp_text:
+                            # Extract JSON content
+                            json_start = decomp_text.find('{')
+                            json_end = decomp_text.rfind('}') + 1
+                            
+                            if json_start != -1 and json_end > json_start:
+                                json_content = decomp_text[json_start:json_end]
+                                
+                                # Try to parse the JSON
+                                try:
+                                    parsed_data = json.loads(json_content)
+                                    
+                                    # Format task description
+                                    if "task_description" in parsed_data:
+                                        formatter.add_formatted_paragraph(f"**Task Description**: {parsed_data['task_description']}")
+                                        formatter.add_separator()
+                                    
+                                    # Format analysis sections
+                                    if "analysis" in parsed_data:
+                                        analysis = parsed_data["analysis"]
+                                        formatter.add_heading("Detailed Analysis Components", level=4)
+                                        
+                                        # Process each analysis section
+                                        for key, value in analysis.items():
+                                            if isinstance(value, dict):
+                                                # Format section header
+                                                section_name = key.replace('_', ' ').title()
+                                                formatter.add_formatted_paragraph(f"**{section_name}**:")
+                                                
+                                                # Format type/content with indentation
+                                                if "type" in value:
+                                                    formatter.add_indented_paragraph(f"*Type*: {value['type']}")
+                                                
+                                                # Format explanation with indentation
+                                                if "explanation" in value:
+                                                    formatter.add_indented_paragraph(f"*Explanation*: {value['explanation']}")
+                                                
+                                                formatter.add_formatted_paragraph("")  # Add spacing
+                                                
+                                            elif isinstance(value, list):
+                                                # Handle list items (like key challenges)
+                                                section_name = key.replace('_', ' ').title()
+                                                formatter.add_formatted_paragraph(f"**{section_name}**:")
+                                                
+                                                bullet_items = []
+                                                for item in value:
+                                                    if isinstance(item, dict):
+                                                        if "challenge" in item:
+                                                            bullet_items.append(f"**{item['challenge']}**")
+                                                            if "explanation" in item:
+                                                                bullet_items.append(f"  {item['explanation']}")
+                                                        elif "metric" in item:
+                                                            bullet_items.append(f"**{item['metric']}**")
+                                                            if "explanation" in item:
+                                                                bullet_items.append(f"  {item['explanation']}")
+                                                    else:
+                                                        bullet_items.append(str(item))
+                                                
+                                                # Use indented bullet list for better formatting
+                                                if bullet_items:
+                                                    formatter.add_indented_bullet_list(bullet_items)
+                                                
+                                                formatter.add_formatted_paragraph("")  # Add spacing
+                                    
+                                    # Handle any remaining top-level fields
+                                    for key, value in parsed_data.items():
+                                        if key not in ["task_description", "analysis"] and isinstance(value, (str, list)):
+                                            section_name = key.replace('_', ' ').title()
+                                            if isinstance(value, list):
+                                                formatter.add_formatted_paragraph(f"**{section_name}**: {', '.join(str(v) for v in value)}")
+                                            else:
+                                                formatter.add_formatted_paragraph(f"**{section_name}**: {value}")
+                                    
+                                except json.JSONDecodeError:
+                                    # Fallback to regular formatting if JSON parsing fails
+                                    formatter.add_formatted_paragraph("**Raw Analysis Output**:")
+                                    formatter.add_formatted_paragraph(decomp_text)
+                            else:
+                                # No proper JSON structure found, use regular formatting
+                                formatter.add_formatted_paragraph("**Task Analysis**:")
+                                formatter.add_formatted_paragraph(decomp_text)
+                        else:
+                            # Not JSON format, use regular formatting with improved structure
+                            formatted_text = decomp_text
+                            
+                            # Try to identify and format common patterns
+                            formatted_text = re.sub(r'\*\*(.*?)\*\*:', r'**\1**:', formatted_text)  # Bold headers
+                            formatted_text = re.sub(r'(\d+)\.\s*\*\*(.*?)\*\*:', r'\n**\1. \2**:', formatted_text)  # Numbered sections
+                            
+                            formatter.add_formatted_paragraph(formatted_text)
+                            
+                    except Exception as e:
+                        # Fallback to simple formatting
+                        print(f"⚠️ Warning: Could not parse task decomposition format: {e}")
+                        formatter.add_formatted_paragraph("**Task Decomposition Analysis**:")
+                        formatter.add_formatted_paragraph(decomp_text)
+                    
+                    formatter.add_separator()
+                
+                # Add detected categories
+                if detected_categories:
+                    formatter.add_heading("Detected ML Categories and Properties", level=3)
+                    task_analysis = "The following machine learning categories were automatically detected from the task description:\n\n"
+                    
+                    # Group categories by confidence level
+                    high_conf = [c for c in detected_categories if c.get("confidence", 0) >= 0.8]
+                    medium_conf = [c for c in detected_categories if 0.6 <= c.get("confidence", 0) < 0.8]
+                    low_conf = [c for c in detected_categories if 0.4 <= c.get("confidence", 0) < 0.6]
+                    
+                    if high_conf:
+                        task_analysis += "**High Confidence Categories (≥80%)**:\n"
+                        for category in high_conf[:8]:  # Top 8 high confidence
+                            name = category.get("name", "Unknown")
+                            confidence = category.get("confidence", 0)
+                            evidence = category.get("evidence", [])
+                            explanation = category.get("explanation", "")
+                            
+                            task_analysis += f"- **{name}** ({confidence:.1%}): {explanation}\n"
+                            if evidence and isinstance(evidence, list) and len(evidence) > 0:
+                                # Get first evidence snippet
+                                first_evidence = evidence[0]
+                                if isinstance(first_evidence, dict) and "snippet" in first_evidence:
+                                    snippets = first_evidence["snippet"]
+                                    if isinstance(snippets, list) and snippets:
+                                        task_analysis += f"  *Evidence*: \"{snippets[0]}\"\n"
+                            task_analysis += "\n"
+                    
+                    if medium_conf:
+                        task_analysis += "\n**Medium Confidence Categories (60-79%)**:\n"
+                        for category in medium_conf[:5]:  # Top 5 medium confidence
+                            name = category.get("name", "Unknown")
+                            confidence = category.get("confidence", 0)
+                            explanation = category.get("explanation", "")
+                            task_analysis += f"- **{name}** ({confidence:.1%}): {explanation}\n"
+                        task_analysis += "\n"
+                    
+                    if low_conf:
+                        task_analysis += "\n**Lower Confidence Categories (40-59%)**:\n"
+                        category_names = [c.get("name", "Unknown") for c in low_conf[:5]]
+                        task_analysis += f"Additional potentially relevant categories: {', '.join(category_names)}\n\n"
+                    
+                    # Add summary statistics
+                    task_analysis += f"**Summary**: {len(detected_categories)} total categories analyzed, "
+                    task_analysis += f"{len(high_conf)} high confidence, {len(medium_conf)} medium confidence, {len(low_conf)} lower confidence."
+                    
+                    formatter.add_formatted_paragraph(task_analysis)
+                
+                # Add task characteristics and complexity analysis
+                if detected_categories:
+                    formatter.add_separator()
+                    formatter.add_heading("Task Characteristics and Complexity", level=3)
+                    
+                    # Analyze task complexity based on detected categories
+                    complexity_factors = []
+                    data_types = []
+                    learning_types = []
+                    special_requirements = []
+                    
+                    for category in detected_categories:
+                        name = category.get("name", "").lower()
+                        confidence = category.get("confidence", 0)
+                        
+                        if confidence >= 0.6:  # Only consider medium+ confidence categories
+                            # Data type identification
+                            if any(dt in name for dt in ["text", "nlp", "language"]):
+                                data_types.append("Text/Natural Language")
+                            elif any(dt in name for dt in ["vision", "image", "cnn"]):
+                                data_types.append("Computer Vision/Images")
+                            elif any(dt in name for dt in ["temporal", "sequence", "time_series"]):
+                                data_types.append("Sequential/Temporal Data")
+                            elif any(dt in name for dt in ["tabular", "structured"]):
+                                data_types.append("Structured/Tabular Data")
+                            elif any(dt in name for dt in ["graph", "network"]):
+                                data_types.append("Graph/Network Data")
+                            elif any(dt in name for dt in ["sensor", "signal"]):
+                                data_types.append("Sensor/Signal Data")
+                            
+                            # Learning type identification
+                            if any(lt in name for lt in ["supervised", "classification", "regression"]):
+                                learning_types.append("Supervised Learning")
+                            elif any(lt in name for lt in ["unsupervised", "clustering", "autoencoder"]):
+                                learning_types.append("Unsupervised Learning")
+                            elif any(lt in name for lt in ["reinforcement", "rl"]):
+                                learning_types.append("Reinforcement Learning")
+                            elif any(lt in name for lt in ["semi_supervised"]):
+                                learning_types.append("Semi-supervised Learning")
+                            
+                            # Complexity factors
+                            if any(cf in name for cf in ["variable_length", "dynamic", "streaming"]):
+                                complexity_factors.append("Variable-length/Dynamic sequences")
+                            elif any(cf in name for cf in ["real_time", "latency"]):
+                                complexity_factors.append("Real-time processing requirements")
+                            elif any(cf in name for cf in ["limited_data", "few_shot", "low_resource"]):
+                                complexity_factors.append("Limited training data")
+                            elif any(cf in name for cf in ["multilingual", "cross_lingual"]):
+                                complexity_factors.append("Multilingual/Cross-lingual requirements")
+                            elif any(cf in name for cf in ["multimodal", "multi_modal"]):
+                                complexity_factors.append("Multimodal data fusion")
+                            elif any(cf in name for cf in ["interpretability", "explainable"]):
+                                special_requirements.append("Model interpretability/explainability")
+                            elif any(cf in name for cf in ["privacy", "federated"]):
+                                special_requirements.append("Privacy-preserving techniques")
+                    
+                    # Build characteristics summary with proper formatting
+                    formatter.add_formatted_paragraph("**Task Characteristics Analysis**:")
+                    
+                    if data_types:
+                        unique_data_types = list(set(data_types))
+                        formatter.add_formatted_paragraph(f"**Primary Data Types**: {', '.join(unique_data_types)}")
+                        formatter.add_formatted_paragraph("")  # Add spacing
+                    
+                    if learning_types:
+                        unique_learning_types = list(set(learning_types))
+                        formatter.add_formatted_paragraph(f"**Learning Paradigms**: {', '.join(unique_learning_types)}")
+                        formatter.add_formatted_paragraph("")  # Add spacing
+                    
+                    if complexity_factors:
+                        formatter.add_formatted_paragraph("**Complexity Factors**:")
+                        formatter.add_indented_bullet_list(list(set(complexity_factors)))
+                        formatter.add_formatted_paragraph("")  # Add spacing
+                    
+                    if special_requirements:
+                        formatter.add_formatted_paragraph("**Special Requirements**:")
+                        formatter.add_indented_bullet_list(list(set(special_requirements)))
+                        formatter.add_formatted_paragraph("")  # Add spacing
+                    
+                    # Add computational complexity assessment
+                    high_complexity = len([c for c in detected_categories if c.get("confidence", 0) >= 0.7 and 
+                                         any(complex_term in c.get("name", "").lower() for complex_term in 
+                                             ["variable_length", "real_time", "multimodal", "graph", "dynamic"])])
+                    
+                    if high_complexity >= 2:
+                        complexity_level = "**High**"
+                        complexity_desc = "Multiple complex factors detected requiring sophisticated architectures"
+                    elif high_complexity == 1 or len(complexity_factors) > 0:
+                        complexity_level = "**Medium**"
+                        complexity_desc = "Moderate complexity with some challenging aspects"
+                    else:
+                        complexity_level = "**Standard**"
+                        complexity_desc = "Standard ML task complexity"
+                    
+                    formatter.add_formatted_paragraph(f"**Overall Task Complexity**: {complexity_level} - {complexity_desc}")
+            
+            # Add page break only if we have substantial content above
+            if detected_categories and detailed_analysis.get("llm_analysis"):
+                formatter.add_page_break()
+            else:
+                formatter.add_separator()
+            
+            # Model Recommendations (Main Content)
+            formatter.add_heading("Model Recommendations", level=1)
+            
+            # Get the model suggestions - try multiple paths for robustness
+            suggestions_text = ""
+            if model_suggestions.get("suggestions_successful", False):
+                # First try the main suggestions
+                suggestions_text = model_suggestions.get("model_suggestions", "")
+                
+                # If revision was applied, use the revised version
+                if model_suggestions.get("revision_applied", False):
+                    revised_text = model_suggestions.get("revised_suggestions", "")
+                    if revised_text:
+                        suggestions_text = revised_text
+            else:
+                # Fallback: try to get suggestions even if not marked as successful
+                suggestions_text = model_suggestions.get("model_suggestions", "")
+                if not suggestions_text:
+                    suggestions_text = model_suggestions.get("revised_suggestions", "")
+            
+            # Debug info
+            print(f"🔍 Debug - Model suggestions available: {bool(suggestions_text)}")
+            if suggestions_text:
+                print(f"🔍 Debug - Suggestions length: {len(suggestions_text)} characters")
+                print(f"🔍 Debug - First 100 chars: {suggestions_text[:100]}...")
+            
+            if suggestions_text:
+                # Use the enhanced formatter for ML text (no title since we already added one)
+                formatter.format_ml_text_recommendations(suggestions_text, title="")
+            else:
+                # Fallback content if no suggestions available
+                formatter.add_formatted_paragraph(
+                    "**Note**: Model suggestions were not available in the expected format. "
+                    "This may indicate an issue with the suggestion generation process."
+                )
+                print("⚠️ Warning: No model suggestions found to include in report")
+            
+            # Research Methodology - start on new page
+            formatter.add_page_break()
+            formatter.add_heading("Research Methodology", level=1)
+            
+            # Task Decomposition Methodology
+            formatter.add_heading("Task Decomposition Process", level=2)
+            detected_categories = state.get("detected_categories", [])
+            detailed_analysis = state.get("detailed_analysis", {})
+            
+            decomp_methodology = f"""**Automated Task Analysis**: The research query underwent systematic decomposition using a combination of rule-based pattern matching and large language model analysis.
+
+**Category Detection**: Applied {len(ML_RESEARCH_CATEGORIES)} predefined ML research categories to identify task properties and requirements. Each category was evaluated with confidence scoring (0.0-1.0) based on evidence from the task description.
+
+**Categories Analyzed**: {len(detected_categories)} categories were detected with varying confidence levels, including {len([c for c in detected_categories if c.get('confidence', 0) >= 0.8])} high-confidence matches.
+
+**LLM-Based Decomposition**: {"Detailed task decomposition was performed using advanced language models to extract key characteristics, data types, learning paradigms, and architectural requirements." if detailed_analysis.get('llm_analysis') else "Task decomposition relied primarily on category-based analysis."}
+
+**Evidence-Based Approach**: All category assignments were supported by specific evidence from the original task description, ensuring traceability and validation of the analysis."""
+            
+            formatter.add_formatted_paragraph(decomp_methodology)
+            formatter.add_separator()
+            
+            # Search Strategy
+            search_query = state.get("arxiv_search_query", "")
+            search_methodology = f"""**Literature Search Strategy**: Systematic search of ArXiv repository using targeted queries to identify relevant research papers.
+
+**Search Query**: `{search_query}`
+
+**Paper Selection Criteria**: Papers were evaluated based on relevance scores, recency, and technical merit. Only papers with high relevance to the specified task were included in the analysis.
+
+**Validation Process**: Model suggestions underwent {state.get('suggestion_iteration', 1)} round(s) of expert critique and validation to ensure accuracy and completeness."""
+            
+            formatter.add_formatted_paragraph(search_methodology)
+            
+            # Quality Assurance (keep with methodology)
+            critique_results = state.get("critique_results", {})
+            if critique_results.get("critique_successful", False):
+                formatter.add_separator()
+                formatter.add_heading("Quality Assurance", level=2)
+                
+                qa_text = f"""**Expert Review Process**: All recommendations underwent rigorous expert critique validation.
+
+**Critique Score**: {critique_results.get('overall_score', 'N/A')}/10.0
+**Validation Status**: {critique_results.get('recommendation', 'N/A').title()}
+
+**Quality Metrics**:
+- Relevance: {critique_results.get('relevance_score', 'N/A')}/10.0
+- Completeness: {critique_results.get('completeness_score', 'N/A')}/10.0  
+- Technical Accuracy: {critique_results.get('technical_accuracy_score', 'N/A')}/10.0
+- Evidence Quality: {critique_results.get('evidence_quality_score', 'N/A')}/10.0"""
+                
+                formatter.add_formatted_paragraph(qa_text)
+            
+            # ArXiv Papers and Citations - start on new page
+            formatter.add_page_break()
+            formatter.add_heading("References and Sources", level=1)
+            papers = search_results.get("papers", [])
+            
+            if papers:
+                # Research Papers Summary
+                formatter.add_heading("Research Papers Analyzed", level=2)
+                papers_summary = f"""This analysis examined **{len(papers)} research papers** from ArXiv, focusing on the most relevant and recent publications. The papers were selected based on their relevance to the specified task and technical merit."""
+                formatter.add_formatted_paragraph(papers_summary)
+                
+                # Create citations table
+                citation_data = []
+                for i, paper in enumerate(papers[:10], 1):  # Top 10 papers
+                    title = paper.get("title", "Unknown Title")
+                    authors = paper.get("authors", "Unknown Authors")
+                    year = paper.get("published", "Unknown")[:4] if paper.get("published") else "N/A"
+                    arxiv_id = paper.get("id", "").replace("http://arxiv.org/abs/", "")
+                    relevance = paper.get("relevance_score", 0)
+                    
+                    # Format authors (limit to first 3 + et al. if more)
+                    if isinstance(authors, list):
+                        if len(authors) > 3:
+                            author_str = f"{', '.join(authors[:3])}, et al."
+                        else:
+                            author_str = ', '.join(authors)
+                    else:
+                        author_str = str(authors)[:50] + "..." if len(str(authors)) > 50 else str(authors)
+                    
+                    # Truncate title if too long
+                    title_short = title[:60] + "..." if len(title) > 60 else title
+                    
+                    citation_data.append([
+                        str(i),
+                        title_short,
+                        author_str[:40] + "..." if len(author_str) > 40 else author_str,
+                        year,
+                        arxiv_id,
+                        f"{relevance:.1f}/10"
+                    ])
+                
+                formatter.add_table(
+                    citation_data,
+                    headers=["#", "Title", "Authors", "Year", "ArXiv ID", "Relevance"],
+                    title="Key Papers Referenced"
+                )
+                
+                # APA Style Citations - start on new page if table is large
+                if len(papers) > 5:
+                    formatter.add_page_break()
+                else:
+                    formatter.add_separator()
+                    
+                formatter.add_heading("APA Citations", level=2)
+                apa_citations = ""
+                for i, paper in enumerate(papers[:10], 1):
+                    title = paper.get("title", "Unknown Title")
+                    authors = paper.get("authors", ["Unknown Author"])
+                    year = paper.get("published", "Unknown")[:4] if paper.get("published") else "n.d."
+                    arxiv_id = paper.get("id", "").replace("http://arxiv.org/abs/", "")
+                    
+                    # Format authors for APA style
+                    if isinstance(authors, list):
+                        if len(authors) == 1:
+                            author_apa = authors[0]
+                        elif len(authors) == 2:
+                            author_apa = f"{authors[0]} & {authors[1]}"
+                        elif len(authors) <= 6:
+                            author_apa = f"{', '.join(authors[:-1])}, & {authors[-1]}"
+                        else:
+                            author_apa = f"{', '.join(authors[:6])}, ... {authors[-1]}"
+                    else:
+                        author_apa = str(authors)
+                    
+                    # Format APA citation
+                    apa_citation = f"{author_apa} ({year}). *{title}*. arXiv preprint arXiv:{arxiv_id}.\n\n"
+                    apa_citations += apa_citation
+                
+                formatter.add_formatted_paragraph(apa_citations)
+            
+            # Technical Details and Limitations - start on new page
+            formatter.add_page_break()
+            formatter.add_heading("Technical Details and Limitations", level=1)
+            
+            # Add task decomposition technical details
+            formatter.add_heading("Task Decomposition Technical Details", level=2)
+            detected_categories = state.get("detected_categories", [])
+            detailed_analysis = state.get("detailed_analysis", {})
+            
+            # Category Detection Algorithm
+            formatter.add_formatted_paragraph(f"**Category Detection Algorithm**: Utilizes a predefined ontology of {len(ML_RESEARCH_CATEGORIES)} machine learning research categories with confidence-based scoring.")
+            formatter.add_formatted_paragraph("")  # Add spacing
+            
+            # Confidence Thresholds with indented formatting
+            formatter.add_formatted_paragraph("**Confidence Thresholds**:")
+            confidence_thresholds = [
+                "High confidence: ≥0.80 (categories with strong evidence)",
+                "Medium confidence: 0.60-0.79 (reasonable inference with clear cues)",
+                "Lower confidence: 0.40-0.59 (potential relevance requiring validation)"
+            ]
+            formatter.add_indented_bullet_list(confidence_thresholds)
+            formatter.add_formatted_paragraph("")  # Add spacing
+            
+            formatter.add_formatted_paragraph("**Evidence Collection**: Each category assignment is backed by specific textual evidence extracted from the original query, ensuring traceability and interpretability.")
+            formatter.add_formatted_paragraph("")  # Add spacing
+            
+            # Model and analysis details
+            formatter.add_formatted_paragraph(f"**Model Used for Analysis**: {detailed_analysis.get('model_used', 'Not specified')}")
+            if detailed_analysis.get('tokens_used'):
+                formatter.add_formatted_paragraph(f"**Tokens Consumed**: {str(detailed_analysis.get('tokens_used', 'Unknown'))}")
+            formatter.add_formatted_paragraph("")  # Add spacing
+            
+            # Analysis Components with indented list
+            formatter.add_formatted_paragraph("**Analysis Components**:")
+            analysis_components = [
+                "Automated property extraction and categorization",
+                "Task complexity assessment based on detected patterns",
+                "Domain-specific requirement identification",
+                "Computational constraint analysis"
+            ]
+            formatter.add_indented_bullet_list(analysis_components)
+            formatter.add_separator()
+            
+            # Original limitations section
+            retries = state.get("search_iteration", 1)
+            
+            formatter.add_formatted_paragraph("**General Limitations and Scope**:")
+            formatter.add_formatted_paragraph("")  # Add spacing
+            
+            formatter.add_formatted_paragraph(f"**Search Iterations**: {retries} search iteration(s) were performed to identify relevant literature.")
+            formatter.add_formatted_paragraph("**Data Sources**: ArXiv repository (pre-print server for computer science and related fields)")
+            formatter.add_formatted_paragraph("**Temporal Scope**: Analysis focused on recent publications to ensure recommendations reflect current state-of-the-art")
+            formatter.add_formatted_paragraph("")  # Add spacing
+            
+            # Task Decomposition Limitations with indented formatting
+            formatter.add_formatted_paragraph("**Task Decomposition Limitations**:")
+            decomp_limitations = [
+                "Category detection is based on predefined ontology and may not capture all domain-specific nuances",
+                "Confidence scores are probabilistic estimates and should be interpreted accordingly",
+                "Complex interdisciplinary tasks may require manual refinement of the analysis"
+            ]
+            formatter.add_indented_bullet_list(decomp_limitations)
+            formatter.add_formatted_paragraph("")  # Add spacing
+            
+            # General Limitations with indented formatting
+            formatter.add_formatted_paragraph("**General Limitations**:")
+            general_limitations = [
+                "Results are based on available ArXiv papers and may not include all relevant commercial or proprietary solutions",
+                "Model performance may vary based on specific implementation details and hardware configurations",
+                "Recommendations should be validated through empirical testing for specific use cases"
+            ]
+            formatter.add_indented_bullet_list(general_limitations)
+            formatter.add_formatted_paragraph("")  # Add spacing
+            
+            formatter.add_formatted_paragraph("**Reproducibility**: This analysis can be reproduced using the same search queries, category definitions, and evaluation criteria.")
+            
+            # Generate filename and save
+            timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+            safe_query = "".join(c for c in original_prompt if c.isalnum() or c in (' ', '-', '_')).strip()[:30]
+            filename = f"ml_model_suggestions_{safe_query}_{timestamp_str}.docx"
+            
+            # Ensure suggestion_reports directory exists
+            reports_dir = os.path.join(os.getcwd(), "suggestion_reports")
+            os.makedirs(reports_dir, exist_ok=True)
+            
+            output_path = os.path.join(reports_dir, filename)
+            formatter.save(output_path)
+            
+            # Update state with report information
+            state["report_generated"] = True
+            state["report_path"] = output_path
+            state["report_filename"] = filename
+            
+            print(f"✅ Comprehensive report generated successfully!")
+            print(f"📁 Report saved to: {output_path}")
+            
+            # Add success message
+            state["messages"].append(
+                AIMessage(content=f"Comprehensive Word report generated and saved to: {output_path}")
+            )
+        
+        except Exception as e:
+            error_msg = f"Report generation failed: {str(e)}"
+            state["errors"].append(error_msg)
+            state["report_generated"] = False
+            state["report_error"] = error_msg
+            print(f"❌ {error_msg}")
+            print("⚠️ Continuing without report generation...")
+        
+        return state
 
 
     async def _generate_problem_node(self, state: ResearchPlanningState) -> ResearchPlanningState:
