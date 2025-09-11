@@ -81,10 +81,14 @@ class WordFormatter:
         
         self._create_custom_style('Highlight', WD_STYLE_TYPE.CHARACTER, 
                                  self.style.body_size, color=RGBColor(0, 102, 0), bold=True)
+        
+        # Create indented bullet list style for subsection content
+        self._create_custom_style('Indented Bullet', WD_STYLE_TYPE.PARAGRAPH,
+                                 self.style.body_size, indent_level=0.35)
     
     def _create_custom_style(self, name: str, style_type: int, size: int, 
                            bold: bool = False, color: Optional[RGBColor] = None, 
-                           font_name: Optional[str] = None):
+                           font_name: Optional[str] = None, indent_level: Optional[float] = None):
         """Create a custom style."""
         try:
             style = self.doc.styles.add_style(name, style_type)
@@ -98,6 +102,15 @@ class WordFormatter:
             para_format.space_after = Pt(6)
             if name == 'Code Block':
                 para_format.left_indent = Inches(0.25)
+            elif name == 'Indented Bullet':
+                para_format.left_indent = Inches(indent_level or 0.35)
+                # Set up bullet formatting for indented style
+                try:
+                    from docx.enum.dml import MSO_THEME_COLOR_INDEX
+                    # Try to set bullet style - this may not work on all systems
+                    para_format.space_before = Pt(3)
+                except:
+                    pass
                 # Add light gray background for code blocks
                 shading_elm = parse_xml(r'<w:shd {} w:fill="F8F8F8"/>'.format(nsdecls('w')))
                 style._element.get_or_add_pPr().append(shading_elm)
@@ -184,6 +197,23 @@ class WordFormatter:
         for item in items:
             para = self.doc.add_paragraph(style=style)
             self._add_formatted_text_to_paragraph(para, item)
+    
+    def add_indented_bullet_list(self, items: List[str]) -> None:
+        """Add an indented bulleted list for subsection content."""
+        for item in items:
+            para = self.doc.add_paragraph()
+            para.style = 'List Bullet'
+            # Add manual indentation
+            para.paragraph_format.left_indent = Inches(0.5)
+            para.paragraph_format.first_line_indent = Inches(-0.25)
+            self._add_formatted_text_to_paragraph(para, item)
+    
+    def add_indented_paragraph(self, text: str) -> None:
+        """Add an indented paragraph for subsection content."""
+        para = self.doc.add_paragraph()
+        para.paragraph_format.left_indent = Inches(0.25)
+        para.paragraph_format.space_after = Pt(6)
+        self._add_formatted_text_to_paragraph(para, text)
     
     def _add_formatted_text_to_paragraph(self, para, text: str) -> None:
         """Add formatted text to an existing paragraph, handling markdown-style formatting."""
@@ -563,14 +593,15 @@ class WordFormatter:
                         bullet_items.append(content_item['text'])
                     elif content_item['type'] == 'text':
                         if bullet_items:
-                            # Flush bullets before adding text
-                            self.add_bullet_list(bullet_items)
+                            # Use indented bullets for subsection content
+                            self.add_indented_bullet_list(bullet_items)
                             bullet_items = []
-                        self.add_formatted_paragraph(content_item['text'])
+                        # Use indented paragraphs for subsection text
+                        self.add_indented_paragraph(content_item['text'])
                 
-                # Flush remaining bullets
+                # Flush remaining bullets with indentation
                 if bullet_items:
-                    self.add_bullet_list(bullet_items)
+                    self.add_indented_bullet_list(bullet_items)
         
         elif section['type'] == 'separator':
             self.add_separator()
