@@ -173,11 +173,33 @@ class ResearchPlanningState(BaseState):
     generation_attempts: int                     # Track failed generation attempts
     feedback_context: str                        # Accumulated feedback for next generation
 
+class PaperWritingState(BaseState):
+    """State object for the paper writing workflow."""
+    # Input data
+    experimental_results: Dict[str, Any]      # Raw experimental data
+    research_context: str                     # Background information
+    target_venue: str                         # Conference/journal name
+    
+    # Generated content
+    research_analysis: Dict[str, Any]         # Processed research insights
+    paper_structure: Dict[str, Any]           # LLM-generated structure
+    template_config: Dict[str, Any]           # Selected template settings
+    section_content: Dict[str, str]           # Content by section
+    formatted_paper: str                      # Complete formatted paper
+    
+    # Quality control
+    critique_results: Dict[str, Any]          # AI feedback (for future use)
+    revision_count: int                       # Track iterations
+    quality_score: float                      # Overall quality rating
+    
+    # Output
+    final_outputs: Dict[str, str]             # Multiple format versions
+
 class RouterState(TypedDict):
     """State object for the router agent."""
     messages: Annotated[List[BaseMessage], add_messages]
     original_prompt: str
-    routing_decision: str  # "model_suggestion" or "research_planning"
+    routing_decision: str  # "model_suggestion", "research_planning", or "paper_writing"
     routing_confidence: float
     routing_reasoning: str
     errors: List[str]
@@ -214,6 +236,7 @@ class MLResearcherLangGraph:
         self.router_graph = self._build_router_graph()
         self.model_suggestion_graph = self._build_model_suggestion_graph()
         self.research_planning_graph = self._build_research_planning_graph()
+        self.paper_writing_graph = self._build_paper_writing_graph()
     
     def _load_from_env_file(self, key: str) -> Optional[str]:
         """Load configuration value from env.example file."""
@@ -353,6 +376,27 @@ class MLResearcherLangGraph:
         
         return workflow.compile()
     
+    def _build_paper_writing_graph(self) -> StateGraph:
+        """Build the paper writing workflow for generating research papers."""
+        workflow = StateGraph(PaperWritingState)
+        
+        # Add nodes for paper writing pipeline
+        workflow.add_node("analyze_results", self._analyze_results_node)
+        workflow.add_node("setup_paper", self._setup_paper_node)
+        workflow.add_node("generate_content", self._generate_content_node)
+        workflow.add_node("format_paper", self._format_paper_node)
+        workflow.add_node("finalize_paper", self._finalize_paper_node)
+        
+        # Define the linear flow (no critique for now)
+        workflow.set_entry_point("analyze_results")
+        workflow.add_edge("analyze_results", "setup_paper")
+        workflow.add_edge("setup_paper", "generate_content")
+        workflow.add_edge("generate_content", "format_paper")
+        workflow.add_edge("format_paper", "finalize_paper")
+        workflow.add_edge("finalize_paper", END)
+        
+        return workflow.compile()
+    
     async def _route_request_node(self, state: RouterState) -> RouterState:
         """Router node to decide which workflow to use based on user prompt."""
         print("\n🤖 Router: Analyzing user request to determine workflow...")
@@ -382,14 +426,23 @@ class MLResearcherLangGraph:
                    - Research gap identification
                    - Academic research planning
 
+                3. **PAPER_WRITING**: For requests asking about:
+                   - "Generate a report from my experimental results"
+                   - "Create a paper for X conference"
+                   - "Write up my research findings"
+                   - "Compile my work into a publication"
+                   - "Convert my results to a research paper"
+                   - Paper generation and formatting
+                   - Report compilation from data
+
                 Analyze the user's request and respond with a JSON object containing:
                 {{
-                    "workflow": "MODEL_SUGGESTION" or "RESEARCH_PLANNING",
+                    "workflow": "MODEL_SUGGESTION", "RESEARCH_PLANNING", or "PAPER_WRITING",
                     "confidence": 0.0-1.0,
                     "reasoning": "Brief explanation of why this workflow was chosen"
                 }}
 
-                Consider the intent and focus of the request. If the user wants practical implementation advice, choose MODEL_SUGGESTION. If they want to understand research gaps and plan academic research, choose RESEARCH_PLANNING.
+                Consider the intent and focus of the request. If the user wants practical implementation advice, choose MODEL_SUGGESTION. If they want to understand research gaps and plan academic research, choose RESEARCH_PLANNING. If they want to generate papers or reports from existing work/data, choose PAPER_WRITING.
 
                 Return only the JSON object, no additional text.
             """
@@ -426,6 +479,8 @@ class MLResearcherLangGraph:
                     workflow_decision = "model_suggestion"
                 elif workflow_decision.upper() in ["RESEARCH_PLANNING", "RESEARCH_PLAN"]:
                     workflow_decision = "research_planning"
+                elif workflow_decision.upper() in ["PAPER_WRITING", "PAPER_WRITE", "REPORT_GENERATION"]:
+                    workflow_decision = "paper_writing"
                 else:
                     workflow_decision = "model_suggestion"  # Default fallback
                 
@@ -3843,7 +3898,7 @@ Provide the complete refined research plan:
                 }
             }
             
-        else:  # research_planning
+        elif workflow_decision == "research_planning":
             print("\n📋 STEP 2: EXECUTING RESEARCH PLANNING WORKFLOW")
             print("=" * 50)
             
@@ -3885,6 +3940,76 @@ Provide the complete refined research plan:
                     "research_plan_successful": final_research_state["research_plan"].get("research_plan_successful", False),
                     "total_errors": len(final_router_state["errors"]) + len(final_research_state["errors"]),
                     "iterations_completed": final_research_state.get("iteration_count", 0)
+                }
+            }
+            
+        elif workflow_decision == "paper_writing":
+            print("\n📝 STEP 2: EXECUTING PAPER WRITING WORKFLOW")
+            print("=" * 50)
+            
+            # Initialize paper writing state
+            paper_state: PaperWritingState = {
+                "messages": [HumanMessage(content=prompt)],
+                "original_prompt": prompt,
+                "experimental_results": {},  # Could be extracted from prompt
+                "research_context": prompt,
+                "target_venue": "general",  # Could be extracted from prompt
+                "research_analysis": {},
+                "paper_structure": {},
+                "template_config": {},
+                "section_content": {},
+                "formatted_paper": "",
+                "critique_results": {},
+                "revision_count": 0,
+                "quality_score": 0.0,
+                "final_outputs": {},
+                "current_step": "",
+                "errors": [],
+                "workflow_type": "paper_writing"
+            }
+            
+            # Run the paper writing workflow
+            final_paper_state = await self.paper_writing_graph.ainvoke(paper_state)
+            
+            # Compile results
+            results = {
+                "workflow_type": "paper_writing",
+                "router_decision": {
+                    "decision": final_router_state["routing_decision"],
+                    "confidence": final_router_state["routing_confidence"],
+                    "reasoning": final_router_state["routing_reasoning"]
+                },
+                "original_prompt": final_paper_state["original_prompt"],
+                "research_analysis": final_paper_state.get("research_analysis", {}),
+                "paper_structure": final_paper_state.get("paper_structure", {}),
+                "template_config": final_paper_state.get("template_config", {}),
+                "formatted_paper": final_paper_state.get("formatted_paper", ""),
+                "final_outputs": final_paper_state.get("final_outputs", {}),
+                "errors": final_router_state["errors"] + final_paper_state["errors"],
+                "summary": {
+                    "workflow_used": "Paper Writing Pipeline",
+                    "paper_generated": bool(final_paper_state.get("formatted_paper", "")),
+                    "sections_generated": len(final_paper_state.get("section_content", {})),
+                    "paper_length": len(final_paper_state.get("formatted_paper", "")),
+                    "output_file": final_paper_state.get("final_outputs", {}).get("file_path", ""),
+                    "total_errors": len(final_router_state["errors"]) + len(final_paper_state["errors"])
+                }
+            }
+            
+        else:
+            # Unknown workflow decision
+            results = {
+                "workflow_type": "unknown",
+                "router_decision": {
+                    "decision": workflow_decision,
+                    "confidence": final_router_state["routing_confidence"],
+                    "reasoning": final_router_state["routing_reasoning"]
+                },
+                "original_prompt": prompt,
+                "errors": final_router_state["errors"] + [f"Unknown workflow decision: {workflow_decision}"],
+                "summary": {
+                    "workflow_used": "Error - Unknown Workflow",
+                    "total_errors": len(final_router_state["errors"]) + 1
                 }
             }
         
@@ -3945,7 +4070,388 @@ Provide the complete refined research plan:
             return "collect_problem"
         else:
             return "continue_generation"
+
+    # ==================================================================================
+    # PAPER WRITING WORKFLOW NODES
+    # ==================================================================================
     
+    async def _analyze_results_node(self, state: PaperWritingState) -> PaperWritingState:
+        """Node for analyzing experimental results and research context."""
+        print("\n📊 Paper Writing: Analyzing experimental results and research context...")
+        
+        try:
+            # Extract research context from the original prompt and any provided data
+            original_prompt = state.get("original_prompt", "")
+            experimental_results = state.get("experimental_results", {})
+            
+            analysis_prompt = f"""
+            Analyze the following experimental results and research context to prepare for paper writing:
+            
+            Original Request: "{original_prompt}"
+            
+            Experimental Results: {experimental_results if experimental_results else "No structured experimental data provided"}
+            
+            Please analyze and extract:
+            1. Research Type: (experimental, theoretical, survey, case study)
+            2. Domain: (machine learning, computer vision, NLP, etc.)
+            3. Key Findings: Main experimental results and insights
+            4. Data Types: (tables, figures, metrics, code, datasets)
+            5. Contributions: Novel aspects and significance
+            6. Research Context: Background and motivation
+            
+            Respond with a JSON object containing this analysis.
+            """
+            
+            response = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[{"role": "user", "content": analysis_prompt}],
+                    temperature=0.3
+                )
+            )
+            
+            # Parse the analysis
+            analysis_text = response.choices[0].message.content.strip()
+            print(f"📋 Analysis: {analysis_text[:200]}...")
+            
+            # Try to extract JSON from response
+            try:
+                import json
+                # Look for JSON in the response
+                start = analysis_text.find('{')
+                end = analysis_text.rfind('}') + 1
+                if start != -1 and end != -1:
+                    analysis_json = json.loads(analysis_text[start:end])
+                else:
+                    # Fallback: create basic analysis
+                    analysis_json = {
+                        "research_type": "experimental",
+                        "domain": "machine learning",
+                        "key_findings": "Experimental results analysis",
+                        "data_types": ["text"],
+                        "contributions": ["Novel approach"],
+                        "research_context": original_prompt
+                    }
+            except:
+                # Fallback analysis
+                analysis_json = {
+                    "research_type": "experimental",
+                    "domain": "machine learning", 
+                    "key_findings": "Experimental results analysis",
+                    "data_types": ["text"],
+                    "contributions": ["Novel approach"],
+                    "research_context": original_prompt
+                }
+            
+            return {
+                **state,
+                "research_analysis": analysis_json,
+                "current_step": "results_analyzed"
+            }
+            
+        except Exception as e:
+            print(f"❌ Error in analyze_results_node: {str(e)}")
+            return {
+                **state,
+                "errors": state.get("errors", []) + [f"Analysis error: {str(e)}"],
+                "current_step": "analysis_error"
+            }
+    
+    async def _setup_paper_node(self, state: PaperWritingState) -> PaperWritingState:
+        """Node for LLM-driven template selection and paper structuring."""
+        print("\n🏗️ Paper Writing: Setting up paper structure and template...")
+        
+        try:
+            research_analysis = state.get("research_analysis", {})
+            target_venue = state.get("target_venue", "general")
+            
+            setup_prompt = f"""
+            Create an optimal paper structure for the following research:
+            
+            Research Analysis: {research_analysis}
+            Target Venue: {target_venue}
+            
+            Based on this information, generate:
+            1. Template Configuration (formatting requirements)
+            2. Paper Structure (sections with focus areas and length allocations)
+            3. Content Guidelines (what to emphasize in each section)
+            
+            Consider common academic paper structures and venue-specific requirements.
+            
+            Respond with a JSON object containing:
+            {{
+                "template_config": {{
+                    "venue": "conference_name",
+                    "page_limit": 8,
+                    "format": "two_column",
+                    "citation_style": "ACM"
+                }},
+                "paper_structure": {{
+                    "sections": [
+                        {{"name": "Abstract", "length": "200-250 words", "focus": "problem_solution_results"}},
+                        {{"name": "Introduction", "length": "1-1.5 pages", "focus": "motivation_contributions"}},
+                        // ... more sections
+                    ]
+                }},
+                "content_guidelines": {{
+                    "emphasis": ["methodology", "experimental_validation"],
+                    "tone": "formal_academic",
+                    "target_audience": "researchers_practitioners"
+                }}
+            }}
+            """
+            
+            response = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[{"role": "user", "content": setup_prompt}],
+                    temperature=0.3
+                )
+            )
+            
+            setup_text = response.choices[0].message.content.strip()
+            print(f"📋 Paper setup: {setup_text[:200]}...")
+            
+            # Try to extract JSON from response
+            try:
+                import json
+                start = setup_text.find('{')
+                end = setup_text.rfind('}') + 1
+                if start != -1 and end != -1:
+                    setup_json = json.loads(setup_text[start:end])
+                else:
+                    # Fallback structure
+                    setup_json = {
+                        "template_config": {
+                            "venue": target_venue,
+                            "page_limit": 8,
+                            "format": "academic",
+                            "citation_style": "ACM"
+                        },
+                        "paper_structure": {
+                            "sections": [
+                                {"name": "Abstract", "length": "200-250 words", "focus": "summary"},
+                                {"name": "Introduction", "length": "1-1.5 pages", "focus": "motivation"},
+                                {"name": "Methods", "length": "2-3 pages", "focus": "methodology"},
+                                {"name": "Results", "length": "2-3 pages", "focus": "findings"},
+                                {"name": "Conclusion", "length": "0.5 pages", "focus": "summary"}
+                            ]
+                        },
+                        "content_guidelines": {
+                            "emphasis": ["methodology", "results"],
+                            "tone": "formal_academic",
+                            "target_audience": "researchers"
+                        }
+                    }
+            except:
+                # Fallback structure
+                setup_json = {
+                    "template_config": {
+                        "venue": target_venue,
+                        "page_limit": 8,
+                        "format": "academic",
+                        "citation_style": "ACM"
+                    },
+                    "paper_structure": {
+                        "sections": [
+                            {"name": "Abstract", "length": "200-250 words", "focus": "summary"},
+                            {"name": "Introduction", "length": "1-1.5 pages", "focus": "motivation"},
+                            {"name": "Methods", "length": "2-3 pages", "focus": "methodology"},
+                            {"name": "Results", "length": "2-3 pages", "focus": "findings"},
+                            {"name": "Conclusion", "length": "0.5 pages", "focus": "summary"}
+                        ]
+                    },
+                    "content_guidelines": {
+                        "emphasis": ["methodology", "results"],
+                        "tone": "formal_academic",
+                        "target_audience": "researchers"
+                    }
+                }
+            
+            return {
+                **state,
+                "paper_structure": setup_json.get("paper_structure", {}),
+                "template_config": setup_json.get("template_config", {}),
+                "current_step": "paper_setup_complete"
+            }
+            
+        except Exception as e:
+            print(f"❌ Error in setup_paper_node: {str(e)}")
+            return {
+                **state,
+                "errors": state.get("errors", []) + [f"Setup error: {str(e)}"],
+                "current_step": "setup_error"
+            }
+    
+    async def _generate_content_node(self, state: PaperWritingState) -> PaperWritingState:
+        """Node for generating content for each paper section."""
+        print("\n✍️ Paper Writing: Generating content for each section...")
+        
+        try:
+            research_analysis = state.get("research_analysis", {})
+            paper_structure = state.get("paper_structure", {})
+            experimental_results = state.get("experimental_results", {})
+            
+            sections = paper_structure.get("sections", [])
+            section_content = {}
+            
+            for section in sections:
+                section_name = section.get("name", "Unknown")
+                section_focus = section.get("focus", "general")
+                section_length = section.get("length", "1 page")
+                
+                print(f"📝 Generating {section_name} section...")
+                
+                content_prompt = f"""
+                Write the {section_name} section for an academic research paper.
+                
+                Research Context: {research_analysis}
+                Experimental Results: {experimental_results}
+                Section Focus: {section_focus}
+                Target Length: {section_length}
+                
+                Guidelines:
+                - Use formal academic tone
+                - Include specific details from the research
+                - Follow standard academic writing conventions
+                - Make it publication-ready
+                
+                Write a complete {section_name} section:
+                """
+                
+                response = await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    lambda p=content_prompt: self.client.chat.completions.create(
+                        model=self.model,
+                        messages=[{"role": "user", "content": p}],
+                        temperature=0.4
+                    )
+                )
+                
+                section_text = response.choices[0].message.content.strip()
+                section_content[section_name] = section_text
+                print(f"✅ {section_name} section generated ({len(section_text)} chars)")
+            
+            return {
+                **state,
+                "section_content": section_content,
+                "current_step": "content_generated"
+            }
+            
+        except Exception as e:
+            print(f"❌ Error in generate_content_node: {str(e)}")
+            return {
+                **state,
+                "errors": state.get("errors", []) + [f"Content generation error: {str(e)}"],
+                "current_step": "content_error"
+            }
+    
+    async def _format_paper_node(self, state: PaperWritingState) -> PaperWritingState:
+        """Node for formatting the paper according to template requirements."""
+        print("\n📄 Paper Writing: Formatting paper...")
+        
+        try:
+            section_content = state.get("section_content", {})
+            template_config = state.get("template_config", {})
+            research_analysis = state.get("research_analysis", {})
+            
+            # Combine all sections into a complete paper
+            paper_parts = []
+            
+            # Add title
+            title = f"Research Paper: {research_analysis.get('research_context', 'Untitled Research')[:80]}"
+            paper_parts.append(f"# {title}\n")
+            
+            # Add venue info
+            venue = template_config.get("venue", "General")
+            format_type = template_config.get("format", "academic")
+            page_limit = template_config.get("page_limit", 8)
+            
+            paper_parts.append(f"**Target Venue**: {venue}")
+            paper_parts.append(f"**Format**: {format_type}")
+            paper_parts.append(f"**Page Limit**: {page_limit} pages")
+            paper_parts.append("\n\n")
+            
+            # Add each section
+            section_order = ["Abstract", "Introduction", "Related Work", "Methods", "Results", "Discussion", "Conclusion"]
+            
+            for section_name in section_order:
+                if section_name in section_content:
+                    paper_parts.append(f"## {section_name}\n\n")
+                    paper_parts.append(section_content[section_name])
+                    paper_parts.append("\n\n")
+            
+            # Add any remaining sections not in the standard order
+            for section_name, content in section_content.items():
+                if section_name not in section_order:
+                    paper_parts.append(f"## {section_name}\n\n")
+                    paper_parts.append(content)
+                    paper_parts.append("\n\n")
+            
+            formatted_paper = "".join(paper_parts)
+            
+            print(f"✅ Paper formatted ({len(formatted_paper)} characters)")
+            
+            return {
+                **state,
+                "formatted_paper": formatted_paper,
+                "current_step": "paper_formatted"
+            }
+            
+        except Exception as e:
+            print(f"❌ Error in format_paper_node: {str(e)}")
+            return {
+                **state,
+                "errors": state.get("errors", []) + [f"Formatting error: {str(e)}"],
+                "current_step": "formatting_error"
+            }
+    
+    async def _finalize_paper_node(self, state: PaperWritingState) -> PaperWritingState:
+        """Node for finalizing the paper and creating output files."""
+        print("\n🎯 Paper Writing: Finalizing paper...")
+        
+        try:
+            formatted_paper = state.get("formatted_paper", "")
+            template_config = state.get("template_config", {})
+            
+            # Create multiple format outputs
+            final_outputs = {}
+            
+            # Markdown version (primary)
+            final_outputs["markdown"] = formatted_paper
+            
+            # Save to file
+            from datetime import datetime
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"generated_paper_{timestamp}.md"
+            
+            with open(filename, 'w', encoding='utf-8') as f:
+                f.write(formatted_paper)
+            
+            final_outputs["file_path"] = filename
+            
+            print(f"✅ Paper saved to: {filename}")
+            print(f"📊 Paper statistics:")
+            print(f"   - Total length: {len(formatted_paper)} characters")
+            print(f"   - Estimated pages: {len(formatted_paper) // 3000:.1f}")
+            print(f"   - Sections: {len(state.get('section_content', {}))}")
+            
+            return {
+                **state,
+                "final_outputs": final_outputs,
+                "current_step": "paper_finalized"
+            }
+            
+        except Exception as e:
+            print(f"❌ Error in finalize_paper_node: {str(e)}")
+            return {
+                **state,
+                "errors": state.get("errors", []) + [f"Finalization error: {str(e)}"],
+                "current_step": "finalization_error"
+            }
+
     async def interactive_mode(self):
         """Run the tool in interactive mode."""
         print("🔬 ML Research Task Analyzer (Multi-Workflow LangGraph Version)")
