@@ -167,6 +167,11 @@ class ResearchPlanningState(BaseState):
     critique_score_history: List[float]          # Track score improvements
     refinement_count: int                        # Number of refinements attempted
     previous_plans: List[Dict[str, Any]]         # Store previous plan versions
+    
+    # 🆕 SMART FEEDBACK MECHANISM
+    rejection_feedback: List[Dict[str, Any]]     # Detailed feedback from rejected problems
+    generation_attempts: int                     # Track failed generation attempts
+    feedback_context: str                        # Accumulated feedback for next generation
 
 class RouterState(TypedDict):
     """State object for the router agent."""
@@ -292,31 +297,36 @@ class MLResearcherLangGraph:
         return workflow.compile()
     
     def _build_research_planning_graph(self) -> StateGraph:
-        """Build the iterative research planning workflow with critique and refinement."""
+        """🆕 SMART WORKFLOW: Build the research planning workflow with intelligent feedback learning."""
         workflow = StateGraph(ResearchPlanningState)
         
-        # Add nodes for iterative research planning pipeline
+        # Add nodes for iterative research planning pipeline with smart feedback
         workflow.add_node("generate_problem", self._generate_problem_node)
         workflow.add_node("validate_problem", self._validate_problem_node)
+        workflow.add_node("process_rejection_feedback", self._process_rejection_feedback_node)  # 🆕 SMART FEEDBACK NODE
         workflow.add_node("collect_problem", self._collect_problem_node)
         workflow.add_node("select_problem", self._select_problem_node)
         workflow.add_node("create_research_plan", self._create_research_plan_node)
         workflow.add_node("critique_plan", self._critique_plan_node)
         workflow.add_node("finalize_plan", self._finalize_plan_node)
         
-        # Define the flow with conditional edges
+        # Define the flow with smart conditional edges
         workflow.set_entry_point("generate_problem")
         workflow.add_edge("generate_problem", "validate_problem")
         
-        # After validation, decide if we should collect the problem
+        # 🆕 SMART ROUTING: After validation, use intelligent decision logic
         workflow.add_conditional_edges(
             "validate_problem",
-            self._check_completion,
+            self._smart_validation_decision,  # 🆕 Enhanced decision function
             {
-                "collect_problem": "collect_problem",     # Collect if validation passed
-                "continue_generation": "generate_problem"  # Skip and generate new if validation failed
+                "collect_problem": "collect_problem",                    # Accept: collect the problem
+                "process_feedback": "process_rejection_feedback",       # Reject: process feedback first
+                "continue_generation": "generate_problem"               # Fallback: direct generation
             }
         )
+        
+        # 🆕 SMART FEEDBACK: After processing feedback, always go back to generation
+        workflow.add_edge("process_rejection_feedback", "generate_problem")
         
         # After collecting, decide if we should continue generating or move to selection
         workflow.add_conditional_edges(
@@ -2554,11 +2564,15 @@ Return only the JSON object, no additional text.
 
 
     async def _generate_problem_node(self, state: ResearchPlanningState) -> ResearchPlanningState:
-        """Node for generating a new research problem statement."""
+        """🆕 SMART GENERATION: Node for generating research problems with rejection feedback learning."""
         current_iter = state.get("iteration_count", 0) + 1
         state["iteration_count"] = current_iter
         
-        print(f"\n🎯 Step {current_iter}: Generating research problem statement...")
+        # 🆕 Track generation attempts (different from iteration count)
+        generation_attempts = state.get("generation_attempts", 0) + 1
+        state["generation_attempts"] = generation_attempts
+        
+        print(f"\n🎯 Step {current_iter}: Generating research problem statement (attempt #{generation_attempts})...")
         state["current_step"] = "generate_problem"
         
         try:
@@ -2566,42 +2580,86 @@ Return only the JSON object, no additional text.
             validated_count = len(state.get("validated_problems", []))
             generated_count = len(state.get("generated_problems", []))
             
+            # 🆕 SMART FEEDBACK: Build context from previous rejections
+            feedback_context = ""
+            rejection_feedback = state.get("rejection_feedback", [])
+            
+            if rejection_feedback:
+                print(f"🧠 Learning from {len(rejection_feedback)} previous rejections...")
+                feedback_context = "\n\n🚨 IMPORTANT - LEARN FROM PREVIOUS MISTAKES:\n"
+                
+                # Group rejection reasons for better learning
+                rejection_patterns = {}
+                for feedback in rejection_feedback[-5:]:  # Last 5 rejections
+                    reason = feedback.get("primary_reason", "unknown")
+                    if reason not in rejection_patterns:
+                        rejection_patterns[reason] = []
+                    rejection_patterns[reason].append(feedback)
+                
+                for reason, feedbacks in rejection_patterns.items():
+                    feedback_context += f"\n❌ AVOID: {reason.upper()} ({len(feedbacks)} rejections)\n"
+                    for feedback in feedbacks[-2:]:  # Last 2 examples of this type
+                        rejected_problem = feedback.get("rejected_problem", "")
+                        specific_issue = feedback.get("specific_guidance", "")
+                        feedback_context += f"   • Rejected: \"{rejected_problem[:100]}...\"\n"
+                        feedback_context += f"   • Issue: {specific_issue}\n"
+                
+                feedback_context += f"\n🎯 SPECIFIC GUIDANCE FOR NEXT ATTEMPT:\n{state.get('feedback_context', '')}\n"
+            
             # Create context about previously generated problems to avoid repetition
             previous_problems = ""
             if state.get("generated_problems"):
                 previous_problems = "\n\nPreviously generated problems (avoid similar ones):\n"
                 for i, prob in enumerate(state["generated_problems"][-5:], 1):  # Show last 5
-                    previous_problems += f"{i}. {prob.get('statement', 'Unknown')}\n"
+                    status = prob.get("validation", {}).get("recommendation", "unknown")
+                    previous_problems += f"{i}. {prob.get('statement', 'Unknown')} [{status}]\n"
             
+            # 🆕 ADAPTIVE PROMPTING: Adjust approach based on attempt number
+            approach_guidance = ""
+            if generation_attempts > 1:
+                if generation_attempts <= 3:
+                    approach_guidance = "\n🔍 FOCUS: Be more specific and narrow in scope."
+                elif generation_attempts <= 5:
+                    approach_guidance = "\n🔍 FOCUS: Try a different angle or subfield within the domain."
+                else:
+                    approach_guidance = "\n🔍 FOCUS: Consider technical implementation challenges or novel applications."
+
             content = f"""
-                You are an expert research problem generator. Your task is to generate a SINGLE, specific, novel research problem statement in the given domain.
+                You are an expert research problem generator with ADAPTIVE LEARNING capabilities. Your task is to generate a SINGLE, specific, novel research problem statement.
 
                 Research Domain: {state["original_prompt"]}
-
                 Current Progress: {validated_count}/3 validated open problems found
-                Generation attempt: {current_iter}
+                Generation attempt: #{generation_attempts} (iteration {current_iter})
+
+                {feedback_context}
 
                 {previous_problems}
 
+                {approach_guidance}
+
                 Requirements for the problem statement:
-                1. **SPECIFIC**: Clearly defined scope and objectives
-                2. **NOVEL**: Not obviously solved or well-established
+                1. **SPECIFIC**: Clearly defined scope and objectives (avoid being too broad)
+                2. **NOVEL**: Not obviously solved or well-established (check uniqueness)
                 3. **FEASIBLE**: Can realistically be addressed with current technology
                 4. **IMPACTFUL**: Would advance the field if solved
                 5. **MEASURABLE**: Success can be quantified or evaluated
+                6. **AVOID REPETITION**: Must be different from all previously generated problems
 
                 Generate ONE specific research problem statement that:
                 - Addresses a concrete gap or limitation in the field
                 - Can be formulated as a clear research question
                 - Is different from previously generated problems
                 - Is narrow enough to be tackled in a research project
+                - Incorporates lessons learned from previous rejections
 
                 Respond with a JSON object containing:
                 {{
                     "statement": "Clear, specific problem statement (1-2 sentences)",
                     "description": "Brief description of why this is important (2-3 sentences)",
                     "keywords": ["key", "terms", "for", "validation", "search"],
-                    "research_question": "Specific research question this addresses"
+                    "research_question": "Specific research question this addresses",
+                    "novelty_claim": "What makes this problem novel and different from existing work",
+                    "scope_justification": "Why this scope is appropriate (not too broad/narrow)"
                 }}
 
                 Focus on being specific and avoiding overly broad or obviously solved problems.
@@ -2632,7 +2690,9 @@ Return only the JSON object, no additional text.
                 
                 # Add metadata
                 problem_data["generated_at"] = current_iter
+                problem_data["generation_attempt"] = generation_attempts
                 problem_data["status"] = "pending_validation"
+                problem_data["learned_from_rejections"] = len(rejection_feedback)
                 
                 # Store current problem for validation
                 state["current_problem"] = problem_data
@@ -2644,10 +2704,12 @@ Return only the JSON object, no additional text.
                 
                 print(f"✅ Generated problem: {problem_data['statement']}")
                 print(f"🔍 Keywords for validation: {', '.join(problem_data.get('keywords', []))}")
+                if rejection_feedback:
+                    print(f"🧠 Incorporated feedback from {len(rejection_feedback)} previous rejections")
                 
                 # Add success message
                 state["messages"].append(
-                    AIMessage(content=f"Generated research problem #{current_iter}: {problem_data['statement']}")
+                    AIMessage(content=f"Generated research problem #{current_iter} (attempt #{generation_attempts}): {problem_data['statement']}")
                 )
                 
             except json.JSONDecodeError as e:
@@ -2660,6 +2722,7 @@ Return only the JSON object, no additional text.
                     "keywords": ["research", "novel", "approaches"],
                     "research_question": f"How can we advance the state of {state['original_prompt']}?",
                     "generated_at": current_iter,
+                    "generation_attempt": generation_attempts,
                     "status": "pending_validation"
                 }
                 print(f"⚠️  {error_msg}, using fallback problem")
@@ -2674,6 +2737,7 @@ Return only the JSON object, no additional text.
                 "keywords": ["research", "challenges"],
                 "research_question": f"What are the key challenges in {state['original_prompt']}?",
                 "generated_at": current_iter,
+                "generation_attempt": generation_attempts,
                 "status": "pending_validation"
             }
             print(f"❌ {error_msg}, using fallback problem")
@@ -2741,9 +2805,9 @@ Return only the JSON object, no additional text.
             else:
                 formatted_results = "No search results found"
             
-            # Create comprehensive analysis prompt
+            # Create comprehensive analysis prompt with feedback generation
             analysis_content = f"""
-You are an expert research validator. Analyze the web search results to determine if a research problem has already been solved.
+You are an expert research validator with SMART FEEDBACK capabilities. Analyze the web search results to determine if a research problem has already been solved AND provide detailed feedback for improvement.
 
 Research Problem: {problem_statement}
 Description: {description}
@@ -2768,6 +2832,9 @@ Assessment Criteria:
 - Academic paper URLs vs general web content
 - Recent research activity indicated by search results
 
+🆕 SMART FEEDBACK GENERATION:
+If recommending "reject", provide specific guidance for improvement:
+
 Respond with a JSON object:
 {{
     "status": "solved" | "well_studied" | "partially_solved" | "open",
@@ -2781,16 +2848,33 @@ Respond with a JSON object:
         "solution_indicators": "number of results suggesting solutions",
         "academic_sources": "presence of academic/research URLs",
         "recency_indicators": "evidence of recent research activity"
+    }},
+    "rejection_feedback": {{
+        "primary_reason": "too_broad" | "already_solved" | "well_studied" | "duplicate" | "unclear" | "not_novel",
+        "specific_issues": [
+            "Issue 1: specific problem with the statement",
+            "Issue 2: another specific issue"
+        ],
+        "improvement_suggestions": [
+            "Suggestion 1: specific way to improve",
+            "Suggestion 2: another specific improvement"
+        ],
+        "scope_guidance": "How to narrow or adjust the scope",
+        "novelty_guidance": "How to make the problem more novel",
+        "alternative_angles": ["alternative approach 1", "alternative approach 2"],
+        "specific_guidance": "Detailed guidance for the next generation attempt"
     }}
 }}
 
-Guidelines:
-- If search results show many solution-oriented pages: status "solved" or "well_studied"
-- If few or no relevant results: status "open" (likely novel problem)
-- If mixed results with some gaps: status "partially_solved"
-- Use "accept" for "open" and some "partially_solved" problems
-- Use "reject" for "solved" and "well_studied" problems
+Guidelines for rejection feedback:
+- "too_broad": Problem scope is too wide, suggest narrowing to specific aspect
+- "already_solved": Existing solutions found, suggest unexplored variations or improvements
+- "well_studied": Extensive research exists, suggest novel angles or applications
+- "duplicate": Similar to previous attempts, suggest different perspective
+- "unclear": Problem statement is vague, suggest specific clarifications
+- "not_novel": Limited novelty, suggest innovative aspects or gaps
 
+Provide actionable, specific feedback that helps generate a better problem next time.
 Return only the JSON object, no additional text.
 """
 
@@ -2853,10 +2937,57 @@ Return only the JSON object, no additional text.
                 print(f"💡 Recommendation: {recommendation.upper()}")
                 print(f"🧠 Reasoning: {validation_data.get('reasoning', 'No reasoning provided')[:150]}...")
                 
-                if recommendation == "accept":
-                    print("✅ Problem validated as open research opportunity")
+                # 🆕 SMART FEEDBACK: Process rejection feedback for learning
+                if recommendation == "reject":
+                    print("❌ Problem rejected - storing feedback for learning")
+                    
+                    # Extract and store detailed feedback
+                    rejection_feedback = validation_data.get("rejection_feedback", {})
+                    if rejection_feedback:
+                        feedback_entry = {
+                            "timestamp": current_problem.get("generated_at", 0),
+                            "generation_attempt": current_problem.get("generation_attempt", 0),
+                            "rejected_problem": current_problem.get("statement", ""),
+                            "primary_reason": rejection_feedback.get("primary_reason", "unknown"),
+                            "specific_issues": rejection_feedback.get("specific_issues", []),
+                            "improvement_suggestions": rejection_feedback.get("improvement_suggestions", []),
+                            "scope_guidance": rejection_feedback.get("scope_guidance", ""),
+                            "novelty_guidance": rejection_feedback.get("novelty_guidance", ""),
+                            "alternative_angles": rejection_feedback.get("alternative_angles", []),
+                            "specific_guidance": rejection_feedback.get("specific_guidance", ""),
+                            "validation_reasoning": validation_data.get("reasoning", ""),
+                            "search_evidence": validation_data.get("search_evidence", {})
+                        }
+                        
+                        # Store in rejection feedback list
+                        if "rejection_feedback" not in state:
+                            state["rejection_feedback"] = []
+                        state["rejection_feedback"].append(feedback_entry)
+                        
+                        # Create focused feedback context for next generation
+                        primary_reason = rejection_feedback.get("primary_reason", "unknown")
+                        specific_guidance = rejection_feedback.get("specific_guidance", "")
+                        
+                        feedback_context = f"""
+Based on rejection reason '{primary_reason}':
+{specific_guidance}
+
+Specific improvements needed:
+{chr(10).join(f"- {issue}" for issue in rejection_feedback.get("improvement_suggestions", []))}
+"""
+                        state["feedback_context"] = feedback_context
+                        
+                        # Print detailed feedback for user visibility
+                        print(f"🚨 Rejection Reason: {primary_reason.upper()}")
+                        print(f"💡 Guidance: {specific_guidance[:100]}...")
+                        if rejection_feedback.get("alternative_angles"):
+                            print(f"🔄 Suggested Angles: {', '.join(rejection_feedback['alternative_angles'][:2])}")
+                    
+                    print("🧠 Feedback stored for next generation attempt")
                 else:
-                    print("❌ Problem rejected - evidence of existing solutions found")
+                    print("✅ Problem validated as open research opportunity")
+                    # Clear any previous feedback context on success
+                    state["feedback_context"] = ""
                 
                 # Add validation message
                 state["messages"].append(
@@ -2921,6 +3052,101 @@ Based on your knowledge, is this problem already solved? Respond with JSON:
                 }
                 state["current_problem"]["validation"] = state["validation_results"]
         
+        return state
+
+    async def _process_rejection_feedback_node(self, state: ResearchPlanningState) -> ResearchPlanningState:
+        """🆕 SMART FEEDBACK: Process rejection feedback and prepare for next generation."""
+        print(f"\n🧠 Processing rejection feedback for smarter generation...")
+        state["current_step"] = "process_feedback"
+        
+        try:
+            validation_results = state.get("validation_results", {})
+            current_problem = state.get("current_problem", {})
+            
+            # Get the latest rejection feedback
+            rejection_feedback_list = state.get("rejection_feedback", [])
+            if not rejection_feedback_list:
+                print("⚠️  No rejection feedback to process")
+                return state
+            
+            latest_feedback = rejection_feedback_list[-1]
+            primary_reason = latest_feedback.get("primary_reason", "unknown")
+            
+            print(f"📊 Analyzing rejection pattern: {primary_reason}")
+            
+            # Analyze rejection patterns for adaptive strategy
+            rejection_patterns = {}
+            for feedback in rejection_feedback_list:
+                reason = feedback.get("primary_reason", "unknown")
+                rejection_patterns[reason] = rejection_patterns.get(reason, 0) + 1
+            
+            # Determine adaptive strategy based on patterns
+            total_rejections = len(rejection_feedback_list)
+            most_common_reason = max(rejection_patterns.items(), key=lambda x: x[1])[0] if rejection_patterns else "unknown"
+            
+            print(f"🔍 Pattern Analysis: {total_rejections} rejections, most common: {most_common_reason}")
+            
+            # Create strategic guidance based on patterns
+            strategic_guidance = ""
+            if most_common_reason == "too_broad":
+                strategic_guidance = "Focus on a very specific technical aspect or implementation detail."
+            elif most_common_reason == "already_solved":
+                strategic_guidance = "Look for novel applications, improvements, or unexplored edge cases."
+            elif most_common_reason == "well_studied":
+                strategic_guidance = "Consider interdisciplinary approaches or emerging technology combinations."
+            elif most_common_reason == "duplicate":
+                strategic_guidance = "Try a completely different angle or application domain."
+            elif most_common_reason == "unclear":
+                strategic_guidance = "Be extremely specific about the problem definition and scope."
+            else:
+                strategic_guidance = "Consider a different approach or methodology entirely."
+            
+            # Update feedback context with strategic insights
+            current_context = state.get("feedback_context", "")
+            enhanced_context = f"""
+{current_context}
+
+🎯 STRATEGIC ADAPTATION (after {total_rejections} rejections):
+Most frequent issue: {most_common_reason} (occurred {rejection_patterns.get(most_common_reason, 0)} times)
+Strategy: {strategic_guidance}
+
+🔄 TACTICAL ADJUSTMENTS:
+"""
+            
+            # Add specific tactical adjustments based on latest feedback
+            latest_guidance = latest_feedback.get("specific_guidance", "")
+            alternative_angles = latest_feedback.get("alternative_angles", [])
+            
+            if latest_guidance:
+                enhanced_context += f"- {latest_guidance}\n"
+            
+            if alternative_angles:
+                enhanced_context += f"- Try these angles: {', '.join(alternative_angles)}\n"
+            
+            # Add adaptive constraints based on rejection count
+            if total_rejections >= 3:
+                enhanced_context += "- CONSTRAINT: Be extremely specific and narrow in scope\n"
+            if total_rejections >= 5:
+                enhanced_context += "- CONSTRAINT: Focus on technical implementation challenges\n"
+            if total_rejections >= 7:
+                enhanced_context += "- CONSTRAINT: Consider niche applications or edge cases\n"
+            
+            state["feedback_context"] = enhanced_context
+            
+            print(f"🎯 Updated strategy: {strategic_guidance}")
+            print(f"📝 Enhanced feedback context prepared for next generation")
+            
+            # Add processing message
+            state["messages"].append(
+                AIMessage(content=f"Processed rejection feedback: {primary_reason} (pattern analysis complete, adaptive strategy updated)")
+            )
+            
+        except Exception as e:
+            error_msg = f"Feedback processing failed: {str(e)}"
+            state["errors"].append(error_msg)
+            print(f"❌ {error_msg}")
+            # Continue without enhanced feedback if processing fails
+            
         return state
 
     def _create_research_plan_node(self, state: ResearchPlanningState) -> ResearchPlanningState:
@@ -3222,80 +3448,81 @@ Provide a detailed, focused research plan that maximizes impact on this specific
                 state["previous_plans"] = []
             
             critique_content = f"""
-You are a senior research advisor and peer reviewer with expertise in machine learning and academic research. Your task is to critically evaluate this research plan for a PhD-level project.
+You are a constructive senior research advisor and peer reviewer with deep expertise in machine learning and academic research. Your primary goal is to provide specific, actionable feedback to help improve a research plan. You are not just scoring it; you are guiding its refinement.
 
-**RESEARCH PROBLEM:**
-{selected_problem.get('statement', 'N/A')}
+**RESEARCH CONTEXT:**
+- **Research Problem Statement:** {selected_problem.get('statement', 'N/A')}
 
 **RESEARCH PLAN TO EVALUATE:**
 {research_plan}
 
-**EVALUATION CRITERIA:**
+**EVALUATION INSTRUCTIONS:**
+Evaluate the plan based on its required structure. For each section, assess the corresponding criteria and provide a score (1-10). The final score will be a weighted average.
 
-Assess the plan across these dimensions (score each 1-10):
+---
+**EVALUATION CRITERIA (by section):**
 
-1. **RESEARCH NOVELTY & IMPACT (25%):**
-   - Does this advance the field meaningfully?
-   - Are research questions well-formulated and significant?
-   - Clear differentiation from existing work?
+1.  **WEB-INFORMED PROBLEM ANALYSIS & LITERATURE INTEGRATION (Weight: 20%)**
+    -   Does the analysis clearly leverage the web search findings and provided URLs?
+    -   Are the identified research gaps genuine and well-supported by the analysis?
+    -   Is the problem's relevance and "partially_solved" status well-integrated?
+    -   *Score (1-10):*
 
-2. **TECHNICAL FEASIBILITY (20%):**
-   - Are proposed methods appropriate and sound?
-   - Is experimental design rigorous and achievable?
-   - Realistic resource and timeline estimates?
+2.  **PHASES 1-4 (Methodology, Feasibility & Timeline) (Weight: 40%)**
+    -   Is the progression through the four phases logical and well-defined?
+    -   Are the proposed methods, experiments, and validation frameworks technically sound?
+    -   Is the timeline proposed for the phases realistic and appropriate for the project's stated scope (e.g., a PhD project)? # ✏️ MODIFIED: Timeline check is now flexible.
+    -   Are the milestones and deliverables clear and measurable?
+    -   *Score (1-10):*
 
-3. **METHODOLOGY SOUNDNESS (20%):**
-   - Proper validation and evaluation frameworks?
-   - Appropriate success metrics and benchmarks?
-   - Comprehensive risk assessment?
+3.  **RISK, RESOURCES & MITIGATION (Weight: 15%)**
+    -   Are the resource requirements (personnel, tools, data) well-justified and realistic?
+    -   Is the risk assessment comprehensive, acknowledging both technical and practical challenges?
+    -   Are the mitigation strategies thoughtful and actionable?
+    -   *Score (1-10):*
 
-4. **LITERATURE INTEGRATION (15%):**
-   - Proper use of web search findings and URLs?
-   - Builds appropriately on existing work?
-   - Identifies genuine research gaps?
-
-5. **PRACTICAL IMPLEMENTATION (10%):**
-   - Clear phase structure and milestones?
-   - Realistic resource requirements?
-   - Achievable timeline (24 months)?
-
-6. **ACADEMIC RIGOR (10%):**
-   - Publication strategy well-defined?
-   - Proper evaluation against state-of-the-art?
-   - Clear contribution statements?
+4.  **OUTCOMES, IMPACT & RIGOR (Weight: 25%)**
+    -   Are the expected contributions clearly differentiated from existing work?
+    -   Is the novelty and potential impact of the research significant?
+    -   Is the publication and dissemination strategy ambitious yet credible?
+    -   Are the success metrics well-defined and benchmarked against the state-of-the-art?
+    -   *Score (1-10):*
+---
 
 **RECOMMENDATION GUIDELINES:**
-- **"finalize"**: Use when there are 0 major issues OR the plan is good enough despite minor issues
-- **"refine_plan"**: Use when there are 1-4 major issues that can be fixed by improving the current plan
-- **"select_different"**: Use when there are 5+ major issues indicating the problem itself may be flawed
-- **"restart"**: Use when there are fundamental conceptual problems requiring complete rethinking
+- "finalize": Use when the weighted score is >= 8.5 and there are no major issues.
+- "refine_plan": Use when the score is < 8.5 and the issues are fixable.
+- "restart": Use when the plan is fundamentally flawed in its core approach or understanding of the problem.
 
 **OUTPUT FORMAT:**
-Return only a JSON object with this exact structure:
+Return only a JSON object with this exact structure. For 'major_issues' and 'suggestions', specify the section of the plan the comment applies to.
+
 {{
-    "overall_score": float,  // Weighted average (1-10)
+    "overall_score": float,  // Weighted average of the 4 section scores
     "dimension_scores": {{
-        "novelty_impact": float,
-        "technical_feasibility": float, 
-        "methodology": float,
-        "literature_integration": float,
-        "implementation": float,
-        "academic_rigor": float
+        "problem_analysis_and_literature": float,
+        "methodology_and_feasibility": float,
+        "risk_and_resources": float,
+        "outcomes_and_rigor": float
     }},
-    "major_issues": [
-        "Issue 1 description",
-        "Issue 2 description"
+    "major_issues": [ // ✏️ MODIFIED: Now an array of objects
+        {{
+            "section": "The section of the plan with the issue (e.g., PHASE 3)",
+            "comment": "Specific description of the major issue."
+        }}
     ],
-    "suggestions": [
-        "Specific improvement 1",
-        "Specific improvement 2"
+    "suggestions": [ // ✏️ MODIFIED: Now an array of objects
+        {{
+            "section": "The section of the plan for the suggestion (e.g., RISK MITIGATION)",
+            "comment": "Specific, actionable improvement suggestion."
+        }}
     ],
     "strengths": [
-        "Strength 1",
-        "Strength 2"
+        "Strength 1 to preserve",
+        "Strength 2 to preserve"
     ],
-    "recommendation": "finalize|refine_plan|select_different|restart",
-    "reasoning": "Brief explanation of recommendation"
+    "recommendation": "finalize|refine_plan|restart",
+    "reasoning": "Brief explanation for the overall score and recommendation."
 }}
 """
 
@@ -3949,6 +4176,29 @@ Provide the complete refined research plan:
         else:
             print(f"🔄 Continue generating: {len(validated_problems)}/{target_problems} problems, iteration {iteration_count}/{max_iterations}")
             return "generate_problem"
+
+    def _smart_validation_decision(self, state: ResearchPlanningState) -> str:
+        """🆕 SMART DECISION: Determine next step after problem validation with intelligent routing."""
+        validation_results = state.get("validation_results", {})
+        recommendation = validation_results.get("recommendation", "reject")
+        
+        print(f"🧠 Smart validation decision: {recommendation}")
+        
+        # Check if validation passed
+        if recommendation == "accept":
+            # Problem is valid - collect it
+            return "collect_problem"
+        
+        # Problem was rejected - check if we have feedback to process intelligently
+        rejection_feedback = state.get("rejection_feedback", [])
+        if rejection_feedback:
+            # We have rejection feedback to process - use smart feedback
+            print(f"🔄 Processing {len(rejection_feedback)} rejection feedback entries")
+            return "process_feedback"
+        
+        # No feedback yet - continue with basic generation (fallback)
+        print("⚡ Fallback to basic generation")
+        return "continue_generation"
 
     def _check_completion(self, state: ResearchPlanningState) -> str:
         """Check if problem validation passed and should be collected."""
