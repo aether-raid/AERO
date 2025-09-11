@@ -199,3 +199,7 @@ tensorboard_logs/
 
 # Faiss and metadata databases
 Faiss/
+
+# Generated Word reports
+suggestion_reports/
+*.docx

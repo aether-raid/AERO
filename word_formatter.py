@@ -364,81 +364,219 @@ class WordFormatter:
     
     def format_ml_text_recommendations(self, text: str, title: str = "ML Model Recommendations") -> None:
         """Format ML recommendation text with proper handling of markdown-style formatting."""
-        # Add title
-        self.add_title(title, "Based on Recent Research Analysis")
         
-        # Split text into sections
-        lines = text.strip().split('\n')
+        # Split text into sections based on markdown headers
+        sections = self._parse_ml_text_structure(text)
         
-        current_section = None
-        current_model = None
-        
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-            
-            # Check for introduction text
-            if line.startswith('Based on') and 'recommended models' in line.lower():
-                self.add_heading("Overview", level=1)
-                self.add_formatted_paragraph(line)
-                continue
-            
-            # Check for model headers (## 1., ## 2., etc.)
-            model_match = re.match(r'^##\s*(\d+)\.\s*(.+)', line)
-            if model_match:
-                model_num = model_match.group(1)
-                model_name = model_match.group(2)
-                current_model = f"{model_num}. {model_name}"
-                
-                if current_section != 'models':
-                    self.add_heading("Recommended Models", level=1)
-                    current_section = 'models'
-                
-                self.add_heading(current_model, level=2)
-                continue
-            
-            # Handle formatted bullet points with ** formatting
-            if line.startswith('- **') and '**:' in line:
-                # Parse bullet points like "- **Performance**: 42.3 mAP on COCO with 31.2 FPS"
-                para = self.doc.add_paragraph(style='List Bullet')
-                
-                # Split by **: to separate the bold label from content
-                parts = line[2:].split('**:', 1)  # Remove "- " and split on **:
-                if len(parts) == 2:
-                    label = parts[0].replace('**', '').strip()
-                    content = parts[1].strip()
-                    
-                    # Add bold label
-                    run = para.add_run(f"{label}: ")
-                    run.font.bold = True
-                    
-                    # Add regular content
-                    para.add_run(content)
-                else:
-                    # Fallback: just add the text
-                    para.add_run(line[2:])
-                continue
-            
-            # Handle regular bullet points
-            if line.startswith('- '):
-                para = self.doc.add_paragraph(style='List Bullet')
-                self._add_formatted_text_to_paragraph(para, line[2:])
-                continue
-            
-            # Handle lines with ** formatting but not bullet points
-            if '**' in line:
-                self.add_formatted_paragraph(line)
-                continue
-            
-            # Regular paragraphs
-            if line and current_section:
-                self.add_paragraph(line)
+        for section in sections:
+            self._format_ml_section(section)
         
         # Add comparison section if multiple models detected
-        model_count = len(re.findall(r'^##\s*\d+\.', text, re.MULTILINE))
+        model_count = len(re.findall(r'^##?\s*\d+\.', text, re.MULTILINE))
         if model_count > 1:
             self._add_model_comparison_section(text)
+    
+    def _parse_ml_text_structure(self, text: str) -> List[Dict[str, Any]]:
+        """Parse ML text into structured sections preserving hierarchy."""
+        lines = text.strip().split('\n')
+        sections = []
+        current_section = None
+        
+        i = 0
+        while i < len(lines):
+            line = lines[i].strip()
+            
+            if not line:
+                i += 1
+                continue
+            
+            # Introduction/overview paragraph
+            if line.startswith('Based on') or line.startswith('Here are'):
+                sections.append({
+                    'type': 'overview',
+                    'content': line
+                })
+            
+            # Main section headers (# Top 3, ## Top 3, etc.)
+            elif re.match(r'^##?\s*(Top\s*\d+|Detailed|Recommended)', line, re.IGNORECASE):
+                header_match = re.match(r'^##?\s*(.+)', line)
+                if header_match:
+                    sections.append({
+                        'type': 'main_header',
+                        'title': header_match.group(1),
+                        'level': 1
+                    })
+            
+            # Standalone ### headers (not part of model sections)
+            elif re.match(r'^###\s+(?!\d+\.)', line):
+                header_match = re.match(r'^###\s+(.+)', line)
+                if header_match:
+                    sections.append({
+                        'type': 'subsection_header',
+                        'title': header_match.group(1),
+                        'level': 3
+                    })
+            
+            # Model headers (## 1., ### 1., etc.)
+            elif re.match(r'^###+?\s*\d+\.', line):
+                model_match = re.match(r'^###+?\s*(\d+)\.\s*(.+)', line)
+                if model_match:
+                    # Parse the entire model section
+                    model_section = self._parse_model_section(lines, i)
+                    sections.append(model_section)
+                    i = model_section['end_line']
+                    continue
+            
+            # Horizontal rules
+            elif line.startswith('---'):
+                sections.append({'type': 'separator'})
+            
+            # Regular content
+            else:
+                sections.append({
+                    'type': 'paragraph',
+                    'content': line
+                })
+            
+            i += 1
+        
+        return sections
+    
+    def _parse_model_section(self, lines: List[str], start_idx: int) -> Dict[str, Any]:
+        """Parse a complete model section with all its subsections."""
+        line = lines[start_idx].strip()
+        model_match = re.match(r'^###+?\s*(\d+)\.\s*(.+)', line)
+        
+        if not model_match:
+            return {'type': 'paragraph', 'content': line, 'end_line': start_idx}
+        
+        model_num = model_match.group(1)
+        model_name = model_match.group(2)
+        
+        section = {
+            'type': 'model',
+            'number': model_num,
+            'name': model_name,
+            'subsections': [],
+            'end_line': start_idx
+        }
+        
+        i = start_idx + 1
+        current_subsection = None
+        
+        while i < len(lines):
+            line = lines[i].strip()
+            
+            # Stop if we hit another model or main section
+            if (re.match(r'^###+?\s*\d+\.', line) or 
+                re.match(r'^##?\s*(Top\s*\d+|Detailed|Recommended)', line, re.IGNORECASE)):
+                break
+            
+            if not line:
+                i += 1
+                continue
+            
+            # Subsection headers (### Header or **Header**)
+            if (line.startswith('###') and not re.match(r'^###\s*\d+\.', line)) or (line.startswith('**') and line.endswith('**') and len(line) > 4):
+                if current_subsection:
+                    section['subsections'].append(current_subsection)
+                
+                if line.startswith('###'):
+                    subsection_title = line.strip('#').strip()
+                else:
+                    subsection_title = line.strip('*').strip()
+                
+                current_subsection = {
+                    'title': subsection_title,
+                    'content': []
+                }
+            
+            # Bullet points
+            elif line.startswith('*   ') or line.startswith('    *'):
+                if current_subsection:
+                    current_subsection['content'].append({
+                        'type': 'bullet',
+                        'text': line.strip('* ').strip()
+                    })
+                else:
+                    # Create a default subsection for orphaned bullets
+                    if not current_subsection:
+                        current_subsection = {'title': 'Details', 'content': []}
+                    current_subsection['content'].append({
+                        'type': 'bullet',
+                        'text': line.strip('* ').strip()
+                    })
+            
+            # Regular text within subsections
+            else:
+                if current_subsection:
+                    current_subsection['content'].append({
+                        'type': 'text',
+                        'text': line
+                    })
+                else:
+                    # Text without a subsection - treat as description
+                    if not section.get('description'):
+                        section['description'] = []
+                    section['description'].append(line)
+            
+            i += 1
+        
+        # Add the last subsection
+        if current_subsection:
+            section['subsections'].append(current_subsection)
+        
+        section['end_line'] = i - 1
+        return section
+    
+    def _format_ml_section(self, section: Dict[str, Any]) -> None:
+        """Format a structured ML section."""
+        if section['type'] == 'overview':
+            self.add_formatted_paragraph(section['content'])
+            self.add_separator()
+        
+        elif section['type'] == 'main_header':
+            level = section.get('level', 1)
+            self.add_heading(section['title'], level=level)
+        
+        elif section['type'] == 'subsection_header':
+            level = section.get('level', 3)
+            self.add_heading(section['title'], level=level)
+        
+        elif section['type'] == 'model':
+            # Add model heading
+            model_title = f"{section['number']}. {section['name']}"
+            self.add_heading(model_title, level=2)
+            
+            # Add description if present
+            if section.get('description'):
+                desc_text = ' '.join(section['description'])
+                self.add_formatted_paragraph(desc_text)
+            
+            # Add subsections
+            for subsection in section.get('subsections', []):
+                self.add_heading(subsection['title'], level=3)
+                
+                bullet_items = []
+                for content_item in subsection['content']:
+                    if content_item['type'] == 'bullet':
+                        bullet_items.append(content_item['text'])
+                    elif content_item['type'] == 'text':
+                        if bullet_items:
+                            # Flush bullets before adding text
+                            self.add_bullet_list(bullet_items)
+                            bullet_items = []
+                        self.add_formatted_paragraph(content_item['text'])
+                
+                # Flush remaining bullets
+                if bullet_items:
+                    self.add_bullet_list(bullet_items)
+        
+        elif section['type'] == 'separator':
+            self.add_separator()
+        
+        elif section['type'] == 'paragraph':
+            self.add_formatted_paragraph(section['content'])
     
     def _add_model_comparison_section(self, text: str) -> None:
         """Add a comparison table section for multiple models."""

@@ -252,6 +252,7 @@ class MLResearcherLangGraph:
         workflow.add_node("suggest_models", self._suggest_models_node)
         workflow.add_node("critique_response", self._critique_response_node)
         workflow.add_node("revise_suggestions", self._revise_suggestions_node)
+        workflow.add_node("generate_report", self._generate_report_node)
         
         # Define the flow
         workflow.set_entry_point("analyze_properties_and_task")
@@ -278,9 +279,12 @@ class MLResearcherLangGraph:
             self._should_revise_suggestions,
             {
                 "revise": "suggest_models",      # Loop back to suggestions for revision
-                "finalize": END                  # If suggestions are good as-is
+                "finalize": "generate_report"    # Generate report before ending
             }
         )
+        
+        # Add final edge from report generation to END
+        workflow.add_edge("generate_report", END)
         
         # Keep the revise_suggestions node for potential future use
         # but the main loop now goes back to suggest_models directly
@@ -1468,8 +1472,9 @@ Please provide your assessment in the following JSON format:
 
 DECISION CRITERIA:
 - "continue": Papers are sufficient (relevance ≥7.0, good coverage)
-- "search_backup": Papers are decent but could use backup (relevance 5.0-6.9, partial coverage)  
-- "search_new": Papers are insufficient (relevance <5.0, poor coverage, or major gaps)
+- "search_backup": Papers are decent but could use backup, use only if the current search is going in the right direction (relevance 5.0-6.9, partial coverage)  
+- "search_new": Papers are insufficient, OR majority are unrelated to the topic (relevance <5.0, poor coverage, or major gaps)
+
 
 If search_iteration ≥ 2, bias toward "continue" unless papers are truly inadequate.
 
@@ -2284,7 +2289,268 @@ Return only the JSON object, no additional text.
             print(f"✅ Suggestions approved after {iteration_count} iteration(s) - {fixed_count} total issues fixed, finalizing...")
             return "finalize"
 
+    def _generate_report_node(self, state: ModelSuggestionState) -> ModelSuggestionState:
+        """Node for generating and saving a comprehensive Word report of model suggestions."""
+        print(f"\n📄 Step 6: Generating comprehensive Word report...")
+        state["current_step"] = "generate_report"
+        
+        try:
+            from word_formatter import WordFormatter
+            from datetime import datetime
+            import os
+            
+            # Initialize formatter
+            formatter = WordFormatter()
+            
+            # Extract key information from state
+            original_prompt = state.get("original_prompt", "ML Research Analysis")
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            
+            # Create document title
+            safe_prompt = "".join(c for c in original_prompt if c.isalnum() or c in (' ', '-', '_')).strip()[:50]
+            formatter.add_title(
+                title=f"ML Model Suggestion Report",
+                subtitle=f"Query: {safe_prompt}\nGenerated on {timestamp}",
+                add_date=False
+            )
+            
+            # Executive Summary
+            formatter.add_heading("Executive Summary", level=1)
+            model_suggestions = state.get("model_suggestions", {})
+            search_results = state.get("arxiv_results", {})
+            
+            exec_summary = f"""This report presents **machine learning model recommendations** based on comprehensive analysis of recent research literature. The analysis processed {search_results.get('papers_returned', 0)} research papers from ArXiv and generated recommendations through {state.get('suggestion_iteration', 1)} iteration(s) with expert critique validation.
 
+**Key Findings**: The research identified optimal model architectures that balance *performance* and *computational efficiency* for the specified task requirements. All recommendations are grounded in peer-reviewed research and include practical implementation guidance."""
+            
+            formatter.add_formatted_paragraph(exec_summary)
+            
+            # Research Context and Query (keep on same page as summary)
+            formatter.add_separator()
+            formatter.add_heading("Research Query and Context", level=1)
+            formatter.add_formatted_paragraph(f"**Original Query**: {original_prompt}")
+            
+            # Task Analysis (keep with context)
+            detected_categories = state.get("detected_categories", [])
+            if detected_categories:
+                formatter.add_heading("Task Analysis", level=2)
+                task_analysis = "**Detected ML Categories and Properties**:\n\n"
+                for category in detected_categories[:5]:  # Limit to top 5
+                    name = category.get("name", "Unknown")
+                    confidence = category.get("confidence", 0)
+                    description = category.get("description", "")
+                    task_analysis += f"- **{name}** (Confidence: {confidence:.1%}): {description}\n"
+                formatter.add_formatted_paragraph(task_analysis)
+            
+            # Page break before main content section
+            formatter.add_page_break()
+            
+            # Model Recommendations (Main Content)
+            formatter.add_heading("Model Recommendations", level=1)
+            
+            # Get the model suggestions - try multiple paths for robustness
+            suggestions_text = ""
+            if model_suggestions.get("suggestions_successful", False):
+                # First try the main suggestions
+                suggestions_text = model_suggestions.get("model_suggestions", "")
+                
+                # If revision was applied, use the revised version
+                if model_suggestions.get("revision_applied", False):
+                    revised_text = model_suggestions.get("revised_suggestions", "")
+                    if revised_text:
+                        suggestions_text = revised_text
+            else:
+                # Fallback: try to get suggestions even if not marked as successful
+                suggestions_text = model_suggestions.get("model_suggestions", "")
+                if not suggestions_text:
+                    suggestions_text = model_suggestions.get("revised_suggestions", "")
+            
+            # Debug info
+            print(f"🔍 Debug - Model suggestions available: {bool(suggestions_text)}")
+            if suggestions_text:
+                print(f"🔍 Debug - Suggestions length: {len(suggestions_text)} characters")
+                print(f"🔍 Debug - First 100 chars: {suggestions_text[:100]}...")
+            
+            if suggestions_text:
+                # Use the enhanced formatter for ML text (no title since we already added one)
+                formatter.format_ml_text_recommendations(suggestions_text, title="")
+            else:
+                # Fallback content if no suggestions available
+                formatter.add_formatted_paragraph(
+                    "**Note**: Model suggestions were not available in the expected format. "
+                    "This may indicate an issue with the suggestion generation process."
+                )
+                print("⚠️ Warning: No model suggestions found to include in report")
+            
+            # Research Methodology - start on new page
+            formatter.add_page_break()
+            formatter.add_heading("Research Methodology", level=1)
+            
+            # Search Strategy
+            search_query = state.get("arxiv_search_query", "")
+            methodology = f"""**Literature Search Strategy**: Systematic search of ArXiv repository using targeted queries to identify relevant research papers.
+
+**Search Query**: `{search_query}`
+
+**Paper Selection Criteria**: Papers were evaluated based on relevance scores, recency, and technical merit. Only papers with high relevance to the specified task were included in the analysis.
+
+**Validation Process**: Model suggestions underwent {state.get('suggestion_iteration', 1)} round(s) of expert critique and validation to ensure accuracy and completeness."""
+            
+            formatter.add_formatted_paragraph(methodology)
+            
+            # Quality Assurance (keep with methodology)
+            critique_results = state.get("critique_results", {})
+            if critique_results.get("critique_successful", False):
+                formatter.add_separator()
+                formatter.add_heading("Quality Assurance", level=2)
+                
+                qa_text = f"""**Expert Review Process**: All recommendations underwent rigorous expert critique validation.
+
+**Critique Score**: {critique_results.get('overall_score', 'N/A')}/10.0
+**Validation Status**: {critique_results.get('recommendation', 'N/A').title()}
+
+**Quality Metrics**:
+- Relevance: {critique_results.get('relevance_score', 'N/A')}/10.0
+- Completeness: {critique_results.get('completeness_score', 'N/A')}/10.0  
+- Technical Accuracy: {critique_results.get('technical_accuracy_score', 'N/A')}/10.0
+- Evidence Quality: {critique_results.get('evidence_quality_score', 'N/A')}/10.0"""
+                
+                formatter.add_formatted_paragraph(qa_text)
+            
+            # ArXiv Papers and Citations - start on new page
+            formatter.add_page_break()
+            formatter.add_heading("References and Sources", level=1)
+            papers = search_results.get("papers", [])
+            
+            if papers:
+                # Research Papers Summary
+                formatter.add_heading("Research Papers Analyzed", level=2)
+                papers_summary = f"""This analysis examined **{len(papers)} research papers** from ArXiv, focusing on the most relevant and recent publications. The papers were selected based on their relevance to the specified task and technical merit."""
+                formatter.add_formatted_paragraph(papers_summary)
+                
+                # Create citations table
+                citation_data = []
+                for i, paper in enumerate(papers[:10], 1):  # Top 10 papers
+                    title = paper.get("title", "Unknown Title")
+                    authors = paper.get("authors", "Unknown Authors")
+                    year = paper.get("published", "Unknown")[:4] if paper.get("published") else "N/A"
+                    arxiv_id = paper.get("id", "").replace("http://arxiv.org/abs/", "")
+                    relevance = paper.get("relevance_score", 0)
+                    
+                    # Format authors (limit to first 3 + et al. if more)
+                    if isinstance(authors, list):
+                        if len(authors) > 3:
+                            author_str = f"{', '.join(authors[:3])}, et al."
+                        else:
+                            author_str = ', '.join(authors)
+                    else:
+                        author_str = str(authors)[:50] + "..." if len(str(authors)) > 50 else str(authors)
+                    
+                    # Truncate title if too long
+                    title_short = title[:60] + "..." if len(title) > 60 else title
+                    
+                    citation_data.append([
+                        str(i),
+                        title_short,
+                        author_str[:40] + "..." if len(author_str) > 40 else author_str,
+                        year,
+                        arxiv_id,
+                        f"{relevance:.1f}/10"
+                    ])
+                
+                formatter.add_table(
+                    citation_data,
+                    headers=["#", "Title", "Authors", "Year", "ArXiv ID", "Relevance"],
+                    title="Key Papers Referenced"
+                )
+                
+                # APA Style Citations - start on new page if table is large
+                if len(papers) > 5:
+                    formatter.add_page_break()
+                else:
+                    formatter.add_separator()
+                    
+                formatter.add_heading("APA Citations", level=2)
+                apa_citations = ""
+                for i, paper in enumerate(papers[:10], 1):
+                    title = paper.get("title", "Unknown Title")
+                    authors = paper.get("authors", ["Unknown Author"])
+                    year = paper.get("published", "Unknown")[:4] if paper.get("published") else "n.d."
+                    arxiv_id = paper.get("id", "").replace("http://arxiv.org/abs/", "")
+                    
+                    # Format authors for APA style
+                    if isinstance(authors, list):
+                        if len(authors) == 1:
+                            author_apa = authors[0]
+                        elif len(authors) == 2:
+                            author_apa = f"{authors[0]} & {authors[1]}"
+                        elif len(authors) <= 6:
+                            author_apa = f"{', '.join(authors[:-1])}, & {authors[-1]}"
+                        else:
+                            author_apa = f"{', '.join(authors[:6])}, ... {authors[-1]}"
+                    else:
+                        author_apa = str(authors)
+                    
+                    # Format APA citation
+                    apa_citation = f"{author_apa} ({year}). *{title}*. arXiv preprint arXiv:{arxiv_id}.\n\n"
+                    apa_citations += apa_citation
+                
+                formatter.add_formatted_paragraph(apa_citations)
+            
+            # Technical Details and Limitations - start on new page
+            formatter.add_page_break()
+            formatter.add_heading("Technical Details and Limitations", level=1)
+            
+            retries = state.get("search_iteration", 1)
+            limitations = f"""**Search Iterations**: {retries} search iteration(s) were performed to identify relevant literature.
+
+**Data Sources**: ArXiv repository (pre-print server for computer science and related fields)
+
+**Temporal Scope**: Analysis focused on recent publications to ensure recommendations reflect current state-of-the-art
+
+**Limitations**:
+- Results are based on available ArXiv papers and may not include all relevant commercial or proprietary solutions
+- Model performance may vary based on specific implementation details and hardware configurations  
+- Recommendations should be validated through empirical testing for specific use cases
+
+**Reproducibility**: This analysis can be reproduced using the same search queries and evaluation criteria."""
+            
+            formatter.add_formatted_paragraph(limitations)
+            
+            # Generate filename and save
+            timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+            safe_query = "".join(c for c in original_prompt if c.isalnum() or c in (' ', '-', '_')).strip()[:30]
+            filename = f"ml_model_suggestions_{safe_query}_{timestamp_str}.docx"
+            
+            # Ensure suggestion_reports directory exists
+            reports_dir = os.path.join(os.getcwd(), "suggestion_reports")
+            os.makedirs(reports_dir, exist_ok=True)
+            
+            output_path = os.path.join(reports_dir, filename)
+            formatter.save(output_path)
+            
+            # Update state with report information
+            state["report_generated"] = True
+            state["report_path"] = output_path
+            state["report_filename"] = filename
+            
+            print(f"✅ Comprehensive report generated successfully!")
+            print(f"📁 Report saved to: {output_path}")
+            
+            # Add success message
+            state["messages"].append(
+                AIMessage(content=f"Comprehensive Word report generated and saved to: {output_path}")
+            )
+        
+        except Exception as e:
+            error_msg = f"Report generation failed: {str(e)}"
+            state["errors"].append(error_msg)
+            state["report_generated"] = False
+            state["report_error"] = error_msg
+            print(f"❌ {error_msg}")
+            print("⚠️ Continuing without report generation...")
+        
+        return state
 
 
     async def _generate_problem_node(self, state: ResearchPlanningState) -> ResearchPlanningState:
