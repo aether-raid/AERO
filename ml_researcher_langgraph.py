@@ -174,35 +174,26 @@ class ResearchPlanningState(BaseState):
     feedback_context: str                        # Accumulated feedback for next generation
 
 class PaperWritingState(BaseState):
-    """🆕 State object for the paper writing workflow - inspired by Sakana AI's AI-Scientist."""
-    # Step 1: Structure Inputs & Define Key Narrative
-    experimental_results: Dict[str, Any]         # CSV, logs, tables data
-    figures_plots: List[Dict[str, Any]]          # Figure descriptions and paths
-    user_analysis: str                           # High-level summary from user
-    structured_narrative: Dict[str, Any]         # Main claim, key findings, story
+    """State object for the paper writing workflow."""
+    # Input data
+    experimental_results: Dict[str, Any]      # Raw experimental data
+    research_context: str                     # Background information
+    target_venue: str                         # Conference/journal name
     
-    # Step 2: Select Target Venue & Template
-    target_venue: str                            # e.g., "NeurIPS", "IEEE", "Nature"
-    template_rules: Dict[str, Any]               # Section names, citation style, word limits
-    template_file: Optional[str]                 # Path to template file (.cls, .docx)
+    # Generated content
+    research_analysis: Dict[str, Any]         # Processed research insights
+    paper_structure: Dict[str, Any]           # LLM-generated structure
+    template_config: Dict[str, Any]           # Selected template settings
+    section_content: Dict[str, str]           # Content by section
+    formatted_paper: str                      # Complete formatted paper
     
-    # Step 3: Generate Structured Outline
-    paper_outline: Dict[str, Any]                # Section headings and bullet points
+    # Quality control
+    critique_results: Dict[str, Any]          # AI feedback (for future use)
+    revision_count: int                       # Track iterations
+    quality_score: float                      # Overall quality rating
     
-    # Step 4: Draft Sections Iteratively
-    drafted_sections: Dict[str, str]             # Section content keyed by section name
-    section_order: List[str]                     # Ordered list of sections
-    current_section: str                         # Currently being drafted
-    
-    # Step 5: Compile Full Draft
-    compiled_draft: str                          # Full assembled document
-    bibliography: List[Dict[str, Any]]           # Reference information
-    
-    # Step 6: Critique & Refine Loop
-    critique_feedback: List[Dict[str, Any]]      # Feedback from critique agent
-    revision_count: int                          # Number of revision iterations
-    draft_history: List[str]                     # Previous draft versions
-    final_document: Optional[str]                # Final compiled document
+    # Output
+    final_outputs: Dict[str, str]             # Multiple format versions
 
 class RouterState(TypedDict):
     """State object for the router agent."""
@@ -241,7 +232,7 @@ class MLResearcherLangGraph:
             self.arxiv_processor = None
             print(f"Loading ArXiv paper processor failed: {e}")
 
-        # Build the four workflows
+        # Build the three workflows
         self.router_graph = self._build_router_graph()
         self.model_suggestion_graph = self._build_model_suggestion_graph()
         self.research_planning_graph = self._build_research_planning_graph()
@@ -289,7 +280,6 @@ class MLResearcherLangGraph:
         workflow.add_node("suggest_models", self._suggest_models_node)
         workflow.add_node("critique_response", self._critique_response_node)
         workflow.add_node("revise_suggestions", self._revise_suggestions_node)
-        workflow.add_node("generate_report", self._generate_report_node)
         
         # Define the flow
         workflow.set_entry_point("analyze_properties_and_task")
@@ -316,12 +306,9 @@ class MLResearcherLangGraph:
             self._should_revise_suggestions,
             {
                 "revise": "suggest_models",      # Loop back to suggestions for revision
-                "finalize": "generate_report"    # Generate report before ending
+                "finalize": END                  # If suggestions are good as-is
             }
         )
-        
-        # Add final edge from report generation to END
-        workflow.add_edge("generate_report", END)
         
         # Keep the revise_suggestions node for potential future use
         # but the main loop now goes back to suggest_models directly
@@ -390,35 +377,22 @@ class MLResearcherLangGraph:
         return workflow.compile()
     
     def _build_paper_writing_graph(self) -> StateGraph:
-        """🆕 Build the simplified paper writing workflow (no critique loop)."""
+        """Build the paper writing workflow for generating research papers."""
         workflow = StateGraph(PaperWritingState)
         
-        # Add nodes for the simplified 5-step paper writing pipeline
-        workflow.add_node("structure_inputs", self._structure_inputs_node)
-        workflow.add_node("select_template", self._select_template_node)
-        workflow.add_node("generate_outline", self._generate_outline_node)
-        workflow.add_node("draft_sections", self._draft_sections_node)
-        workflow.add_node("compile_draft", self._compile_draft_node)
+        # Add nodes for paper writing pipeline
+        workflow.add_node("analyze_results", self._analyze_results_node)
+        workflow.add_node("setup_paper", self._setup_paper_node)
+        workflow.add_node("generate_content", self._generate_content_node)
+        workflow.add_node("format_paper", self._format_paper_node)
         workflow.add_node("finalize_paper", self._finalize_paper_node)
         
-        # Define the simplified flow
-        workflow.set_entry_point("structure_inputs")
-        workflow.add_edge("structure_inputs", "select_template")
-        workflow.add_edge("select_template", "generate_outline")
-        workflow.add_edge("generate_outline", "draft_sections")
-        
-        # After drafting sections, check if all sections are complete
-        workflow.add_conditional_edges(
-            "draft_sections",
-            self._sections_complete_check,
-            {
-                "continue_drafting": "draft_sections",  # More sections to draft
-                "compile": "compile_draft"              # All sections ready
-            }
-        )
-        
-        # Skip critique - go directly from compilation to finalization
-        workflow.add_edge("compile_draft", "finalize_paper")
+        # Define the linear flow (no critique for now)
+        workflow.set_entry_point("analyze_results")
+        workflow.add_edge("analyze_results", "setup_paper")
+        workflow.add_edge("setup_paper", "generate_content")
+        workflow.add_edge("generate_content", "format_paper")
+        workflow.add_edge("format_paper", "finalize_paper")
         workflow.add_edge("finalize_paper", END)
         
         return workflow.compile()
@@ -453,25 +427,22 @@ class MLResearcherLangGraph:
                    - Academic research planning
 
                 3. **PAPER_WRITING**: For requests asking about:
-                   - "How to compile a report of our work?"
-                   - "Generate a paper from experimental results"
-                   - "Write up research findings"
-                   - "Create academic paper from data"
-                   - "Compile research into publication format"
-                   - "Draft paper using conference template"
-                   - Converting research work to publication
+                   - "Generate a report from my experimental results"
+                   - "Create a paper for X conference"
+                   - "Write up my research findings"
+                   - "Compile my work into a publication"
+                   - "Convert my results to a research paper"
+                   - Paper generation and formatting
+                   - Report compilation from data
 
                 Analyze the user's request and respond with a JSON object containing:
                 {{
-                    "workflow": "MODEL_SUGGESTION" or "RESEARCH_PLANNING" or "PAPER_WRITING",
+                    "workflow": "MODEL_SUGGESTION", "RESEARCH_PLANNING", or "PAPER_WRITING",
                     "confidence": 0.0-1.0,
                     "reasoning": "Brief explanation of why this workflow was chosen"
                 }}
 
-                Consider the intent and focus of the request:
-                - For practical implementation advice, choose MODEL_SUGGESTION
-                - For research gap identification and planning, choose RESEARCH_PLANNING  
-                - For converting existing work/results into academic papers, choose PAPER_WRITING
+                Consider the intent and focus of the request. If the user wants practical implementation advice, choose MODEL_SUGGESTION. If they want to understand research gaps and plan academic research, choose RESEARCH_PLANNING. If they want to generate papers or reports from existing work/data, choose PAPER_WRITING.
 
                 Return only the JSON object, no additional text.
             """
@@ -508,7 +479,7 @@ class MLResearcherLangGraph:
                     workflow_decision = "model_suggestion"
                 elif workflow_decision.upper() in ["RESEARCH_PLANNING", "RESEARCH_PLAN"]:
                     workflow_decision = "research_planning"
-                elif workflow_decision.upper() in ["PAPER_WRITING", "PAPER_WRITE"]:
+                elif workflow_decision.upper() in ["PAPER_WRITING", "PAPER_WRITE", "REPORT_GENERATION"]:
                     workflow_decision = "paper_writing"
                 else:
                     workflow_decision = "model_suggestion"  # Default fallback
@@ -663,59 +634,22 @@ class MLResearcherLangGraph:
 
                     Task: {state["original_prompt"]}
 
-                    Provide your analysis in the exact JSON format below. Be thorough and specific in your explanations.
+                    Please identify and analyze the following aspects:
 
-                    {{
-                        "task_description": "A clear, comprehensive description of the research task",
-                        "analysis": {{
-                            "1_dataType": {{
-                                "type": "Specific data type (e.g., Text/Natural Language, Computer Vision/Images, Time Series, Tabular/Structured, Graph/Network, Audio/Speech, etc.)",
-                                "explanation": "Detailed explanation of what kind of data is involved and why this classification applies"
-                            }},
-                            "2_learningType": {{
-                                "type": "Learning paradigm (e.g., Supervised Learning, Unsupervised Learning, Semi-supervised Learning, Reinforcement Learning, Self-supervised Learning, etc.)",
-                                "explanation": "Explanation of the learning approach and why it applies to this task"
-                            }},
-                            "3_taskCategory": {{
-                                "type": "Main ML task category (e.g., Classification, Regression, Clustering, Generation, Detection, Segmentation, Recommendation, etc.)",
-                                "explanation": "Description of the primary machine learning objective"
-                            }},
-                            "4_architectureRequirements": {{
-                                "type": "Suitable model types/architectures (e.g., Transformer-based models, Convolutional Neural Networks, Recurrent Neural Networks, Graph Neural Networks, etc.)",
-                                "explanation": "Analysis of what types of models or architectures would be most suitable and why"
-                            }},
-                            "5_keyChallenges": [
-                                {{
-                                    "challenge": "Primary challenge name",
-                                    "explanation": "Detailed explanation of this challenge and why it's significant for this task"
-                                }},
-                                {{
-                                    "challenge": "Secondary challenge name", 
-                                    "explanation": "Detailed explanation of this challenge"
-                                }}
-                            ],
-                            "6_dataCharacteristics": {{
-                                "type": "Data structure and properties",
-                                "explanation": "Analysis of data characteristics including: variable/fixed length sequences, input dimensions, temporal structure, multi-modal aspects, sparsity, etc."
-                            }},
-                            "7_performanceMetrics": [
-                                {{
-                                    "metric": "Primary evaluation metric",
-                                    "explanation": "Why this metric is appropriate for the task"
-                                }},
-                                {{
-                                    "metric": "Secondary evaluation metric",
-                                    "explanation": "Additional relevant metrics"
-                                }}
-                            ],
-                            "8_domainSpecifics": {{
-                                "type": "Domain-specific considerations",
-                                "explanation": "Any special considerations, constraints, or requirements specific to the application domain"
-                            }}
-                        }}
-                    }}
+                    1. **Data Type**: What kind of data is involved? (text, images, time series, tabular, etc.)
+                    2. **Learning Type**: What type of learning is this? (supervised, unsupervised, reinforcement, etc.)
+                    3. **Task Category**: What is the main ML task? (classification, regression, generation, clustering, etc.)
+                    4. **Architecture Requirements**: What types of models or architectures might be suitable?
+                    5. **Key Challenges**: What are the main technical challenges?
+                    6. **Data Characteristics**: 
+                    - Variable length sequences?
+                    - Fixed or variable input dimensions?
+                    - Temporal structure?
+                    - Multi-modal data?
+                    7. **Performance Metrics**: What metrics would be appropriate for evaluation?
+                    8. **Domain Specifics**: Any domain-specific considerations?
 
-                    Return only the JSON object with no additional text or markdown formatting. Ensure all JSON is valid and properly escaped.
+                    Provide your analysis in a structured JSON format with clear explanations for each identified property.
                 """
 
                 response = await asyncio.get_event_loop().run_in_executor(
@@ -1599,9 +1533,8 @@ Please provide your assessment in the following JSON format:
 
 DECISION CRITERIA:
 - "continue": Papers are sufficient (relevance ≥7.0, good coverage)
-- "search_backup": Papers are decent but could use backup, use only if the current search is going in the right direction (relevance 5.0-6.9, partial coverage)  
-- "search_new": Papers are insufficient, OR majority are unrelated to the topic (relevance <5.0, poor coverage, or major gaps)
-
+- "search_backup": Papers are decent but could use backup (relevance 5.0-6.9, partial coverage)  
+- "search_new": Papers are insufficient (relevance <5.0, poor coverage, or major gaps)
 
 If search_iteration ≥ 2, bias toward "continue" unless papers are truly inadequate.
 
@@ -2416,591 +2349,7 @@ Return only the JSON object, no additional text.
             print(f"✅ Suggestions approved after {iteration_count} iteration(s) - {fixed_count} total issues fixed, finalizing...")
             return "finalize"
 
-    def _generate_report_node(self, state: ModelSuggestionState) -> ModelSuggestionState:
-        """Node for generating and saving a comprehensive Word report of model suggestions."""
-        print(f"\n📄 Step 6: Generating comprehensive Word report...")
-        state["current_step"] = "generate_report"
-        
-        try:
-            from word_formatter import WordFormatter
-            from datetime import datetime
-            import os
-            
-            # Initialize formatter
-            formatter = WordFormatter()
-            
-            # Extract key information from state
-            original_prompt = state.get("original_prompt", "ML Research Analysis")
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            
-            # Create document title
-            safe_prompt = "".join(c for c in original_prompt if c.isalnum() or c in (' ', '-', '_')).strip()[:50]
-            formatter.add_title(
-                title=f"ML Model Suggestion Report",
-                subtitle=f"Query: {safe_prompt}\nGenerated on {timestamp}",
-                add_date=False
-            )
-            
-            # Executive Summary
-            formatter.add_heading("Executive Summary", level=1)
-            model_suggestions = state.get("model_suggestions", {})
-            search_results = state.get("arxiv_results", {})
-            
-            exec_summary = f"""This report presents **machine learning model recommendations** based on comprehensive analysis of recent research literature. The analysis processed {search_results.get('papers_returned', 0)} research papers from ArXiv and generated recommendations through {state.get('suggestion_iteration', 1)} iteration(s) with expert critique validation.
 
-**Key Findings**: The research identified optimal model architectures that balance *performance* and *computational efficiency* for the specified task requirements. All recommendations are grounded in peer-reviewed research and include practical implementation guidance."""
-            
-            formatter.add_formatted_paragraph(exec_summary)
-            
-            # Research Context and Query (keep on same page as summary)
-            formatter.add_separator()
-            formatter.add_heading("Research Query and Context", level=1)
-            formatter.add_formatted_paragraph(f"**Original Query**: {original_prompt}")
-            
-            # Task Analysis (keep with context)
-            detected_categories = state.get("detected_categories", [])
-            detailed_analysis = state.get("detailed_analysis", {})
-            
-            if detected_categories or detailed_analysis.get("llm_analysis"):
-                formatter.add_heading("Task Decomposition and Analysis", level=2)
-                
-                # Add detailed task decomposition if available
-                if detailed_analysis.get("llm_analysis"):
-                    formatter.add_heading("Task Decomposition", level=3)
-                    decomp_text = detailed_analysis["llm_analysis"]
-                    
-                    # Try to parse as JSON and format properly
-                    try:
-                        # Check if the text contains JSON-like structure
-                        if '{' in decomp_text and '"task_description"' in decomp_text:
-                            # Extract JSON content
-                            json_start = decomp_text.find('{')
-                            json_end = decomp_text.rfind('}') + 1
-                            
-                            if json_start != -1 and json_end > json_start:
-                                json_content = decomp_text[json_start:json_end]
-                                
-                                # Try to parse the JSON
-                                try:
-                                    parsed_data = json.loads(json_content)
-                                    
-                                    # Format task description
-                                    if "task_description" in parsed_data:
-                                        formatter.add_formatted_paragraph(f"**Task Description**: {parsed_data['task_description']}")
-                                        formatter.add_separator()
-                                    
-                                    # Format analysis sections
-                                    if "analysis" in parsed_data:
-                                        analysis = parsed_data["analysis"]
-                                        formatter.add_heading("Detailed Analysis Components", level=4)
-                                        
-                                        # Process each analysis section
-                                        for key, value in analysis.items():
-                                            if isinstance(value, dict):
-                                                # Format section header
-                                                section_name = key.replace('_', ' ').title()
-                                                formatter.add_formatted_paragraph(f"**{section_name}**:")
-                                                
-                                                # Format type/content with indentation
-                                                if "type" in value:
-                                                    formatter.add_indented_paragraph(f"*Type*: {value['type']}")
-                                                
-                                                # Format explanation with indentation
-                                                if "explanation" in value:
-                                                    formatter.add_indented_paragraph(f"*Explanation*: {value['explanation']}")
-                                                
-                                                formatter.add_formatted_paragraph("")  # Add spacing
-                                                
-                                            elif isinstance(value, list):
-                                                # Handle list items (like key challenges)
-                                                section_name = key.replace('_', ' ').title()
-                                                formatter.add_formatted_paragraph(f"**{section_name}**:")
-                                                
-                                                bullet_items = []
-                                                for item in value:
-                                                    if isinstance(item, dict):
-                                                        if "challenge" in item:
-                                                            bullet_items.append(f"**{item['challenge']}**")
-                                                            if "explanation" in item:
-                                                                bullet_items.append(f"  {item['explanation']}")
-                                                        elif "metric" in item:
-                                                            bullet_items.append(f"**{item['metric']}**")
-                                                            if "explanation" in item:
-                                                                bullet_items.append(f"  {item['explanation']}")
-                                                    else:
-                                                        bullet_items.append(str(item))
-                                                
-                                                # Use indented bullet list for better formatting
-                                                if bullet_items:
-                                                    formatter.add_indented_bullet_list(bullet_items)
-                                                
-                                                formatter.add_formatted_paragraph("")  # Add spacing
-                                    
-                                    # Handle any remaining top-level fields
-                                    for key, value in parsed_data.items():
-                                        if key not in ["task_description", "analysis"] and isinstance(value, (str, list)):
-                                            section_name = key.replace('_', ' ').title()
-                                            if isinstance(value, list):
-                                                formatter.add_formatted_paragraph(f"**{section_name}**: {', '.join(str(v) for v in value)}")
-                                            else:
-                                                formatter.add_formatted_paragraph(f"**{section_name}**: {value}")
-                                    
-                                except json.JSONDecodeError:
-                                    # Fallback to regular formatting if JSON parsing fails
-                                    formatter.add_formatted_paragraph("**Raw Analysis Output**:")
-                                    formatter.add_formatted_paragraph(decomp_text)
-                            else:
-                                # No proper JSON structure found, use regular formatting
-                                formatter.add_formatted_paragraph("**Task Analysis**:")
-                                formatter.add_formatted_paragraph(decomp_text)
-                        else:
-                            # Not JSON format, use regular formatting with improved structure
-                            formatted_text = decomp_text
-                            
-                            # Try to identify and format common patterns
-                            formatted_text = re.sub(r'\*\*(.*?)\*\*:', r'**\1**:', formatted_text)  # Bold headers
-                            formatted_text = re.sub(r'(\d+)\.\s*\*\*(.*?)\*\*:', r'\n**\1. \2**:', formatted_text)  # Numbered sections
-                            
-                            formatter.add_formatted_paragraph(formatted_text)
-                            
-                    except Exception as e:
-                        # Fallback to simple formatting
-                        print(f"⚠️ Warning: Could not parse task decomposition format: {e}")
-                        formatter.add_formatted_paragraph("**Task Decomposition Analysis**:")
-                        formatter.add_formatted_paragraph(decomp_text)
-                    
-                    formatter.add_separator()
-                
-                # Add detected categories
-                if detected_categories:
-                    formatter.add_heading("Detected ML Categories and Properties", level=3)
-                    task_analysis = "The following machine learning categories were automatically detected from the task description:\n\n"
-                    
-                    # Group categories by confidence level
-                    high_conf = [c for c in detected_categories if c.get("confidence", 0) >= 0.8]
-                    medium_conf = [c for c in detected_categories if 0.6 <= c.get("confidence", 0) < 0.8]
-                    low_conf = [c for c in detected_categories if 0.4 <= c.get("confidence", 0) < 0.6]
-                    
-                    if high_conf:
-                        task_analysis += "**High Confidence Categories (≥80%)**:\n"
-                        for category in high_conf[:8]:  # Top 8 high confidence
-                            name = category.get("name", "Unknown")
-                            confidence = category.get("confidence", 0)
-                            evidence = category.get("evidence", [])
-                            explanation = category.get("explanation", "")
-                            
-                            task_analysis += f"- **{name}** ({confidence:.1%}): {explanation}\n"
-                            if evidence and isinstance(evidence, list) and len(evidence) > 0:
-                                # Get first evidence snippet
-                                first_evidence = evidence[0]
-                                if isinstance(first_evidence, dict) and "snippet" in first_evidence:
-                                    snippets = first_evidence["snippet"]
-                                    if isinstance(snippets, list) and snippets:
-                                        task_analysis += f"  *Evidence*: \"{snippets[0]}\"\n"
-                            task_analysis += "\n"
-                    
-                    if medium_conf:
-                        task_analysis += "\n**Medium Confidence Categories (60-79%)**:\n"
-                        for category in medium_conf[:5]:  # Top 5 medium confidence
-                            name = category.get("name", "Unknown")
-                            confidence = category.get("confidence", 0)
-                            explanation = category.get("explanation", "")
-                            task_analysis += f"- **{name}** ({confidence:.1%}): {explanation}\n"
-                        task_analysis += "\n"
-                    
-                    if low_conf:
-                        task_analysis += "\n**Lower Confidence Categories (40-59%)**:\n"
-                        category_names = [c.get("name", "Unknown") for c in low_conf[:5]]
-                        task_analysis += f"Additional potentially relevant categories: {', '.join(category_names)}\n\n"
-                    
-                    # Add summary statistics
-                    task_analysis += f"**Summary**: {len(detected_categories)} total categories analyzed, "
-                    task_analysis += f"{len(high_conf)} high confidence, {len(medium_conf)} medium confidence, {len(low_conf)} lower confidence."
-                    
-                    formatter.add_formatted_paragraph(task_analysis)
-                
-                # Add task characteristics and complexity analysis
-                if detected_categories:
-                    formatter.add_separator()
-                    formatter.add_heading("Task Characteristics and Complexity", level=3)
-                    
-                    # Analyze task complexity based on detected categories
-                    complexity_factors = []
-                    data_types = []
-                    learning_types = []
-                    special_requirements = []
-                    
-                    for category in detected_categories:
-                        name = category.get("name", "").lower()
-                        confidence = category.get("confidence", 0)
-                        
-                        if confidence >= 0.6:  # Only consider medium+ confidence categories
-                            # Data type identification
-                            if any(dt in name for dt in ["text", "nlp", "language"]):
-                                data_types.append("Text/Natural Language")
-                            elif any(dt in name for dt in ["vision", "image", "cnn"]):
-                                data_types.append("Computer Vision/Images")
-                            elif any(dt in name for dt in ["temporal", "sequence", "time_series"]):
-                                data_types.append("Sequential/Temporal Data")
-                            elif any(dt in name for dt in ["tabular", "structured"]):
-                                data_types.append("Structured/Tabular Data")
-                            elif any(dt in name for dt in ["graph", "network"]):
-                                data_types.append("Graph/Network Data")
-                            elif any(dt in name for dt in ["sensor", "signal"]):
-                                data_types.append("Sensor/Signal Data")
-                            
-                            # Learning type identification
-                            if any(lt in name for lt in ["supervised", "classification", "regression"]):
-                                learning_types.append("Supervised Learning")
-                            elif any(lt in name for lt in ["unsupervised", "clustering", "autoencoder"]):
-                                learning_types.append("Unsupervised Learning")
-                            elif any(lt in name for lt in ["reinforcement", "rl"]):
-                                learning_types.append("Reinforcement Learning")
-                            elif any(lt in name for lt in ["semi_supervised"]):
-                                learning_types.append("Semi-supervised Learning")
-                            
-                            # Complexity factors
-                            if any(cf in name for cf in ["variable_length", "dynamic", "streaming"]):
-                                complexity_factors.append("Variable-length/Dynamic sequences")
-                            elif any(cf in name for cf in ["real_time", "latency"]):
-                                complexity_factors.append("Real-time processing requirements")
-                            elif any(cf in name for cf in ["limited_data", "few_shot", "low_resource"]):
-                                complexity_factors.append("Limited training data")
-                            elif any(cf in name for cf in ["multilingual", "cross_lingual"]):
-                                complexity_factors.append("Multilingual/Cross-lingual requirements")
-                            elif any(cf in name for cf in ["multimodal", "multi_modal"]):
-                                complexity_factors.append("Multimodal data fusion")
-                            elif any(cf in name for cf in ["interpretability", "explainable"]):
-                                special_requirements.append("Model interpretability/explainability")
-                            elif any(cf in name for cf in ["privacy", "federated"]):
-                                special_requirements.append("Privacy-preserving techniques")
-                    
-                    # Build characteristics summary with proper formatting
-                    formatter.add_formatted_paragraph("**Task Characteristics Analysis**:")
-                    
-                    if data_types:
-                        unique_data_types = list(set(data_types))
-                        formatter.add_formatted_paragraph(f"**Primary Data Types**: {', '.join(unique_data_types)}")
-                        formatter.add_formatted_paragraph("")  # Add spacing
-                    
-                    if learning_types:
-                        unique_learning_types = list(set(learning_types))
-                        formatter.add_formatted_paragraph(f"**Learning Paradigms**: {', '.join(unique_learning_types)}")
-                        formatter.add_formatted_paragraph("")  # Add spacing
-                    
-                    if complexity_factors:
-                        formatter.add_formatted_paragraph("**Complexity Factors**:")
-                        formatter.add_indented_bullet_list(list(set(complexity_factors)))
-                        formatter.add_formatted_paragraph("")  # Add spacing
-                    
-                    if special_requirements:
-                        formatter.add_formatted_paragraph("**Special Requirements**:")
-                        formatter.add_indented_bullet_list(list(set(special_requirements)))
-                        formatter.add_formatted_paragraph("")  # Add spacing
-                    
-                    # Add computational complexity assessment
-                    high_complexity = len([c for c in detected_categories if c.get("confidence", 0) >= 0.7 and 
-                                         any(complex_term in c.get("name", "").lower() for complex_term in 
-                                             ["variable_length", "real_time", "multimodal", "graph", "dynamic"])])
-                    
-                    if high_complexity >= 2:
-                        complexity_level = "**High**"
-                        complexity_desc = "Multiple complex factors detected requiring sophisticated architectures"
-                    elif high_complexity == 1 or len(complexity_factors) > 0:
-                        complexity_level = "**Medium**"
-                        complexity_desc = "Moderate complexity with some challenging aspects"
-                    else:
-                        complexity_level = "**Standard**"
-                        complexity_desc = "Standard ML task complexity"
-                    
-                    formatter.add_formatted_paragraph(f"**Overall Task Complexity**: {complexity_level} - {complexity_desc}")
-            
-            # Add page break only if we have substantial content above
-            if detected_categories and detailed_analysis.get("llm_analysis"):
-                formatter.add_page_break()
-            else:
-                formatter.add_separator()
-            
-            # Model Recommendations (Main Content)
-            formatter.add_heading("Model Recommendations", level=1)
-            
-            # Get the model suggestions - try multiple paths for robustness
-            suggestions_text = ""
-            if model_suggestions.get("suggestions_successful", False):
-                # First try the main suggestions
-                suggestions_text = model_suggestions.get("model_suggestions", "")
-                
-                # If revision was applied, use the revised version
-                if model_suggestions.get("revision_applied", False):
-                    revised_text = model_suggestions.get("revised_suggestions", "")
-                    if revised_text:
-                        suggestions_text = revised_text
-            else:
-                # Fallback: try to get suggestions even if not marked as successful
-                suggestions_text = model_suggestions.get("model_suggestions", "")
-                if not suggestions_text:
-                    suggestions_text = model_suggestions.get("revised_suggestions", "")
-            
-            # Debug info
-            print(f"🔍 Debug - Model suggestions available: {bool(suggestions_text)}")
-            if suggestions_text:
-                print(f"🔍 Debug - Suggestions length: {len(suggestions_text)} characters")
-                print(f"🔍 Debug - First 100 chars: {suggestions_text[:100]}...")
-            
-            if suggestions_text:
-                # Use the enhanced formatter for ML text (no title since we already added one)
-                formatter.format_ml_text_recommendations(suggestions_text, title="")
-            else:
-                # Fallback content if no suggestions available
-                formatter.add_formatted_paragraph(
-                    "**Note**: Model suggestions were not available in the expected format. "
-                    "This may indicate an issue with the suggestion generation process."
-                )
-                print("⚠️ Warning: No model suggestions found to include in report")
-            
-            # Research Methodology - start on new page
-            formatter.add_page_break()
-            formatter.add_heading("Research Methodology", level=1)
-            
-            # Task Decomposition Methodology
-            formatter.add_heading("Task Decomposition Process", level=2)
-            detected_categories = state.get("detected_categories", [])
-            detailed_analysis = state.get("detailed_analysis", {})
-            
-            decomp_methodology = f"""**Automated Task Analysis**: The research query underwent systematic decomposition using a combination of rule-based pattern matching and large language model analysis.
-
-**Category Detection**: Applied {len(ML_RESEARCH_CATEGORIES)} predefined ML research categories to identify task properties and requirements. Each category was evaluated with confidence scoring (0.0-1.0) based on evidence from the task description.
-
-**Categories Analyzed**: {len(detected_categories)} categories were detected with varying confidence levels, including {len([c for c in detected_categories if c.get('confidence', 0) >= 0.8])} high-confidence matches.
-
-**LLM-Based Decomposition**: {"Detailed task decomposition was performed using advanced language models to extract key characteristics, data types, learning paradigms, and architectural requirements." if detailed_analysis.get('llm_analysis') else "Task decomposition relied primarily on category-based analysis."}
-
-**Evidence-Based Approach**: All category assignments were supported by specific evidence from the original task description, ensuring traceability and validation of the analysis."""
-            
-            formatter.add_formatted_paragraph(decomp_methodology)
-            formatter.add_separator()
-            
-            # Search Strategy
-            search_query = state.get("arxiv_search_query", "")
-            search_methodology = f"""**Literature Search Strategy**: Systematic search of ArXiv repository using targeted queries to identify relevant research papers.
-
-**Search Query**: `{search_query}`
-
-**Paper Selection Criteria**: Papers were evaluated based on relevance scores, recency, and technical merit. Only papers with high relevance to the specified task were included in the analysis.
-
-**Validation Process**: Model suggestions underwent {state.get('suggestion_iteration', 1)} round(s) of expert critique and validation to ensure accuracy and completeness."""
-            
-            formatter.add_formatted_paragraph(search_methodology)
-            
-            # Quality Assurance (keep with methodology)
-            critique_results = state.get("critique_results", {})
-            if critique_results.get("critique_successful", False):
-                formatter.add_separator()
-                formatter.add_heading("Quality Assurance", level=2)
-                
-                qa_text = f"""**Expert Review Process**: All recommendations underwent rigorous expert critique validation.
-
-**Critique Score**: {critique_results.get('overall_score', 'N/A')}/10.0
-**Validation Status**: {critique_results.get('recommendation', 'N/A').title()}
-
-**Quality Metrics**:
-- Relevance: {critique_results.get('relevance_score', 'N/A')}/10.0
-- Completeness: {critique_results.get('completeness_score', 'N/A')}/10.0  
-- Technical Accuracy: {critique_results.get('technical_accuracy_score', 'N/A')}/10.0
-- Evidence Quality: {critique_results.get('evidence_quality_score', 'N/A')}/10.0"""
-                
-                formatter.add_formatted_paragraph(qa_text)
-            
-            # ArXiv Papers and Citations - start on new page
-            formatter.add_page_break()
-            formatter.add_heading("References and Sources", level=1)
-            papers = search_results.get("papers", [])
-            
-            if papers:
-                # Research Papers Summary
-                formatter.add_heading("Research Papers Analyzed", level=2)
-                papers_summary = f"""This analysis examined **{len(papers)} research papers** from ArXiv, focusing on the most relevant and recent publications. The papers were selected based on their relevance to the specified task and technical merit."""
-                formatter.add_formatted_paragraph(papers_summary)
-                
-                # Create citations table
-                citation_data = []
-                for i, paper in enumerate(papers[:10], 1):  # Top 10 papers
-                    title = paper.get("title", "Unknown Title")
-                    authors = paper.get("authors", "Unknown Authors")
-                    year = paper.get("published", "Unknown")[:4] if paper.get("published") else "N/A"
-                    arxiv_id = paper.get("id", "").replace("http://arxiv.org/abs/", "")
-                    relevance = paper.get("relevance_score", 0)
-                    
-                    # Format authors (limit to first 3 + et al. if more)
-                    if isinstance(authors, list):
-                        if len(authors) > 3:
-                            author_str = f"{', '.join(authors[:3])}, et al."
-                        else:
-                            author_str = ', '.join(authors)
-                    else:
-                        author_str = str(authors)[:50] + "..." if len(str(authors)) > 50 else str(authors)
-                    
-                    # Truncate title if too long
-                    title_short = title[:60] + "..." if len(title) > 60 else title
-                    
-                    citation_data.append([
-                        str(i),
-                        title_short,
-                        author_str[:40] + "..." if len(author_str) > 40 else author_str,
-                        year,
-                        arxiv_id,
-                        f"{relevance:.1f}/10"
-                    ])
-                
-                formatter.add_table(
-                    citation_data,
-                    headers=["#", "Title", "Authors", "Year", "ArXiv ID", "Relevance"],
-                    title="Key Papers Referenced"
-                )
-                
-                # APA Style Citations - start on new page if table is large
-                if len(papers) > 5:
-                    formatter.add_page_break()
-                else:
-                    formatter.add_separator()
-                    
-                formatter.add_heading("APA Citations", level=2)
-                apa_citations = ""
-                for i, paper in enumerate(papers[:10], 1):
-                    title = paper.get("title", "Unknown Title")
-                    authors = paper.get("authors", ["Unknown Author"])
-                    year = paper.get("published", "Unknown")[:4] if paper.get("published") else "n.d."
-                    arxiv_id = paper.get("id", "").replace("http://arxiv.org/abs/", "")
-                    
-                    # Format authors for APA style
-                    if isinstance(authors, list):
-                        if len(authors) == 1:
-                            author_apa = authors[0]
-                        elif len(authors) == 2:
-                            author_apa = f"{authors[0]} & {authors[1]}"
-                        elif len(authors) <= 6:
-                            author_apa = f"{', '.join(authors[:-1])}, & {authors[-1]}"
-                        else:
-                            author_apa = f"{', '.join(authors[:6])}, ... {authors[-1]}"
-                    else:
-                        author_apa = str(authors)
-                    
-                    # Format APA citation
-                    apa_citation = f"{author_apa} ({year}). *{title}*. arXiv preprint arXiv:{arxiv_id}.\n\n"
-                    apa_citations += apa_citation
-                
-                formatter.add_formatted_paragraph(apa_citations)
-            
-            # Technical Details and Limitations - start on new page
-            formatter.add_page_break()
-            formatter.add_heading("Technical Details and Limitations", level=1)
-            
-            # Add task decomposition technical details
-            formatter.add_heading("Task Decomposition Technical Details", level=2)
-            detected_categories = state.get("detected_categories", [])
-            detailed_analysis = state.get("detailed_analysis", {})
-            
-            # Category Detection Algorithm
-            formatter.add_formatted_paragraph(f"**Category Detection Algorithm**: Utilizes a predefined ontology of {len(ML_RESEARCH_CATEGORIES)} machine learning research categories with confidence-based scoring.")
-            formatter.add_formatted_paragraph("")  # Add spacing
-            
-            # Confidence Thresholds with indented formatting
-            formatter.add_formatted_paragraph("**Confidence Thresholds**:")
-            confidence_thresholds = [
-                "High confidence: ≥0.80 (categories with strong evidence)",
-                "Medium confidence: 0.60-0.79 (reasonable inference with clear cues)",
-                "Lower confidence: 0.40-0.59 (potential relevance requiring validation)"
-            ]
-            formatter.add_indented_bullet_list(confidence_thresholds)
-            formatter.add_formatted_paragraph("")  # Add spacing
-            
-            formatter.add_formatted_paragraph("**Evidence Collection**: Each category assignment is backed by specific textual evidence extracted from the original query, ensuring traceability and interpretability.")
-            formatter.add_formatted_paragraph("")  # Add spacing
-            
-            # Model and analysis details
-            formatter.add_formatted_paragraph(f"**Model Used for Analysis**: {detailed_analysis.get('model_used', 'Not specified')}")
-            if detailed_analysis.get('tokens_used'):
-                formatter.add_formatted_paragraph(f"**Tokens Consumed**: {str(detailed_analysis.get('tokens_used', 'Unknown'))}")
-            formatter.add_formatted_paragraph("")  # Add spacing
-            
-            # Analysis Components with indented list
-            formatter.add_formatted_paragraph("**Analysis Components**:")
-            analysis_components = [
-                "Automated property extraction and categorization",
-                "Task complexity assessment based on detected patterns",
-                "Domain-specific requirement identification",
-                "Computational constraint analysis"
-            ]
-            formatter.add_indented_bullet_list(analysis_components)
-            formatter.add_separator()
-            
-            # Original limitations section
-            retries = state.get("search_iteration", 1)
-            
-            formatter.add_formatted_paragraph("**General Limitations and Scope**:")
-            formatter.add_formatted_paragraph("")  # Add spacing
-            
-            formatter.add_formatted_paragraph(f"**Search Iterations**: {retries} search iteration(s) were performed to identify relevant literature.")
-            formatter.add_formatted_paragraph("**Data Sources**: ArXiv repository (pre-print server for computer science and related fields)")
-            formatter.add_formatted_paragraph("**Temporal Scope**: Analysis focused on recent publications to ensure recommendations reflect current state-of-the-art")
-            formatter.add_formatted_paragraph("")  # Add spacing
-            
-            # Task Decomposition Limitations with indented formatting
-            formatter.add_formatted_paragraph("**Task Decomposition Limitations**:")
-            decomp_limitations = [
-                "Category detection is based on predefined ontology and may not capture all domain-specific nuances",
-                "Confidence scores are probabilistic estimates and should be interpreted accordingly",
-                "Complex interdisciplinary tasks may require manual refinement of the analysis"
-            ]
-            formatter.add_indented_bullet_list(decomp_limitations)
-            formatter.add_formatted_paragraph("")  # Add spacing
-            
-            # General Limitations with indented formatting
-            formatter.add_formatted_paragraph("**General Limitations**:")
-            general_limitations = [
-                "Results are based on available ArXiv papers and may not include all relevant commercial or proprietary solutions",
-                "Model performance may vary based on specific implementation details and hardware configurations",
-                "Recommendations should be validated through empirical testing for specific use cases"
-            ]
-            formatter.add_indented_bullet_list(general_limitations)
-            formatter.add_formatted_paragraph("")  # Add spacing
-            
-            formatter.add_formatted_paragraph("**Reproducibility**: This analysis can be reproduced using the same search queries, category definitions, and evaluation criteria.")
-            
-            # Generate filename and save
-            timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-            safe_query = "".join(c for c in original_prompt if c.isalnum() or c in (' ', '-', '_')).strip()[:30]
-            filename = f"ml_model_suggestions_{safe_query}_{timestamp_str}.docx"
-            
-            # Ensure suggestion_reports directory exists
-            reports_dir = os.path.join(os.getcwd(), "suggestion_reports")
-            os.makedirs(reports_dir, exist_ok=True)
-            
-            output_path = os.path.join(reports_dir, filename)
-            formatter.save(output_path)
-            
-            # Update state with report information
-            state["report_generated"] = True
-            state["report_path"] = output_path
-            state["report_filename"] = filename
-            
-            print(f"✅ Comprehensive report generated successfully!")
-            print(f"📁 Report saved to: {output_path}")
-            
-            # Add success message
-            state["messages"].append(
-                AIMessage(content=f"Comprehensive Word report generated and saved to: {output_path}")
-            )
-        
-        except Exception as e:
-            error_msg = f"Report generation failed: {str(e)}"
-            state["errors"].append(error_msg)
-            state["report_generated"] = False
-            state["report_error"] = error_msg
-            print(f"❌ {error_msg}")
-            print("⚠️ Continuing without report generation...")
-        
-        return state
 
 
     async def _generate_problem_node(self, state: ResearchPlanningState) -> ResearchPlanningState:
@@ -4469,69 +3818,6 @@ Provide the complete refined research plan:
         
         return cleaned
 
-    async def write_paper(self, prompt: str, experimental_data: Dict[str, Any] = None, 
-                          figures: List[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """🆕 Generate academic paper from experimental results and analysis."""
-        print(f"📝 Writing paper from: {prompt}")
-        print("=" * 50)
-        
-        # Initialize paper writing state
-        paper_state: PaperWritingState = {
-            "messages": [HumanMessage(content=prompt)],
-            "original_prompt": prompt,
-            "experimental_results": experimental_data or {},
-            "figures_plots": figures or [],
-            "user_analysis": prompt,
-            "structured_narrative": {},
-            "target_venue": "",
-            "template_rules": {},
-            "template_file": None,
-            "paper_outline": {},
-            "drafted_sections": {},
-            "section_order": [],
-            "current_section": "",
-            "compiled_draft": "",
-            "bibliography": [],
-            "critique_feedback": [],
-            "revision_count": 0,
-            "draft_history": [],
-            "final_document": None,
-            "current_step": "",
-            "errors": [],
-            "workflow_type": "paper_writing"
-        }
-        
-        # Run the paper writing workflow
-        final_state = await self.paper_writing_graph.ainvoke(paper_state)
-        
-        # Return structured results
-        return {
-            "success": True,
-            "workflow_used": "Paper Writing Pipeline",
-            "paper_narrative": final_state["structured_narrative"],
-            "template_info": {
-                "venue": final_state["target_venue"],
-                "rules": final_state["template_rules"]
-            },
-            "paper_outline": final_state["paper_outline"],
-            "drafted_sections": final_state["drafted_sections"],
-            "compiled_draft": final_state["compiled_draft"],
-            "final_document": final_state["final_document"],
-            "critique_feedback": final_state["critique_feedback"],
-            "bibliography": final_state["bibliography"],
-            "errors": final_state["errors"],
-            "summary": {
-                "narrative_successful": bool(final_state["structured_narrative"]),
-                "template_selected": bool(final_state["target_venue"]),
-                "outline_generated": bool(final_state["paper_outline"]),
-                "sections_drafted": len(final_state["drafted_sections"]),
-                "compilation_successful": bool(final_state["compiled_draft"]),
-                "critique_rounds": len(final_state["critique_feedback"]),
-                "final_document_ready": bool(final_state["final_document"]),
-                "total_errors": len(final_state["errors"])
-            }
-        }
-
     async def analyze_research_task(self, prompt: str) -> Dict[str, Any]:
         """Main method to analyze a research task using multi-workflow LangGraph architecture."""
         print(f"🔍 Analyzing research task: {prompt}")
@@ -4621,136 +3907,29 @@ Provide the complete refined research plan:
                 }
             }
             
-        else:  # research_planning or paper_writing
-            if workflow_decision == "research_planning":
-                print("\n📋 STEP 2: EXECUTING RESEARCH PLANNING WORKFLOW")
-                print("=" * 50)
-                
-                # Initialize research planning state
-                research_state: ResearchPlanningState = {
-                    "messages": [HumanMessage(content=prompt)],
-                    "original_prompt": prompt,
-                    "generated_problems": [],
-                    "validated_problems": [],
-                    "current_problem": {},
-                    "validation_results": {},
-                    "selected_problem": {},
-                    "iteration_count": 0,
-                    "research_plan": {},
-                    "critique_results": {},
-                    "critique_score_history": [],
-                    "refinement_count": 0,
-                    "previous_plans": [],
-                    "rejection_feedback": [],
-                    "generation_attempts": 0,
-                    "feedback_context": "",
-                    "current_step": "",
-                    "errors": [],
-                    "workflow_type": "research_planning"
-                }
-                
-                # Run the research planning workflow
-                final_research_state = await self.research_planning_graph.ainvoke(research_state)
-                
-                # Compile results
-                
-            elif workflow_decision == "paper_writing":
-                print("\n📝 STEP 2: EXECUTING PAPER WRITING WORKFLOW")
-                print("=" * 50)
-                
-                # Initialize paper writing state
-                paper_state: PaperWritingState = {
-                    "messages": [HumanMessage(content=prompt)],
-                    "original_prompt": prompt,
-                    "experimental_results": {},
-                    "figures_plots": [],
-                    "user_analysis": prompt,  # Start with user's request as initial analysis
-                    "structured_narrative": {},
-                    "target_venue": "",
-                    "template_rules": {},
-                    "template_file": None,
-                    "paper_outline": {},
-                    "drafted_sections": {},
-                    "section_order": [],
-                    "current_section": "",
-                    "compiled_draft": "",
-                    "bibliography": [],
-                    "critique_feedback": [],
-                    "revision_count": 0,
-                    "draft_history": [],
-                    "final_document": None,
-                    "current_step": "",
-                    "errors": [],
-                    "workflow_type": "paper_writing"
-                }
-                
-                # Run the paper writing workflow
-                final_paper_state = await self.paper_writing_graph.ainvoke(paper_state)
-                
-                # Compile results
-                result = {
-                    "success": True,
-                    "routing": {
-                        "decision": final_router_state["routing_decision"],
-                        "confidence": final_router_state["routing_confidence"], 
-                        "reasoning": final_router_state["routing_reasoning"]
-                    },
-                    "paper_narrative": final_paper_state["structured_narrative"],
-                    "template_info": {
-                        "venue": final_paper_state["target_venue"],
-                        "rules": final_paper_state["template_rules"]
-                    },
-                    "paper_outline": final_paper_state["paper_outline"],
-                    "drafted_sections": final_paper_state["drafted_sections"],
-                    "compiled_draft": final_paper_state["compiled_draft"],
-                    "final_document": final_paper_state["final_document"],
-                    "critique_feedback": final_paper_state["critique_feedback"],
-                    "bibliography": final_paper_state["bibliography"],
-                    "errors": final_router_state["errors"] + final_paper_state["errors"],
-                    "summary": {
-                        "workflow_used": "Paper Writing Pipeline",
-                        "narrative_successful": bool(final_paper_state["structured_narrative"]),
-                        "template_selected": bool(final_paper_state["target_venue"]),
-                        "outline_generated": bool(final_paper_state["paper_outline"]),
-                        "sections_drafted": len(final_paper_state["drafted_sections"]),
-                        "compilation_successful": bool(final_paper_state["compiled_draft"]),
-                        "critique_rounds": len(final_paper_state["critique_feedback"]),
-                        "final_document_ready": bool(final_paper_state["final_document"]),
-                        "total_errors": len(final_router_state["errors"]) + len(final_paper_state["errors"])
-                    }
-                }
-                
-                return result
+        elif workflow_decision == "research_planning":
+            print("\n📋 STEP 2: EXECUTING RESEARCH PLANNING WORKFLOW")
+            print("=" * 50)
             
-            else:  # Default to research_planning
-                print("\n📋 STEP 2: EXECUTING RESEARCH PLANNING WORKFLOW (DEFAULT)")
-                print("=" * 50)
-                
-                # Initialize research planning state
-                research_state: ResearchPlanningState = {
-                    "messages": [HumanMessage(content=prompt)],
-                    "original_prompt": prompt,
-                    "generated_problems": [],
-                    "validated_problems": [],
-                    "current_problem": {},
-                    "validation_results": {},
-                    "selected_problem": {},
-                    "iteration_count": 0,
-                    "research_plan": {},
-                    "critique_results": {},
-                    "critique_score_history": [],
-                    "refinement_count": 0,
-                    "previous_plans": [],
-                    "rejection_feedback": [],
-                    "generation_attempts": 0,
-                    "feedback_context": "",
-                    "current_step": "",
-                    "errors": [],
-                    "workflow_type": "research_planning"
-                }
-                
-                # Run the research planning workflow
-                final_research_state = await self.research_planning_graph.ainvoke(research_state)
+            # Initialize research planning state
+            research_state: ResearchPlanningState = {
+                "messages": [HumanMessage(content=prompt)],
+                "original_prompt": prompt,
+                "generated_problems": [],
+                "validated_problems": [],
+                "current_problem": {},
+                "validation_results": {},
+                "iteration_count": 0,
+                "research_plan": {},
+                "current_step": "",
+                "errors": [],
+                "workflow_type": "research_planning"
+            }
+            
+            # Run the research planning workflow
+            final_research_state = await self.research_planning_graph.ainvoke(research_state)
+            
+            # Compile results
             results = {
                 "workflow_type": "research_planning",
                 "router_decision": {
@@ -4770,6 +3949,76 @@ Provide the complete refined research plan:
                     "research_plan_successful": final_research_state["research_plan"].get("research_plan_successful", False),
                     "total_errors": len(final_router_state["errors"]) + len(final_research_state["errors"]),
                     "iterations_completed": final_research_state.get("iteration_count", 0)
+                }
+            }
+            
+        elif workflow_decision == "paper_writing":
+            print("\n📝 STEP 2: EXECUTING PAPER WRITING WORKFLOW")
+            print("=" * 50)
+            
+            # Initialize paper writing state
+            paper_state: PaperWritingState = {
+                "messages": [HumanMessage(content=prompt)],
+                "original_prompt": prompt,
+                "experimental_results": {},  # Could be extracted from prompt
+                "research_context": prompt,
+                "target_venue": "general",  # Could be extracted from prompt
+                "research_analysis": {},
+                "paper_structure": {},
+                "template_config": {},
+                "section_content": {},
+                "formatted_paper": "",
+                "critique_results": {},
+                "revision_count": 0,
+                "quality_score": 0.0,
+                "final_outputs": {},
+                "current_step": "",
+                "errors": [],
+                "workflow_type": "paper_writing"
+            }
+            
+            # Run the paper writing workflow
+            final_paper_state = await self.paper_writing_graph.ainvoke(paper_state)
+            
+            # Compile results
+            results = {
+                "workflow_type": "paper_writing",
+                "router_decision": {
+                    "decision": final_router_state["routing_decision"],
+                    "confidence": final_router_state["routing_confidence"],
+                    "reasoning": final_router_state["routing_reasoning"]
+                },
+                "original_prompt": final_paper_state["original_prompt"],
+                "research_analysis": final_paper_state.get("research_analysis", {}),
+                "paper_structure": final_paper_state.get("paper_structure", {}),
+                "template_config": final_paper_state.get("template_config", {}),
+                "formatted_paper": final_paper_state.get("formatted_paper", ""),
+                "final_outputs": final_paper_state.get("final_outputs", {}),
+                "errors": final_router_state["errors"] + final_paper_state["errors"],
+                "summary": {
+                    "workflow_used": "Paper Writing Pipeline",
+                    "paper_generated": bool(final_paper_state.get("formatted_paper", "")),
+                    "sections_generated": len(final_paper_state.get("section_content", {})),
+                    "paper_length": len(final_paper_state.get("formatted_paper", "")),
+                    "output_file": final_paper_state.get("final_outputs", {}).get("file_path", ""),
+                    "total_errors": len(final_router_state["errors"]) + len(final_paper_state["errors"])
+                }
+            }
+            
+        else:
+            # Unknown workflow decision
+            results = {
+                "workflow_type": "unknown",
+                "router_decision": {
+                    "decision": workflow_decision,
+                    "confidence": final_router_state["routing_confidence"],
+                    "reasoning": final_router_state["routing_reasoning"]
+                },
+                "original_prompt": prompt,
+                "errors": final_router_state["errors"] + [f"Unknown workflow decision: {workflow_decision}"],
+                "summary": {
+                    "workflow_used": "Error - Unknown Workflow",
+                    "total_errors": len(final_router_state["errors"]) + 1
                 }
             }
         
@@ -4830,113 +4079,135 @@ Provide the complete refined research plan:
             return "collect_problem"
         else:
             return "continue_generation"
+
+    # ==================================================================================
+    # PAPER WRITING WORKFLOW NODES
+    # ==================================================================================
     
-    # ================================================================================
-    # 🆕 PAPER WRITING WORKFLOW NODES
-    # ================================================================================
-    
-    async def _structure_inputs_node(self, state: PaperWritingState) -> PaperWritingState:
-        """Step 1: Structure inputs and define key narrative."""
-        print("\n📊 Step 1: Structuring inputs and defining key narrative...")
+    async def _analyze_results_node(self, state: PaperWritingState) -> PaperWritingState:
+        """Node for analyzing experimental results and research context."""
+        print("\n📊 Paper Writing: Analyzing experimental results and research context...")
         
         try:
-            content = f"""
-            You are an expert academic research assistant helping structure experimental data for paper writing.
+            # Extract research context from the original prompt and any provided data
+            original_prompt = state.get("original_prompt", "")
+            experimental_results = state.get("experimental_results", {})
             
-            User's Request: "{state["original_prompt"]}"
-            User Analysis: "{state["user_analysis"]}"
+            analysis_prompt = f"""
+            Analyze the following experimental results and research context to prepare for paper writing:
             
-            Based on the user's request, help structure the research narrative by identifying:
+            Original Request: "{original_prompt}"
             
-            1. **Main Claim/Hypothesis**: What is the core contribution or claim?
-            2. **Key Findings**: What are the most important results from the data?
-            3. **Research Story**: What narrative do the results tell?
-            4. **Figure Descriptions**: What figures/tables would best illustrate the findings?
-            5. **Limitations**: What are the main limitations of this work?
+            Experimental Results: {experimental_results if experimental_results else "No structured experimental data provided"}
+            
+            Please analyze and extract:
+            1. Research Type: (experimental, theoretical, survey, case study)
+            2. Domain: (machine learning, computer vision, NLP, etc.)
+            3. Key Findings: Main experimental results and insights
+            4. Data Types: (tables, figures, metrics, code, datasets)
+            5. Contributions: Novel aspects and significance
+            6. Research Context: Background and motivation
+            
+            Respond with a JSON object containing this analysis.
+            """
+            
+            response = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[{"role": "user", "content": analysis_prompt}],
+                    temperature=0.3
+                )
+            )
+            
+            # Parse the analysis
+            analysis_text = response.choices[0].message.content.strip()
+            print(f"📋 Analysis: {analysis_text[:200]}...")
+            
+            # Try to extract JSON from response
+            try:
+                import json
+                # Look for JSON in the response
+                start = analysis_text.find('{')
+                end = analysis_text.rfind('}') + 1
+                if start != -1 and end != -1:
+                    analysis_json = json.loads(analysis_text[start:end])
+                else:
+                    # Fallback: create basic analysis
+                    analysis_json = {
+                        "research_type": "experimental",
+                        "domain": "machine learning",
+                        "key_findings": "Experimental results analysis",
+                        "data_types": ["text"],
+                        "contributions": ["Novel approach"],
+                        "research_context": original_prompt
+                    }
+            except:
+                # Fallback analysis
+                analysis_json = {
+                    "research_type": "experimental",
+                    "domain": "machine learning", 
+                    "key_findings": "Experimental results analysis",
+                    "data_types": ["text"],
+                    "contributions": ["Novel approach"],
+                    "research_context": original_prompt
+                }
+            
+            return {
+                **state,
+                "research_analysis": analysis_json,
+                "current_step": "results_analyzed"
+            }
+            
+        except Exception as e:
+            print(f"❌ Error in analyze_results_node: {str(e)}")
+            return {
+                **state,
+                "errors": state.get("errors", []) + [f"Analysis error: {str(e)}"],
+                "current_step": "analysis_error"
+            }
+    
+    async def _setup_paper_node(self, state: PaperWritingState) -> PaperWritingState:
+        """Node for LLM-driven template selection and paper structuring."""
+        print("\n🏗️ Paper Writing: Setting up paper structure and template...")
+        
+        try:
+            research_analysis = state.get("research_analysis", {})
+            target_venue = state.get("target_venue", "general")
+            
+            setup_prompt = f"""
+            Create an optimal paper structure for the following research:
+            
+            Research Analysis: {research_analysis}
+            Target Venue: {target_venue}
+            
+            Based on this information, generate:
+            1. Template Configuration (formatting requirements)
+            2. Paper Structure (sections with focus areas and length allocations)
+            3. Content Guidelines (what to emphasize in each section)
+            
+            Consider common academic paper structures and venue-specific requirements.
             
             Respond with a JSON object containing:
             {{
-                "main_hypothesis": "The core research claim",
-                "key_findings": ["Finding 1", "Finding 2", "Finding 3"],
-                "research_story": "The narrative that connects hypothesis to findings",
-                "suggested_figures": [
-                    {{"title": "Figure title", "description": "What it shows", "type": "plot/table/diagram"}},
-                ],
-                "limitations": ["Limitation 1", "Limitation 2"],
-                "data_requirements": "What experimental data would be needed"
-            }}
-            
-            Return only the JSON object.
-            """
-            
-            response = await asyncio.get_event_loop().run_in_executor(
-                None,
-                lambda: self.client.chat.completions.create(
-                    model=self.model,
-                    temperature=0.1,
-                    messages=[{"content": content, "role": "user"}]
-                )
-            )
-            
-            response_text = response.choices[0].message.content.strip()
-            
-            # Parse JSON response
-            if response_text.startswith("```json"):
-                response_text = response_text[7:]
-            if response_text.endswith("```"):
-                response_text = response_text[:-3]
-            response_text = response_text.strip()
-            
-            narrative_data = json.loads(response_text)
-            
-            state["structured_narrative"] = narrative_data
-            state["current_step"] = "inputs_structured"
-            
-            print(f"✅ Structured narrative with hypothesis: {narrative_data.get('main_hypothesis', 'N/A')[:100]}...")
-            print(f"📊 Identified {len(narrative_data.get('key_findings', []))} key findings")
-            
-        except Exception as e:
-            error_msg = f"Failed to structure inputs: {str(e)}"
-            state["errors"].append(error_msg)
-            print(f"❌ {error_msg}")
-        
-        return state
-    
-    async def _select_template_node(self, state: PaperWritingState) -> PaperWritingState:
-        """Step 2: Select target venue and template."""
-        print("\n📋 Step 2: Selecting target venue and template...")
-        
-        try:
-            content = f"""
-            You are an expert academic publishing assistant. Based on the research described below, recommend the most appropriate publication venue and template rules.
-            
-            Research Summary:
-            - Hypothesis: {state["structured_narrative"].get("main_hypothesis", "Not specified")}
-            - Key Findings: {state["structured_narrative"].get("key_findings", [])}
-            - Research Story: {state["structured_narrative"].get("research_story", "Not specified")}
-            
-            Consider these popular venues and their characteristics:
-            - **NeurIPS**: Machine learning advances, 8-page limit, LaTeX
-            - **ICML**: Machine learning research, 8-page limit, LaTeX  
-            - **ICLR**: Deep learning focus, OpenReview format
-            - **AAAI**: AI applications, 7-page limit
-            - **IEEE**: Engineering focus, 2-column format
-            - **Nature/Science**: High-impact, very selective, ~3000 words
-            - **JMLR**: Theoretical ML, no page limit
-            - **ACL**: NLP focus, 8-page limit
-            
-            Respond with JSON:
-            {{
-                "recommended_venue": "Venue name",
-                "venue_reasoning": "Why this venue fits",
-                "template_rules": {{
+                "template_config": {{
+                    "venue": "conference_name",
                     "page_limit": 8,
-                    "format": "LaTeX/Word",
-                    "citation_style": "Author-year/Numbered",
-                    "section_structure": ["Abstract", "Introduction", "Methods", "Results", "Discussion", "Conclusion"],
-                    "special_requirements": ["Any special formatting rules"]
+                    "format": "two_column",
+                    "citation_style": "ACM"
                 }},
-                "alternative_venues": ["Alternative 1", "Alternative 2"]
+                "paper_structure": {{
+                    "sections": [
+                        {{"name": "Abstract", "length": "200-250 words", "focus": "problem_solution_results"}},
+                        {{"name": "Introduction", "length": "1-1.5 pages", "focus": "motivation_contributions"}},
+                        // ... more sections
+                    ]
+                }},
+                "content_guidelines": {{
+                    "emphasis": ["methodology", "experimental_validation"],
+                    "tone": "formal_academic",
+                    "target_audience": "researchers_practitioners"
+                }}
             }}
             """
             
@@ -4944,436 +4215,251 @@ Provide the complete refined research plan:
                 None,
                 lambda: self.client.chat.completions.create(
                     model=self.model,
-                    temperature=0.1,
-                    messages=[{"content": content, "role": "user"}]
+                    messages=[{"role": "user", "content": setup_prompt}],
+                    temperature=0.3
                 )
             )
             
-            response_text = response.choices[0].message.content.strip()
+            setup_text = response.choices[0].message.content.strip()
+            print(f"📋 Paper setup: {setup_text[:200]}...")
             
-            # Parse JSON response
-            if response_text.startswith("```json"):
-                response_text = response_text[7:]
-            if response_text.endswith("```"):
-                response_text = response_text[:-3]
-            response_text = response_text.strip()
+            # Try to extract JSON from response
+            try:
+                import json
+                start = setup_text.find('{')
+                end = setup_text.rfind('}') + 1
+                if start != -1 and end != -1:
+                    setup_json = json.loads(setup_text[start:end])
+                else:
+                    # Fallback structure
+                    setup_json = {
+                        "template_config": {
+                            "venue": target_venue,
+                            "page_limit": 8,
+                            "format": "academic",
+                            "citation_style": "ACM"
+                        },
+                        "paper_structure": {
+                            "sections": [
+                                {"name": "Abstract", "length": "200-250 words", "focus": "summary"},
+                                {"name": "Introduction", "length": "1-1.5 pages", "focus": "motivation"},
+                                {"name": "Methods", "length": "2-3 pages", "focus": "methodology"},
+                                {"name": "Results", "length": "2-3 pages", "focus": "findings"},
+                                {"name": "Conclusion", "length": "0.5 pages", "focus": "summary"}
+                            ]
+                        },
+                        "content_guidelines": {
+                            "emphasis": ["methodology", "results"],
+                            "tone": "formal_academic",
+                            "target_audience": "researchers"
+                        }
+                    }
+            except:
+                # Fallback structure
+                setup_json = {
+                    "template_config": {
+                        "venue": target_venue,
+                        "page_limit": 8,
+                        "format": "academic",
+                        "citation_style": "ACM"
+                    },
+                    "paper_structure": {
+                        "sections": [
+                            {"name": "Abstract", "length": "200-250 words", "focus": "summary"},
+                            {"name": "Introduction", "length": "1-1.5 pages", "focus": "motivation"},
+                            {"name": "Methods", "length": "2-3 pages", "focus": "methodology"},
+                            {"name": "Results", "length": "2-3 pages", "focus": "findings"},
+                            {"name": "Conclusion", "length": "0.5 pages", "focus": "summary"}
+                        ]
+                    },
+                    "content_guidelines": {
+                        "emphasis": ["methodology", "results"],
+                        "tone": "formal_academic",
+                        "target_audience": "researchers"
+                    }
+                }
             
-            template_data = json.loads(response_text)
-            
-            state["target_venue"] = template_data.get("recommended_venue", "Generic Conference")
-            state["template_rules"] = template_data.get("template_rules", {})
-            state["current_step"] = "template_selected"
-            
-            print(f"✅ Selected venue: {state['target_venue']}")
-            print(f"📄 Template format: {state['template_rules'].get('format', 'Unknown')}")
-            
-        except Exception as e:
-            error_msg = f"Failed to select template: {str(e)}"
-            state["errors"].append(error_msg)
-            print(f"❌ {error_msg}")
-            
-            # Default template
-            state["target_venue"] = "Generic Academic Conference"
-            state["template_rules"] = {
-                "page_limit": 8,
-                "format": "LaTeX",
-                "citation_style": "Author-year",
-                "section_structure": ["Abstract", "Introduction", "Methods", "Results", "Discussion", "Conclusion"]
+            return {
+                **state,
+                "paper_structure": setup_json.get("paper_structure", {}),
+                "template_config": setup_json.get("template_config", {}),
+                "current_step": "paper_setup_complete"
             }
-        
-        return state
+            
+        except Exception as e:
+            print(f"❌ Error in setup_paper_node: {str(e)}")
+            return {
+                **state,
+                "errors": state.get("errors", []) + [f"Setup error: {str(e)}"],
+                "current_step": "setup_error"
+            }
     
-    async def _generate_outline_node(self, state: PaperWritingState) -> PaperWritingState:
-        """Step 3: Generate structured outline."""
-        print("\n📝 Step 3: Generating structured outline...")
+    async def _generate_content_node(self, state: PaperWritingState) -> PaperWritingState:
+        """Node for generating content for each paper section."""
+        print("\n✍️ Paper Writing: Generating content for each section...")
         
         try:
-            template_sections = state["template_rules"].get("section_structure", 
-                ["Abstract", "Introduction", "Methods", "Results", "Discussion", "Conclusion"])
+            research_analysis = state.get("research_analysis", {})
+            paper_structure = state.get("paper_structure", {})
+            experimental_results = state.get("experimental_results", {})
             
-            content = f"""
-            You are an expert academic writer creating a detailed paper outline.
+            sections = paper_structure.get("sections", [])
+            section_content = {}
             
-            Research Details:
-            - Venue: {state["target_venue"]}
-            - Hypothesis: {state["structured_narrative"].get("main_hypothesis", "")}
-            - Key Findings: {state["structured_narrative"].get("key_findings", [])}
-            - Story: {state["structured_narrative"].get("research_story", "")}
-            
-            Template Requirements:
-            - Sections: {template_sections}
-            - Page Limit: {state["template_rules"].get("page_limit", "Not specified")}
-            - Format: {state["template_rules"].get("format", "LaTeX")}
-            
-            Create a detailed outline with specific content for each section. For each section, provide:
-            1. Key points to cover
-            2. Approximate word count
-            3. Specific content guidance
-            
-            Respond with JSON:
-            {{
-                "outline": {{
-                    "Abstract": {{
-                        "key_points": ["Point 1", "Point 2"],
-                        "word_count": 200,
-                        "content_guidance": "Specific guidance for this section"
-                    }},
-                    "Introduction": {{...}},
-                    ...
-                }},
-                "total_estimated_words": 6000,
-                "writing_priorities": ["Which sections to focus on first"]
-            }}
-            """
-            
-            response = await asyncio.get_event_loop().run_in_executor(
-                None,
-                lambda: self.client.chat.completions.create(
-                    model=self.model,
-                    temperature=0.1,
-                    messages=[{"content": content, "role": "user"}]
+            for section in sections:
+                section_name = section.get("name", "Unknown")
+                section_focus = section.get("focus", "general")
+                section_length = section.get("length", "1 page")
+                
+                print(f"📝 Generating {section_name} section...")
+                
+                content_prompt = f"""
+                Write the {section_name} section for an academic research paper.
+                
+                Research Context: {research_analysis}
+                Experimental Results: {experimental_results}
+                Section Focus: {section_focus}
+                Target Length: {section_length}
+                
+                Guidelines:
+                - Use formal academic tone
+                - Include specific details from the research
+                - Follow standard academic writing conventions
+                - Make it publication-ready
+                
+                Write a complete {section_name} section:
+                """
+                
+                response = await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    lambda p=content_prompt: self.client.chat.completions.create(
+                        model=self.model,
+                        messages=[{"role": "user", "content": p}],
+                        temperature=0.4
+                    )
                 )
-            )
+                
+                section_text = response.choices[0].message.content.strip()
+                section_content[section_name] = section_text
+                print(f"✅ {section_name} section generated ({len(section_text)} chars)")
             
-            response_text = response.choices[0].message.content.strip()
-            
-            # Parse JSON response
-            if response_text.startswith("```json"):
-                response_text = response_text[7:]
-            if response_text.endswith("```"):
-                response_text = response_text[:-3]
-            response_text = response_text.strip()
-            
-            outline_data = json.loads(response_text)
-            
-            state["paper_outline"] = outline_data.get("outline", {})
-            state["section_order"] = list(state["paper_outline"].keys())
-            state["current_step"] = "outline_generated"
-            
-            print(f"✅ Generated outline with {len(state['section_order'])} sections")
-            print(f"📊 Estimated total words: {outline_data.get('total_estimated_words', 'Unknown')}")
+            return {
+                **state,
+                "section_content": section_content,
+                "current_step": "content_generated"
+            }
             
         except Exception as e:
-            error_msg = f"Failed to generate outline: {str(e)}"
-            state["errors"].append(error_msg)
-            print(f"❌ {error_msg}")
-        
-        return state
+            print(f"❌ Error in generate_content_node: {str(e)}")
+            return {
+                **state,
+                "errors": state.get("errors", []) + [f"Content generation error: {str(e)}"],
+                "current_step": "content_error"
+            }
     
-    async def _draft_sections_node(self, state: PaperWritingState) -> PaperWritingState:
-        """Step 4: Draft sections iteratively."""
-        if not state["current_section"]:
-            # Start with the first undrafted section
-            for section in state["section_order"]:
-                if section not in state["drafted_sections"]:
-                    state["current_section"] = section
-                    break
-        
-        if not state["current_section"]:
-            print("✅ All sections already drafted")
-            return state
-            
-        section = state["current_section"]
-        print(f"\n✍️  Step 4: Drafting section '{section}'...")
+    async def _format_paper_node(self, state: PaperWritingState) -> PaperWritingState:
+        """Node for formatting the paper according to template requirements."""
+        print("\n📄 Paper Writing: Formatting paper...")
         
         try:
-            section_outline = state["paper_outline"].get(section, {})
+            section_content = state.get("section_content", {})
+            template_config = state.get("template_config", {})
+            research_analysis = state.get("research_analysis", {})
             
-            content = f"""
-            You are an expert academic writer drafting the {section} section of a research paper.
+            # Combine all sections into a complete paper
+            paper_parts = []
             
-            Paper Context:
-            - Venue: {state["target_venue"]}
-            - Hypothesis: {state["structured_narrative"].get("main_hypothesis", "")}
-            - Key Findings: {state["structured_narrative"].get("key_findings", [])}
+            # Add title
+            title = f"Research Paper: {research_analysis.get('research_context', 'Untitled Research')[:80]}"
+            paper_parts.append(f"# {title}\n")
             
-            Section Outline:
-            - Key Points: {section_outline.get("key_points", [])}
-            - Target Words: {section_outline.get("word_count", "Not specified")}
-            - Guidance: {section_outline.get("content_guidance", "")}
+            # Add venue info
+            venue = template_config.get("venue", "General")
+            format_type = template_config.get("format", "academic")
+            page_limit = template_config.get("page_limit", 8)
             
-            Other Drafted Sections (for context):
-            {chr(10).join([f"- {sec}: {content[:100]}..." for sec, content in state["drafted_sections"].items()])}
+            paper_parts.append(f"**Target Venue**: {venue}")
+            paper_parts.append(f"**Format**: {format_type}")
+            paper_parts.append(f"**Page Limit**: {page_limit} pages")
+            paper_parts.append("\n\n")
             
-            Write a complete, well-structured {section} section that:
-            1. Follows academic writing standards
-            2. Integrates seamlessly with other sections
-            3. Meets the target word count
-            4. Uses appropriate technical language
-            5. Includes placeholder citations where needed (e.g., [1], [2])
+            # Add each section
+            section_order = ["Abstract", "Introduction", "Related Work", "Methods", "Results", "Discussion", "Conclusion"]
             
-            Return only the section content, no additional formatting or explanations.
-            """
+            for section_name in section_order:
+                if section_name in section_content:
+                    paper_parts.append(f"## {section_name}\n\n")
+                    paper_parts.append(section_content[section_name])
+                    paper_parts.append("\n\n")
             
-            response = await asyncio.get_event_loop().run_in_executor(
-                None,
-                lambda: self.client.chat.completions.create(
-                    model=self.model,
-                    temperature=0.2,
-                    messages=[{"content": content, "role": "user"}]
-                )
-            )
+            # Add any remaining sections not in the standard order
+            for section_name, content in section_content.items():
+                if section_name not in section_order:
+                    paper_parts.append(f"## {section_name}\n\n")
+                    paper_parts.append(content)
+                    paper_parts.append("\n\n")
             
-            section_content = response.choices[0].message.content.strip()
+            formatted_paper = "".join(paper_parts)
             
-            state["drafted_sections"][section] = section_content
+            print(f"✅ Paper formatted ({len(formatted_paper)} characters)")
             
-            # Move to next section
-            current_index = state["section_order"].index(section)
-            if current_index + 1 < len(state["section_order"]):
-                next_section = state["section_order"][current_index + 1]
-                if next_section not in state["drafted_sections"]:
-                    state["current_section"] = next_section
-                else:
-                    state["current_section"] = ""
-            else:
-                state["current_section"] = ""
-            
-            print(f"✅ Drafted {section} section ({len(section_content)} characters)")
+            return {
+                **state,
+                "formatted_paper": formatted_paper,
+                "current_step": "paper_formatted"
+            }
             
         except Exception as e:
-            error_msg = f"Failed to draft {section} section: {str(e)}"
-            state["errors"].append(error_msg)
-            print(f"❌ {error_msg}")
-        
-        return state
-    
-    async def _compile_draft_node(self, state: PaperWritingState) -> PaperWritingState:
-        """Step 5: Compile full draft in target format."""
-        print("\n📑 Step 5: Compiling full draft...")
-        
-        try:
-            # Compile sections in order
-            compiled_sections = []
-            
-            for section in state["section_order"]:
-                if section in state["drafted_sections"]:
-                    compiled_sections.append(f"\n\n## {section}\n\n{state['drafted_sections'][section]}")
-                else:
-                    compiled_sections.append(f"\n\n## {section}\n\n[Section not yet drafted]")
-            
-            # Add title and metadata
-            title = f"Research Paper: {state['structured_narrative'].get('main_hypothesis', 'Untitled')[:100]}"
-            
-            compiled_draft = f"""# {title}
-
-**Target Venue**: {state['target_venue']}
-**Format**: {state['template_rules'].get('format', 'LaTeX')}
-**Page Limit**: {state['template_rules'].get('page_limit', 'Not specified')} pages
-
-{''.join(compiled_sections)}
-
-## References
-
-[1] Placeholder reference 1
-[2] Placeholder reference 2
-[3] Placeholder reference 3
-
----
-*Draft compiled automatically. References need to be populated with actual citations.*
-"""
-            
-            state["compiled_draft"] = compiled_draft
-            state["current_step"] = "draft_compiled"
-            
-            # Store in draft history
-            state["draft_history"].append(compiled_draft)
-            
-            print(f"✅ Compiled full draft ({len(compiled_draft)} characters)")
-            print(f"📄 Sections included: {len([s for s in state['section_order'] if s in state['drafted_sections']])}/{len(state['section_order'])}")
-            
-        except Exception as e:
-            error_msg = f"Failed to compile draft: {str(e)}"
-            state["errors"].append(error_msg)
-            print(f"❌ {error_msg}")
-        
-        return state
-    
-    async def _critique_paper_node(self, state: PaperWritingState) -> PaperWritingState:
-        """Step 6: Critique and analyze the paper draft."""
-        print("\n🔍 Step 6: Critiquing paper draft...")
-        
-        try:
-            content = f"""
-            You are an expert academic peer reviewer evaluating this research paper draft.
-            
-            Paper Title: {state['structured_narrative'].get('main_hypothesis', 'Untitled')[:100]}
-            Target Venue: {state['target_venue']}
-            
-            Paper Draft:
-            {state['compiled_draft']}
-            
-            Evaluate the paper on these dimensions (score 1-10):
-            1. **Clarity and Flow**: Is the narrative clear and logical?
-            2. **Technical Rigor**: Are methods and results technically sound?
-            3. **Novelty**: Does it present novel contributions?
-            4. **Completeness**: Are all necessary sections well-developed?
-            5. **Writing Quality**: Is it well-written and professional?
-            6. **Venue Fit**: Does it match the target venue's scope?
-            
-            For each issue found, provide:
-            - **Severity**: critical/major/minor
-            - **Section**: Which section has the issue
-            - **Description**: What the problem is
-            - **Suggestion**: How to fix it
-            
-            Respond with JSON:
-            {{
-                "overall_score": 7.5,
-                "dimension_scores": {{
-                    "clarity_flow": 8,
-                    "technical_rigor": 7,
-                    "novelty": 6,
-                    "completeness": 8,
-                    "writing_quality": 7,
-                    "venue_fit": 8
-                }},
-                "issues": [
-                    {{
-                        "severity": "major",
-                        "section": "Methods",
-                        "description": "Problem description",
-                        "suggestion": "How to fix"
-                    }}
-                ],
-                "strengths": ["Strength 1", "Strength 2"],
-                "recommendation": "accept/revise/reject",
-                "revision_priority": "sections/compilation/finalize"
-            }}
-            """
-            
-            response = await asyncio.get_event_loop().run_in_executor(
-                None,
-                lambda: self.client.chat.completions.create(
-                    model=self.model,
-                    temperature=0.1,
-                    messages=[{"content": content, "role": "user"}]
-                )
-            )
-            
-            response_text = response.choices[0].message.content.strip()
-            
-            # Parse JSON response
-            if response_text.startswith("```json"):
-                response_text = response_text[7:]
-            if response_text.endswith("```"):
-                response_text = response_text[:-3]
-            response_text = response_text.strip()
-            
-            critique_data = json.loads(response_text)
-            
-            state["critique_feedback"].append(critique_data)
-            state["current_step"] = "paper_critiqued"
-            
-            print(f"✅ Paper critique completed")
-            print(f"📊 Overall score: {critique_data.get('overall_score', 'N/A')}/10")
-            print(f"⚠️  Issues found: {len(critique_data.get('issues', []))}")
-            print(f"📋 Recommendation: {critique_data.get('recommendation', 'N/A')}")
-            
-        except Exception as e:
-            error_msg = f"Failed to critique paper: {str(e)}"
-            state["errors"].append(error_msg)
-            print(f"❌ {error_msg}")
-        
-        return state
-    
-    async def _revise_paper_node(self, state: PaperWritingState) -> PaperWritingState:
-        """Revise paper based on critique feedback."""
-        print("\n✏️  Revising paper based on feedback...")
-        
-        if not state["critique_feedback"]:
-            print("No critique feedback available for revision")
-            return state
-        
-        latest_critique = state["critique_feedback"][-1]
-        issues = latest_critique.get("issues", [])
-        
-        if not issues:
-            print("No specific issues to address")
-            return state
-        
-        state["revision_count"] += 1
-        
-        # Focus on critical and major issues first
-        critical_issues = [i for i in issues if i.get("severity") == "critical"]
-        major_issues = [i for i in issues if i.get("severity") == "major"]
-        priority_issues = critical_issues + major_issues
-        
-        if priority_issues:
-            print(f"Addressing {len(priority_issues)} priority issues...")
-            # Reset current_section to trigger re-drafting
-            state["current_section"] = priority_issues[0].get("section", "")
-        
-        return state
+            print(f"❌ Error in format_paper_node: {str(e)}")
+            return {
+                **state,
+                "errors": state.get("errors", []) + [f"Formatting error: {str(e)}"],
+                "current_step": "formatting_error"
+            }
     
     async def _finalize_paper_node(self, state: PaperWritingState) -> PaperWritingState:
-        """Step 5: Finalize the paper and save to file."""
-        print("\n🎯 Step 5: Finalizing paper...")
-        
-        state["final_document"] = state["compiled_draft"]
-        state["current_step"] = "paper_finalized"
-        
-        # Save paper to file
-        import datetime
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"generated_paper_{timestamp}.md"
+        """Node for finalizing the paper and creating output files."""
+        print("\n🎯 Paper Writing: Finalizing paper...")
         
         try:
+            formatted_paper = state.get("formatted_paper", "")
+            template_config = state.get("template_config", {})
+            
+            # Create multiple format outputs
+            final_outputs = {}
+            
+            # Markdown version (primary)
+            final_outputs["markdown"] = formatted_paper
+            
+            # Save to file
+            from datetime import datetime
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"generated_paper_{timestamp}.md"
+            
             with open(filename, 'w', encoding='utf-8') as f:
-                f.write(state["final_document"])
-            print(f"💾 Paper saved to: {filename}")
+                f.write(formatted_paper)
+            
+            final_outputs["file_path"] = filename
+            
+            print(f"✅ Paper saved to: {filename}")
+            print(f"📊 Paper statistics:")
+            print(f"   - Total length: {len(formatted_paper)} characters")
+            print(f"   - Estimated pages: {len(formatted_paper) // 3000:.1f}")
+            print(f"   - Sections: {len(state.get('section_content', {}))}")
+            
+            return {
+                **state,
+                "final_outputs": final_outputs,
+                "current_step": "paper_finalized"
+            }
+            
         except Exception as e:
-            print(f"⚠️  Could not save paper to file: {e}")
-        
-        print("✅ Paper finalized successfully!")
-        print(f"📄 Final document length: {len(state['final_document'])} characters")
-        print(f"� Sections drafted: {len(state['drafted_sections'])}")
-        
-        # Print preview of the paper
-        if state["final_document"]:
-            print("\n📖 Paper Preview (first 500 characters):")
-            print("-" * 50)
-            print(state["final_document"][:500] + "...")
-            print("-" * 50)
-        
-        return state
-    
-    # Paper writing workflow decision functions
-    def _sections_complete_check(self, state: PaperWritingState) -> str:
-        """Check if all sections have been drafted."""
-        drafted_count = len(state["drafted_sections"])
-        total_count = len(state["section_order"])
-        
-        if drafted_count < total_count:
-            return "continue_drafting"
-        else:
-            return "compile"
-    
-    def _paper_revision_decision(self, state: PaperWritingState) -> str:
-        """Decide whether to revise sections, recompile, or finalize."""
-        if not state["critique_feedback"]:
-            return "finalize"
-        
-        latest_critique = state["critique_feedback"][-1]
-        overall_score = latest_critique.get("overall_score", 0)
-        issues = latest_critique.get("issues", [])
-        
-        # Check for critical issues
-        critical_issues = [i for i in issues if i.get("severity") == "critical"]
-        if critical_issues:
-            return "revise_sections"
-        
-        # Check for major issues
-        major_issues = [i for i in issues if i.get("severity") == "major"]
-        if major_issues and state["revision_count"] < 3:
-            return "revise_sections"
-        
-        # Check overall score
-        if overall_score < 7.0 and state["revision_count"] < 2:
-            return "revise_compilation"
-        
-        # Otherwise finalize
-        return "finalize"
+            print(f"❌ Error in finalize_paper_node: {str(e)}")
+            return {
+                **state,
+                "errors": state.get("errors", []) + [f"Finalization error: {str(e)}"],
+                "current_step": "finalization_error"
+            }
 
     async def interactive_mode(self):
         """Run the tool in interactive mode."""
@@ -5668,16 +4754,16 @@ class MLResearcherTool:
 async def main():
     """Main function to run the ML Researcher Tool."""
     try:
-        tool = MLResearcherTool()
+        tool = MLResearcherLangGraph()
         
         if len(sys.argv) > 1:
             # Command line mode
             prompt = " ".join(sys.argv[1:])
-            results = await tool.analyze_task(prompt)
+            results = await tool.analyze_research_task(prompt)
             print("\n" + json.dumps(results, indent=2))
         else:
             # Interactive mode
-            await tool.core.interactive_mode()
+            await tool.interactive_mode()
 
     except Exception as e:
         print(f"❌ Failed to initialize ML Researcher Tool: {str(e)}")
