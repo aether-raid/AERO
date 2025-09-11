@@ -377,8 +377,9 @@ Paper content:
             )
             
             paper['relevance_score'] = relevance_score
-            print(f"Relevance Score for paper {i}: {relevance_score:.1f}/10.0")
+            print(f"Relevance Score for paper {i:03d}: {relevance_score:.1f}/10.0")
             return paper
+
         
         # Run all scoring tasks concurrently
         scoring_tasks = [score_paper(i, paper) for i, paper in enumerate(papers, 1)]
