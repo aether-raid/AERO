@@ -194,6 +194,16 @@ class PaperWritingState(BaseState):
     
     # Output
     final_outputs: Dict[str, str]             # Multiple format versions
+    
+    
+class ExperimentSuggestionState(BaseState):
+    """State object for the experiment suggestion workflow."""
+    # Input data
+    experimental_results: Dict[str, Any]      # Raw experimental data
+    
+    
+    # Output
+    final_outputs: Dict[str, str]  
 
 class RouterState(TypedDict):
     """State object for the router agent."""
@@ -232,11 +242,12 @@ class MLResearcherLangGraph:
             self.arxiv_processor = None
             print(f"Loading ArXiv paper processor failed: {e}")
 
-        # Build the three workflows
+        # Build the workflows
         self.router_graph = self._build_router_graph()
         self.model_suggestion_graph = self._build_model_suggestion_graph()
         self.research_planning_graph = self._build_research_planning_graph()
         self.paper_writing_graph = self._build_paper_writing_graph()
+        self.experiment_suggestion_graph = self._build_analyze_and_suggest_experiment_graph()
     
     def _load_from_env_file(self, key: str) -> Optional[str]:
         """Load configuration value from env.example file."""
@@ -397,6 +408,21 @@ class MLResearcherLangGraph:
         
         return workflow.compile()
     
+    def _build_analyze_and_suggest_experiment_graph(self) -> StateGraph:
+        """Analyze the results and suggest experiments based on findings."""
+        workflow = StateGraph(ExperimentSuggestionState)
+
+        # Add nodes for experiment suggestion workflow
+        workflow.add_node("analyze_findings", self._analyze_results_node)
+        workflow.add_node("suggest_experiments", self._suggest_experiments_node)
+
+        # Define the flow
+        workflow.set_entry_point("analyze_findings")
+        workflow.add_edge("analyze_findings", "suggest_experiments")
+        workflow.add_edge("suggest_experiments", END)
+
+        return workflow.compile()
+
     async def _route_request_node(self, state: RouterState) -> RouterState:
         """Router node to decide which workflow to use based on user prompt."""
         print("\n🤖 Router: Analyzing user request to determine workflow...")
@@ -434,10 +460,22 @@ class MLResearcherLangGraph:
                    - "Convert my results to a research paper"
                    - Paper generation and formatting
                    - Report compilation from data
+                   
+                4. **ADDITIONAL_EXPERIMENT_SUGGESTION**: For requests asking about:
+                    - "Given these results, what should I try next?"
+                    - "Plan follow-up experiments from my metrics or logs."
+                    - "Which ablations or hyperparameter sweeps should I run?"
+                    - "Turn this error analysis into testable hypotheses and next steps."
+                    - Follow-up experiment design
+                    - Hypothesis generation from results
+                    - Ablation and hyperparameter sweep planning
+                    - Evidence-based prioritization
+                    - Experiment roadmap creation
+
 
                 Analyze the user's request and respond with a JSON object containing:
                 {{
-                    "workflow": "MODEL_SUGGESTION", "RESEARCH_PLANNING", or "PAPER_WRITING",
+                    "workflow": "MODEL_SUGGESTION", "RESEARCH_PLANNING", "PAPER_WRITING", OR "ADDITIONAL_EXPERIMENT_SUGGESTION",
                     "confidence": 0.0-1.0,
                     "reasoning": "Brief explanation of why this workflow was chosen"
                 }}
@@ -481,12 +519,15 @@ class MLResearcherLangGraph:
                     workflow_decision = "research_planning"
                 elif workflow_decision.upper() in ["PAPER_WRITING", "PAPER_WRITE", "REPORT_GENERATION"]:
                     workflow_decision = "paper_writing"
+                elif workflow_decision.upper() in ["ADDITIONAL_EXPERIMENT_SUGGESTION", "EXPERIMENT_SUGGESTION", "EXPERIMENT_PLANNING"]:
+                    workflow_decision = "additional_experiment_suggestion"
                 else:
                     workflow_decision = "model_suggestion"  # Default fallback
                 
                 state["routing_decision"] = workflow_decision
                 state["routing_confidence"] = confidence
                 state["routing_reasoning"] = reasoning
+                
                 
                 print(f"🎯 Router Decision: {workflow_decision.upper()}")
                 print(f"📊 Confidence: {confidence:.2f}")
@@ -4005,6 +4046,45 @@ Provide the complete refined research plan:
                 }
             }
             
+        elif workflow_decision == "additional_experiment_suggestion":
+            print("\n🔬 STEP 2: EXECUTING EXPERIMENT SUGGESTION WORKFLOW")
+            print("=" * 50)
+            
+            # Initialize experiment suggestion state
+            experiment_state: ExperimentSuggestionState = {
+                "messages": [HumanMessage(content=prompt)],
+                "original_prompt": prompt,
+                "experimental_results": {},  # Could be extracted from prompt
+                "findings_analysis": {},
+                "experiment_suggestions": {},
+                "current_step": "",
+                "errors": [],
+                "workflow_type": "experiment_suggestion"
+            }
+            
+            # Run the experiment suggestion workflow
+            final_experiment_state = await self.experiment_suggestion_graph.ainvoke(experiment_state)
+            
+            # Compile results
+            results = {
+                "workflow_type": "experiment_suggestion",
+                "router_decision": {
+                    "decision": final_router_state["routing_decision"],
+                    "confidence": final_router_state["routing_confidence"],
+                    "reasoning": final_router_state["routing_reasoning"]
+                },
+                "original_prompt": final_experiment_state["original_prompt"],
+                "findings_analysis": final_experiment_state.get("findings_analysis", {}),
+                "experiment_suggestions": final_experiment_state.get("experiment_suggestions", {}),
+                "errors": final_router_state["errors"] + final_experiment_state["errors"],
+                "summary": {
+                    "workflow_used": "Experiment Suggestion Pipeline",
+                    "findings_analyzed": bool(final_experiment_state.get("findings_analysis", {})),
+                    "suggestions_generated": bool(final_experiment_state.get("experiment_suggestions", {})),
+                    "total_errors": len(final_router_state["errors"]) + len(final_experiment_state["errors"])
+                }
+            }
+            
         else:
             # Unknown workflow decision
             results = {
@@ -4165,6 +4245,112 @@ Provide the complete refined research plan:
                 **state,
                 "errors": state.get("errors", []) + [f"Analysis error: {str(e)}"],
                 "current_step": "analysis_error"
+            }
+    
+    async def _suggest_experiments_node(self, state) -> dict:
+        """Node for suggesting follow-up experiments based on analyzed findings."""
+        
+        # Determine the context based on state type/content
+        is_experiment_suggestion = "experiment_suggestions" in state or "findings_analysis" in state
+        
+        if is_experiment_suggestion:
+            print("\n🔬 Experiment Suggestion: Generating follow-up experiment recommendations...")
+        else:
+            print("\n📊 Generic: Generating experiment suggestions...")
+        
+        try:
+            # Extract analysis context
+            original_prompt = state.get("original_prompt", "")
+            experimental_results = state.get("experimental_results", {})
+            findings_analysis = state.get("findings_analysis", {})
+            
+            # Build suggestions prompt based on available analysis
+            if findings_analysis:
+                analysis_context = f"Findings Analysis: {findings_analysis}"
+            else:
+                analysis_context = f"Experimental Results: {experimental_results}"
+            
+            suggestions_prompt = f"""
+            Based on the following experimental analysis, suggest concrete follow-up experiments that would advance the research:
+            
+            Original Research Question: "{original_prompt}"
+            
+            {analysis_context}
+            
+            Please provide specific, actionable experiment suggestions including:
+            
+            1. **Priority Experiments**: 3-5 high-impact experiments ranked by importance
+            2. **Ablation Studies**: Key components to ablate or modify
+            3. **Hyperparameter Investigations**: Specific parameters to tune and ranges to explore  
+            4. **Architecture Variations**: Model architecture modifications to test
+            5. **Dataset Experiments**: Additional datasets or data augmentation strategies
+            6. **Evaluation Metrics**: New metrics or evaluation approaches to consider
+            7. **Implementation Details**: Specific technical approaches or tools to try
+            8. **Success Criteria**: How to measure if each experiment succeeds
+            9. **Resource Requirements**: Estimated compute/time needs for each experiment
+            10. **Risk Assessment**: Potential challenges and mitigation strategies
+            
+            Format as a JSON object with detailed, implementable suggestions that build on the current findings.
+            """
+            
+            response = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[{"role": "user", "content": suggestions_prompt}],
+                    temperature=0.3
+                )
+            )
+            
+            # Parse the suggestions
+            suggestions_text = response.choices[0].message.content.strip()
+            print(f"📝 Suggestions: {suggestions_text[:200]}...")
+            
+            # Try to extract JSON from response
+            try:
+                import json
+                # Look for JSON in the response
+                start = suggestions_text.find('{')
+                end = suggestions_text.rfind('}') + 1
+                if start != -1 and end != -1:
+                    suggestions_json = json.loads(suggestions_text[start:end])
+                else:
+                    # Fallback: create basic suggestions
+                    suggestions_json = {
+                        "priority_experiments": ["Experiment 1: Baseline comparison", "Experiment 2: Hyperparameter tuning"],
+                        "ablation_studies": ["Remove component X", "Modify layer Y"],
+                        "next_steps": "Continue with current approach",
+                        "success_criteria": "Improve current metrics by 5%"
+                    }
+            except:
+                # Fallback suggestions
+                suggestions_json = {
+                    "priority_experiments": ["Experiment 1: Baseline comparison", "Experiment 2: Hyperparameter tuning"],
+                    "ablation_studies": ["Remove component X", "Modify layer Y"],
+                    "next_steps": "Continue with current approach", 
+                    "success_criteria": "Improve current metrics by 5%"
+                }
+            
+            # Store results based on workflow type
+            if is_experiment_suggestion:
+                return {
+                    **state,
+                    "experiment_suggestions": suggestions_json,
+                    "current_step": "experiments_suggested"
+                }
+            else:
+                return {
+                    **state,
+                    "suggestions": suggestions_json,
+                    "current_step": "suggestions_completed"
+                }
+                
+        except Exception as e:
+            print(f"❌ Error in suggest_experiments_node: {str(e)}")
+            return {
+                **state,
+                "errors": state.get("errors", []) + [f"Suggestions error: {str(e)}"],
+                "current_step": "suggestions_error"
             }
     
     async def _setup_paper_node(self, state: PaperWritingState) -> PaperWritingState:
@@ -4725,6 +4911,38 @@ Provide the complete refined research plan:
             print(f"❌ Failed to generate Word document: {str(e)}")
             raise e
 
+    async def analyze_and_suggest_experiment(self, prompt: str, experimental_results: Dict[str, Any] = None) -> Dict[str, Any]:
+        """Analyze experimental results and suggest follow-up experiments."""
+        
+        # Initialize experiment suggestion state
+        experiment_state: ExperimentSuggestionState = {
+            "messages": [HumanMessage(content=prompt)],
+            "original_prompt": prompt,
+            "experimental_results": experimental_results or {},
+            "findings_analysis": {},
+            "experiment_suggestions": {},
+            "current_step": "",
+            "errors": [],
+            "workflow_type": "experiment_suggestion"
+        }
+        
+        # Run the experiment suggestion workflow
+        final_state = await self.experiment_suggestion_graph.ainvoke(experiment_state)
+        
+        return {
+            "workflow_type": "experiment_suggestion",
+            "original_prompt": final_state["original_prompt"],
+            "findings_analysis": final_state.get("findings_analysis", {}),
+            "experiment_suggestions": final_state.get("experiment_suggestions", {}),
+            "errors": final_state.get("errors", []),
+            "summary": {
+                "workflow_used": "Experiment Suggestion Pipeline",
+                "findings_analyzed": bool(final_state.get("findings_analysis", {})),
+                "suggestions_generated": bool(final_state.get("experiment_suggestions", {})),
+                "total_errors": len(final_state.get("errors", []))
+            }
+        }
+
 
 class MLResearcherTool:
     """🆕 Simplified wrapper for easy access to all workflows."""
@@ -4749,6 +4967,10 @@ class MLResearcherTool:
     async def analyze_task(self, prompt: str) -> Dict[str, Any]:
         """Analyze any research task using intelligent routing."""
         return await self.core.analyze_research_task(prompt)
+    
+    async def suggest_experiments(self, prompt: str, experimental_results: Dict[str, Any] = None) -> Dict[str, Any]:
+        """Analyze experimental results and suggest follow-up experiments."""
+        return await self.core.analyze_and_suggest_experiment(prompt, experimental_results)
 
 
 async def main():
