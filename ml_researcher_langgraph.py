@@ -236,7 +236,7 @@ class MLResearcherLangGraph:
         try:
             # Initialize ArXiv paper processor
             self.arxiv_processor = ArxivPaperProcessor(self.client, self.model_cheap)
-            print("ArXiv paper processor initialized successfully.")
+            # print("ArXiv paper processor initialized successfully.")  # Suppressed to avoid cluttering output
         except Exception as e:
             self.arxiv_processor = None
             print(f"Loading ArXiv paper processor failed: {e}")
@@ -4216,6 +4216,15 @@ Provide the complete refined research plan:
             print(final_plan)
             print("=" * 80)
             
+            # Generate and save Word document
+            try:
+                word_filename = self._generate_research_plan_word_document(state)
+                state["word_document_path"] = word_filename
+                print(f"\n📄 Word document saved: {word_filename}")
+            except Exception as e:
+                print(f"⚠️ Warning: Failed to generate Word document: {str(e)}")
+                state["errors"].append(f"Word document generation failed: {str(e)}")
+            
             state["messages"].append(
                 AIMessage(content=f"✅ Research plan finalized with quality score {final_score:.1f}/10 after {refinement_count} refinement iterations.")
             )
@@ -5419,6 +5428,217 @@ Provide the complete refined research plan:
             except Exception as e:
                 print(f"❌ An error occurred: {str(e)}")
 
+    def _generate_research_plan_word_document(self, state: ResearchPlanningState) -> str:
+        """Generate and save a comprehensive Word document for the research plan."""
+        try:
+            from word_formatter import WordFormatter
+            from datetime import datetime
+            import os
+            
+            # Initialize formatter
+            formatter = WordFormatter()
+            
+            # Extract key information from state
+            original_prompt = state.get("original_prompt", "Research Planning Analysis")
+            timestamp = datetime.now()
+            timestamp_str = timestamp.strftime("%Y-%m-%d %H:%M:%S")
+            timestamp_file = timestamp.strftime("%Y%m%d_%H%M%S")
+            
+            # Get research plan data
+            research_plan_data = state.get("research_plan", {})
+            selected_problem = state.get("selected_problem", {})
+            critique_results = state.get("critique_results", {})
+            validated_problems = state.get("validated_problems", [])
+            arxiv_results = state.get("arxiv_results", {})
+            
+            # Create document title
+            safe_prompt = "".join(c for c in original_prompt if c.isalnum() or c in (' ', '-', '_')).strip()[:50]
+            formatter.add_title(
+                title="Open Research Problem Statement & Research Plan",
+                subtitle=f"Query: {safe_prompt}\nGenerated on {timestamp_str}",
+                add_date=False
+            )
+            
+            # Executive Summary
+            formatter.add_heading("Executive Summary", level=1)
+            final_score = critique_results.get("overall_score", 0)
+            refinement_count = state.get("refinement_count", 0)
+            quality_status = research_plan_data.get("quality_status", "unknown")
+            
+            exec_summary = f"""This document presents a **comprehensive research plan** developed through systematic analysis of current literature and identification of open research problems. The plan was generated through {refinement_count} refinement iteration(s) and achieved a final quality score of **{final_score:.1f}/10.0** with {quality_status} quality status.
+
+**Research Foundation**: The analysis processed {arxiv_results.get('papers_returned', 0)} research papers from ArXiv to identify genuine research gaps and formulate actionable research directions. The selected research problem addresses a significant gap in current literature and provides clear pathways for novel contributions.
+
+**Plan Structure**: The research plan follows a systematic 4-phase approach with defined milestones, risk mitigation strategies, and measurable outcomes designed for practical implementation in an academic research setting."""
+            
+            formatter.add_formatted_paragraph(exec_summary)
+            
+            # Research Context and Query
+            formatter.add_page_break()
+            formatter.add_heading("Research Query and Context", level=1)
+            formatter.add_formatted_paragraph(f"**Original Query**: {original_prompt}")
+            
+            # Problem Identification Process
+            formatter.add_heading("Research Problem Identification Process", level=2)
+            
+            if validated_problems:
+                formatter.add_formatted_paragraph(f"**Problems Evaluated**: {len(validated_problems)} candidate problems were identified and evaluated")
+                
+                # Show top problems considered
+                formatter.add_heading("Top Research Problems Considered", level=3)
+                for i, problem in enumerate(validated_problems[:3], 1):
+                    prob_statement = problem.get('statement', 'N/A')
+                    prob_score = problem.get('novelty_score', 0)
+                    prob_reasoning = problem.get('validation_reasoning', 'N/A')
+                    
+                    formatter.add_formatted_paragraph(f"**Problem {i}** (Novelty Score: {prob_score:.1f}/10):")
+                    formatter.add_indented_paragraph(prob_statement)
+                    formatter.add_indented_paragraph(f"*Validation*: {prob_reasoning[:200]}{'...' if len(prob_reasoning) > 200 else ''}")
+                    formatter.add_formatted_paragraph("")
+            
+            # Selected Research Problem
+            formatter.add_page_break()
+            formatter.add_heading("Selected Research Problem Statement", level=1)
+            
+            if selected_problem:
+                problem_statement = selected_problem.get('statement', 'N/A')
+                novelty_score = selected_problem.get('novelty_score', 0)
+                validation_reasoning = selected_problem.get('validation_reasoning', 'N/A')
+                
+                formatter.add_formatted_paragraph(f"**Novelty Score**: {novelty_score:.1f}/10.0")
+                formatter.add_separator()
+                
+                formatter.add_heading("Problem Statement", level=2)
+                formatter.add_formatted_paragraph(problem_statement)
+                
+                formatter.add_heading("Problem Validation and Justification", level=2)
+                formatter.add_formatted_paragraph(validation_reasoning)
+            
+            # Research Plan
+            formatter.add_page_break()
+            formatter.add_heading("Comprehensive Research Plan", level=1)
+            
+            final_plan = research_plan_data.get("research_plan", "")
+            if final_plan:
+                # Split the plan into sections for better formatting
+                plan_sections = final_plan.split('\n\n')
+                for section in plan_sections:
+                    if section.strip():
+                        # Check if it's a heading (starts with # or contains "Phase" or "PHASE")
+                        section_clean = section.strip()
+                        if (section_clean.startswith('#') or 
+                            'PHASE' in section_clean.upper() or 
+                            'METHODOLOGY' in section_clean.upper() or
+                            'RISK' in section_clean.upper() or
+                            'OUTCOMES' in section_clean.upper()):
+                            # Extract heading text
+                            if section_clean.startswith('#'):
+                                heading_text = section_clean.lstrip('#').strip()
+                                level = min(section_clean.count('#'), 3)
+                            else:
+                                heading_text = section_clean
+                                level = 2
+                            formatter.add_heading(heading_text, level=level)
+                        else:
+                            formatter.add_formatted_paragraph(section_clean)
+            
+            # Quality Assessment and Critique
+            formatter.add_page_break()
+            formatter.add_heading("Quality Assessment and Validation", level=1)
+            
+            formatter.add_heading("Final Quality Metrics", level=2)
+            dimension_scores = critique_results.get("dimension_scores", {})
+            
+            quality_table_data = [
+                ["Assessment Dimension", "Score (1-10)", "Weight"],
+                ["Problem Analysis & Literature Integration", f"{dimension_scores.get('problem_analysis_and_literature', 0):.1f}", "20%"],
+                ["Methodology & Feasibility", f"{dimension_scores.get('methodology_and_feasibility', 0):.1f}", "40%"],
+                ["Risk & Resources", f"{dimension_scores.get('risk_and_resources', 0):.1f}", "15%"],
+                ["Outcomes & Impact", f"{dimension_scores.get('outcomes_and_rigor', 0):.1f}", "25%"],
+                ["**Overall Score**", f"**{final_score:.1f}**", "**100%**"]
+            ]
+            
+            formatter.add_table(
+                data=quality_table_data,
+                headers=True,
+                style="modern",
+                col_widths=[3, 1, 1]
+            )
+            
+            # Critique Summary
+            if critique_results:
+                formatter.add_heading("Critique Summary", level=2)
+                
+                # Strengths
+                strengths = critique_results.get("strengths", [])
+                if strengths:
+                    formatter.add_heading("Key Strengths", level=3)
+                    for strength in strengths:
+                        formatter.add_bulleted_paragraph(strength)
+                
+                # Remaining Issues
+                remaining_issues = critique_results.get("major_issues", [])
+                if remaining_issues:
+                    formatter.add_heading("Remaining Considerations", level=3)
+                    for issue in remaining_issues:
+                        if isinstance(issue, dict):
+                            section = issue.get("section", "General")
+                            comment = issue.get("comment", str(issue))
+                            formatter.add_formatted_paragraph(f"**{section}**: {comment}")
+                        else:
+                            formatter.add_bulleted_paragraph(str(issue))
+                
+                # Final Reasoning
+                reasoning = critique_results.get("reasoning", "")
+                if reasoning:
+                    formatter.add_heading("Final Assessment Reasoning", level=3)
+                    formatter.add_formatted_paragraph(reasoning)
+            
+            # Metadata and Process Information
+            formatter.add_page_break()
+            formatter.add_heading("Process Metadata", level=1)
+            
+            metadata_table_data = [
+                ["Attribute", "Value"],
+                ["Generation Date", timestamp_str],
+                ["Quality Score", f"{final_score:.1f}/10.0"],
+                ["Quality Status", quality_status.title()],
+                ["Refinement Iterations", str(refinement_count)],
+                ["Problems Evaluated", str(len(validated_problems))],
+                ["ArXiv Papers Analyzed", str(arxiv_results.get('papers_returned', 0))],
+                ["Final Recommendation", critique_results.get("recommendation", "finalize")]
+            ]
+            
+            formatter.add_table(
+                data=metadata_table_data,
+                headers=True,
+                style="modern",
+                col_widths=[2, 3]
+            )
+            
+            # Save the document
+            safe_query = "".join(c for c in safe_prompt if c.isalnum() or c in ('-', '_')).strip()
+            if not safe_query:
+                safe_query = "research_plan"
+            
+            filename = f"open_research_problem_{safe_query}_{timestamp_file}.docx"
+            
+            # Ensure the directory exists
+            output_dir = "open_problem_statements"
+            os.makedirs(output_dir, exist_ok=True)
+            
+            # Save in the open_problem_statements directory
+            output_path = os.path.join(output_dir, filename)
+            saved_path = formatter.save(output_path)
+            
+            print(f"✅ Research plan Word document saved: {saved_path}")
+            
+            return saved_path
+            
+        except Exception as e:
+            print(f"❌ Failed to generate Word document: {str(e)}")
+            raise e
+
 
 class MLResearcherTool:
     """🆕 Simplified wrapper for easy access to all workflows."""
@@ -5458,7 +5678,7 @@ async def main():
         else:
             # Interactive mode
             await tool.core.interactive_mode()
-    
+
     except Exception as e:
         print(f"❌ Failed to initialize ML Researcher Tool: {str(e)}")
         print("Make sure your API key is configured in env.example or .env file.")

@@ -16,3 +16,16 @@ gunicorn>=21.2.0
 
 # Optional: For enhanced logging
 python-json-logger>=2.0.7
+
+# Core dependencies also needed for the frontend backend
+openai>=1.0.0
+python-dotenv>=0.19.0
+langgraph>=0.0.40
+langchain-core>=0.1.0
+requests>=2.25.0
+feedparser>=6.0.0
+PyPDF2>=3.0.0
+numpy>=1.20.0
+faiss-cpu>=1.7.0
+tiktoken>=0.5.0
+python-docx>=0.8.11

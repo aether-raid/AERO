@@ -138,12 +138,32 @@ class ArxivPaperProcessor:
             if not self._embedding_model_loading:
                 self._embedding_model_loading = True
                 try:
-                    print("🔄 Loading embedding model in background...")
-                    from sentence_transformers import SentenceTransformer
+                    # First check if torch is working properly with a simple tensor operation
+                    try:
+                        import torch
+                        # Test torch functionality with a simple operation instead of version check
+                        test_tensor = torch.tensor([1.0, 2.0])
+                        _ = test_tensor.sum()  # Simple operation to verify torch works
+                        # print("✅ PyTorch is working correctly")  # Suppressed to avoid cluttering output
+                    except Exception as torch_err:
+                        print(f"⚠️ PyTorch functionality issue detected: {torch_err}")
+                        raise Exception(f"PyTorch not working properly: {torch_err}")
+                    
+                    # Try importing SentenceTransformers with better error handling
+                    try:
+                        from sentence_transformers import SentenceTransformer
+                        # print("✅ SentenceTransformers imported successfully")  # Suppressed to avoid cluttering output
+                    except ImportError as st_err:
+                        if "cannot import name 'Tensor'" in str(st_err):
+                            print("⚠️ Known PyTorch-SentenceTransformers compatibility issue detected")
+                            print("💡 Try: pip install --upgrade torch sentence-transformers")
+                        raise st_err
+                    
                     self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
-                    print("✅ Embedding model loaded and ready!")
+                    # print("✅ Embedding model loaded and ready!")  # Suppressed to avoid cluttering output
                 except Exception as e:
                     print(f"❌ Background embedding model loading failed: {e}")
+                    print("🔧 Embedding features will be disabled. The system will work without semantic search.")
                     self.embedding_model = None
                 finally:
                     self._embedding_model_loading = False
@@ -161,13 +181,33 @@ class ArxivPaperProcessor:
         
         if self.embedding_model is None and not self._embedding_model_loading:
             # Fallback: try loading synchronously if background loading failed
-            print("🔄 Loading embedding model (fallback)...")
             try:
-                from sentence_transformers import SentenceTransformer
+                # First check if torch is working properly with a simple tensor operation
+                try:
+                    import torch
+                    # Test torch functionality with a simple operation instead of version check
+                    test_tensor = torch.tensor([1.0, 2.0])
+                    _ = test_tensor.sum()  # Simple operation to verify torch works
+                    # print("✅ PyTorch is working correctly")  # Suppressed to avoid cluttering output
+                except Exception as torch_err:
+                    print(f"⚠️ PyTorch functionality issue detected: {torch_err}")
+                    raise Exception(f"PyTorch not working properly: {torch_err}")
+                
+                # Try importing SentenceTransformers with better error handling
+                try:
+                    from sentence_transformers import SentenceTransformer
+                    # print("✅ SentenceTransformers imported successfully")  # Suppressed to avoid cluttering output
+                except ImportError as st_err:
+                    if "cannot import name 'Tensor'" in str(st_err):
+                        print("⚠️ Known PyTorch-SentenceTransformers compatibility issue detected")
+                        print("💡 Try: pip install --upgrade torch sentence-transformers")
+                    raise st_err
+                
                 self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
-                print("✅ Embedding model loaded successfully!")
+                # print("✅ Embedding model loaded successfully!")  # Suppressed to avoid cluttering output
             except Exception as e:
                 print(f"❌ Embedding model failed to load: {e}")
+                print("🔧 Embedding features will be disabled. The system will work without semantic search.")
                 self.embedding_model = None
         
         return self.embedding_model

@@ -1,0 +1,38 @@
+# Minimal Requirements for ML Research Assistant
+# Essential dependencies for core functionality
+# Install with: pip install -r requirements_minimal.txt
+
+# Core LLM and API dependencies
+openai>=1.0.0
+python-dotenv>=0.19.0
+
+# LangGraph workflow system
+langgraph>=0.0.40
+langchain-core>=0.1.0
+
+# Research and data processing
+requests>=2.25.0
+feedparser>=6.0.0
+PyPDF2>=3.0.0
+numpy>=1.20.0
+
+# Document generation
+python-docx>=0.8.11
+
+# Token counting
+tiktoken>=0.5.0
+
+# Web framework (if using the web interface)
+fastapi>=0.104.1
+uvicorn[standard]>=0.24.0
+pydantic>=2.5.0
+python-multipart>=0.0.6
+
+# Basic file handling
+faiss-cpu>=1.7.0
+
+# Note: This minimal setup excludes:
+# - sentence-transformers, torch (for semantic similarity)
+# - tensorflow (for ML model suggestions)
+# - matplotlib (for visualization)
+# - Advanced ML features will use fallback implementations
