@@ -307,7 +307,13 @@ class ArxivPaperProcessor:
             # Extract text from PDF
             if pdf_link:
                 print(f"Fetching PDF from: {pdf_link}")
-                pdf_txt = extract_pdf_text(pdf_link)
+                # Pass paper metadata for proper file saving
+                pdf_txt = extract_pdf_text(
+                    pdf_link, 
+                    paper_title=paper_info.get('title', 'Unknown Title'),
+                    paper_id=paper_id,
+                    save_files=True
+                )
                 paper_info['content'] = pdf_txt
                 paper_info['pdf_downloaded'] = True
                 print(f"✅ Downloaded PDF content for: {paper_info['title'][:50]}...")

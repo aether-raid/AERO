@@ -28,6 +28,8 @@ warnings.filterwarnings('ignore', category=FutureWarning)  # Suppress TensorFlow
 
 # Suppress TensorFlow logging at the module level
 import logging
+# Use Uvicorn's error logger so messages are visible in the server console
+logger = logging.getLogger("uvicorn.error")
 logging.getLogger('tensorflow').setLevel(logging.ERROR)
 
 import sys
@@ -200,10 +202,18 @@ class ExperimentSuggestionState(BaseState):
     """State object for the experiment suggestion workflow."""
     # Input data
     experimental_results: Dict[str, Any]      # Raw experimental data
+    findings_analysis: Dict[str, Any]         # Analysis of current findings
+    research_context: Dict[str, Any]          # Context about the research domain
     
+    # Processing state
+    analysis_completed: bool                  # Whether initial analysis is done
+    experiment_categories: List[str]          # Types of experiments identified
     
     # Output
-    final_outputs: Dict[str, str]  
+    experiment_suggestions: Dict[str, Any]    # Comprehensive experiment suggestions
+    prioritized_experiments: List[Dict[str, Any]]  # Ranked experiment list
+    implementation_roadmap: Dict[str, Any]    # Step-by-step implementation plan
+    final_outputs: Dict[str, str]             # Final formatted outputs  
 
 class RouterState(TypedDict):
     """State object for the router agent."""
@@ -413,7 +423,7 @@ class MLResearcherLangGraph:
         workflow = StateGraph(ExperimentSuggestionState)
 
         # Add nodes for experiment suggestion workflow
-        workflow.add_node("analyze_findings", self._analyze_results_node)
+        workflow.add_node("analyze_findings", self._analyze_experiment_findings_node)
         workflow.add_node("suggest_experiments", self._suggest_experiments_node)
 
         # Define the flow
@@ -780,7 +790,7 @@ class MLResearcherLangGraph:
 
                 Confidence calibration (0.0–1.0):
                 - 0.95–1.00: Category is explicitly stated or entailed by multiple strong cues.
-                - 0.80–0.94: Strong single cue or multiple moderate cues; unlikely to be wrong.
+                - 0.80–0.94: Strong single cue or multiple moderate cues; extremely unlikely to be wrong.
                 - 0.60–0.79: Reasonable inference with at least one clear cue; some uncertainty.
                 - <0.60: Category is highly unlikely to apply, and can be safely ignored.
 
@@ -1031,6 +1041,7 @@ class MLResearcherLangGraph:
             state["messages"].append(
                 AIMessage(content=f"Generated arXiv search query (iteration {search_iteration + 1}): '{search_query}'")
             )
+            logger.info(f"ArXiv Search Query (iter {search_iteration + 1}): {search_query}")
         
         except Exception as e:
             # Fallback to simple keyword extraction with slashes
@@ -1092,7 +1103,7 @@ class MLResearcherLangGraph:
             # Determine search parameters based on search type and iteration
             if search_iteration == 0:
                 # Initial search: get 100 papers
-                max_results = 100
+                max_results = 200
                 start_offset = 0
                 print(f"🔍 INITIAL SEARCH - arXiv: {search_query}")
             elif is_backup_search:
@@ -1181,6 +1192,8 @@ class MLResearcherLangGraph:
                                 root = fallback_root
                             else:
                                 print(f"❌ Fallback only found {len(fallback_entries)} entries - keeping original")
+                                
+                                
                         except Exception as fallback_error:
                             print(f"❌ Fallback query failed: {fallback_error}")
                 
@@ -3277,6 +3290,7 @@ Provide a detailed, focused research plan that maximizes impact on this specific
             if "previous_plans" not in state:
                 state["previous_plans"] = []
             
+            
             critique_content = f"""
 You are a constructive senior research advisor and peer reviewer with deep expertise in machine learning and academic research. Your primary goal is to provide specific, actionable feedback to help improve a research plan. You are not just scoring it; you are guiding its refinement.
 
@@ -4246,113 +4260,7 @@ Provide the complete refined research plan:
                 "errors": state.get("errors", []) + [f"Analysis error: {str(e)}"],
                 "current_step": "analysis_error"
             }
-    
-    async def _suggest_experiments_node(self, state) -> dict:
-        """Node for suggesting follow-up experiments based on analyzed findings."""
-        
-        # Determine the context based on state type/content
-        is_experiment_suggestion = "experiment_suggestions" in state or "findings_analysis" in state
-        
-        if is_experiment_suggestion:
-            print("\n🔬 Experiment Suggestion: Generating follow-up experiment recommendations...")
-        else:
-            print("\n📊 Generic: Generating experiment suggestions...")
-        
-        try:
-            # Extract analysis context
-            original_prompt = state.get("original_prompt", "")
-            experimental_results = state.get("experimental_results", {})
-            findings_analysis = state.get("findings_analysis", {})
-            
-            # Build suggestions prompt based on available analysis
-            if findings_analysis:
-                analysis_context = f"Findings Analysis: {findings_analysis}"
-            else:
-                analysis_context = f"Experimental Results: {experimental_results}"
-            
-            suggestions_prompt = f"""
-            Based on the following experimental analysis, suggest concrete follow-up experiments that would advance the research:
-            
-            Original Research Question: "{original_prompt}"
-            
-            {analysis_context}
-            
-            Please provide specific, actionable experiment suggestions including:
-            
-            1. **Priority Experiments**: 3-5 high-impact experiments ranked by importance
-            2. **Ablation Studies**: Key components to ablate or modify
-            3. **Hyperparameter Investigations**: Specific parameters to tune and ranges to explore  
-            4. **Architecture Variations**: Model architecture modifications to test
-            5. **Dataset Experiments**: Additional datasets or data augmentation strategies
-            6. **Evaluation Metrics**: New metrics or evaluation approaches to consider
-            7. **Implementation Details**: Specific technical approaches or tools to try
-            8. **Success Criteria**: How to measure if each experiment succeeds
-            9. **Resource Requirements**: Estimated compute/time needs for each experiment
-            10. **Risk Assessment**: Potential challenges and mitigation strategies
-            
-            Format as a JSON object with detailed, implementable suggestions that build on the current findings.
-            """
-            
-            response = await asyncio.get_event_loop().run_in_executor(
-                None,
-                lambda: self.client.chat.completions.create(
-                    model=self.model,
-                    messages=[{"role": "user", "content": suggestions_prompt}],
-                    temperature=0.3
-                )
-            )
-            
-            # Parse the suggestions
-            suggestions_text = response.choices[0].message.content.strip()
-            print(f"📝 Suggestions: {suggestions_text[:200]}...")
-            
-            # Try to extract JSON from response
-            try:
-                import json
-                # Look for JSON in the response
-                start = suggestions_text.find('{')
-                end = suggestions_text.rfind('}') + 1
-                if start != -1 and end != -1:
-                    suggestions_json = json.loads(suggestions_text[start:end])
-                else:
-                    # Fallback: create basic suggestions
-                    suggestions_json = {
-                        "priority_experiments": ["Experiment 1: Baseline comparison", "Experiment 2: Hyperparameter tuning"],
-                        "ablation_studies": ["Remove component X", "Modify layer Y"],
-                        "next_steps": "Continue with current approach",
-                        "success_criteria": "Improve current metrics by 5%"
-                    }
-            except:
-                # Fallback suggestions
-                suggestions_json = {
-                    "priority_experiments": ["Experiment 1: Baseline comparison", "Experiment 2: Hyperparameter tuning"],
-                    "ablation_studies": ["Remove component X", "Modify layer Y"],
-                    "next_steps": "Continue with current approach", 
-                    "success_criteria": "Improve current metrics by 5%"
-                }
-            
-            # Store results based on workflow type
-            if is_experiment_suggestion:
-                return {
-                    **state,
-                    "experiment_suggestions": suggestions_json,
-                    "current_step": "experiments_suggested"
-                }
-            else:
-                return {
-                    **state,
-                    "suggestions": suggestions_json,
-                    "current_step": "suggestions_completed"
-                }
-                
-        except Exception as e:
-            print(f"❌ Error in suggest_experiments_node: {str(e)}")
-            return {
-                **state,
-                "errors": state.get("errors", []) + [f"Suggestions error: {str(e)}"],
-                "current_step": "suggestions_error"
-            }
-    
+
     async def _setup_paper_node(self, state: PaperWritingState) -> PaperWritingState:
         """Node for LLM-driven template selection and paper structuring."""
         print("\n🏗️ Paper Writing: Setting up paper structure and template...")
@@ -4944,6 +4852,415 @@ Provide the complete refined research plan:
         }
 
 
+    # ==================================================================================
+    # ADDITIONAL SUGGESTION WORKFLOW NODES
+    # ==================================================================================
+
+    
+    async def _analyze_experiment_findings_node(self, state: ExperimentSuggestionState) -> ExperimentSuggestionState:
+        """Node for analyzing experimental findings and research context for experiment suggestions."""
+        print("\n🔬 Experiment Analysis: Analyzing current findings and research context...")
+        
+        try:
+            # Extract research context from the original prompt and any provided data
+            original_prompt = state.get("original_prompt", "")
+            experimental_results = state.get("experimental_results", {})
+            
+            # Enhanced analysis prompt for experiment suggestions
+            analysis_prompt = f"""
+            You are an expert machine learning researcher analyzing experimental findings to suggest follow-up experiments.
+            
+            Original Research Question/Problem: "{original_prompt}"
+            
+            Experimental Results/Context: {experimental_results if experimental_results else "User described their current experimental situation in the prompt above"}
+            
+            Please analyze this research context and provide a comprehensive analysis for experiment planning:
+            
+            1. **Current State Assessment**:
+               - What has been accomplished so far?
+               - What are the key findings or results?
+               - What metrics or performance indicators are being used?
+               
+            2. **Research Domain Analysis**:
+               - Primary domain (computer vision, NLP, reinforcement learning, etc.)
+               - Specific task type (classification, detection, generation, etc.)
+               - Dataset characteristics and constraints
+               
+            3. **Technical Stack Analysis**:
+               - Current model architectures being used
+               - Training methodologies and frameworks
+               - Evaluation metrics and benchmarks
+               
+            4. **Gap Analysis**:
+               - What questions remain unanswered?
+               - What aspects need deeper investigation?
+               - What are potential failure modes or limitations?
+               
+            5. **Research Opportunities**:
+               - Areas for improvement or optimization
+               - Novel approaches that could be explored
+               - Comparative studies that would be valuable
+               
+            6. **Resource Context**:
+               - Computational constraints mentioned
+               - Timeline considerations
+               - Available datasets or tools
+            
+            Provide a detailed JSON response with these analyses that will inform comprehensive experiment suggestions.
+            """
+            
+            response = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[{"role": "user", "content": analysis_prompt}],
+                    temperature=0.2
+                )
+            )
+            
+            # Parse the analysis
+            analysis_text = response.choices[0].message.content.strip()
+            print(f"📋 Research Analysis: {analysis_text[:150]}...")
+            
+            # Try to extract JSON from response
+            try:
+                import json
+                # Look for JSON in the response
+                start = analysis_text.find('{')
+                end = analysis_text.rfind('}') + 1
+                if start != -1 and end != -1:
+                    analysis_json = json.loads(analysis_text[start:end])
+                else:
+                    # Fallback: create structured analysis
+                    analysis_json = {
+                        "current_state": {"status": "Initial analysis", "findings": "Based on user prompt"},
+                        "domain_analysis": {"domain": "machine learning", "task_type": "experimental"},
+                        "technical_stack": {"architecture": "to be determined", "metrics": "standard ML metrics"},
+                        "gap_analysis": {"open_questions": ["Performance optimization", "Method comparison"]},
+                        "opportunities": ["Baseline comparison", "Hyperparameter optimization"],
+                        "resource_context": {"constraints": "Standard research setup"}
+                    }
+            except Exception as e:
+                print(f"⚠️ JSON parsing failed: {e}, using fallback analysis")
+                # Fallback analysis with extracted key information
+                analysis_json = {
+                    "current_state": {"status": "Analysis from prompt", "findings": original_prompt[:200]},
+                    "domain_analysis": {"domain": "machine learning", "task_type": "experimental research"},
+                    "technical_stack": {"architecture": "various models", "metrics": "performance metrics"},
+                    "gap_analysis": {"open_questions": ["What experiments to run next?"]},
+                    "opportunities": ["Follow-up experiments", "Comparative analysis"],
+                    "resource_context": {"constraints": "Research environment"}
+                }
+            
+            # Store the analysis and update state
+            return {
+                **state,
+                "findings_analysis": analysis_json,
+                "research_context": {
+                    "original_prompt": original_prompt,
+                    "domain": analysis_json.get("domain_analysis", {}).get("domain", "machine learning"),
+                    "analysis_timestamp": __import__('datetime').datetime.now().isoformat()
+                },
+                "analysis_completed": True,
+                "current_step": "findings_analyzed"
+            }
+            
+        except Exception as e:
+            print(f"❌ Error in analyze_experiment_findings: {str(e)}")
+            return {
+                **state,
+                "errors": state.get("errors", []) + [f"Findings analysis error: {str(e)}"],
+                "analysis_completed": False,
+                "current_step": "analysis_error"
+            }
+
+    async def _suggest_experiments_node(self, state: ExperimentSuggestionState) -> ExperimentSuggestionState:
+        """Node for generating comprehensive, actionable experiment suggestions."""
+        print("\n🧪 Experiment Suggestion: Generating comprehensive experiment recommendations...")
+        
+        try:
+            # Extract analysis context
+            original_prompt = state.get("original_prompt", "")
+            experimental_results = state.get("experimental_results", {})
+            findings_analysis = state.get("findings_analysis", {})
+            research_context = state.get("research_context", {})
+            
+            # Build comprehensive suggestions prompt
+            suggestions_prompt = f"""
+            You are a senior machine learning researcher designing a comprehensive experimental roadmap. Based on the analysis below, create detailed, actionable experiment suggestions.
+            
+            **Research Context:**
+            Original Request: "{original_prompt}"
+            
+            **Current Analysis:**
+            {findings_analysis}
+            
+            **Experimental Context:**
+            {experimental_results}
+            
+            Please provide a comprehensive experimental plan with the following structure:
+            
+            1. **Priority Experiments** (Top 5, ranked by impact/feasibility):
+               For each experiment:
+               - Experiment Name & Objective
+               - Hypothesis being tested
+               - Methodology (step-by-step approach)
+               - Expected outcome and success criteria
+               - Required resources (compute, time, data)
+               - Risk level (Low/Medium/High) and mitigation strategies
+               
+            2. **Ablation Studies** (3-5 key components to investigate):
+               For each study:
+               - Component to ablate/modify
+               - Why this ablation is important
+               - How to measure the impact
+               - Alternative variations to test
+               
+            3. **Hyperparameter Investigations** (Critical parameters to tune):
+               - Parameter name and current value (if known)
+               - Suggested range to explore
+               - Search strategy (grid, random, Bayesian optimization)
+               - Expected impact on performance
+               
+            4. **Architecture Experiments** (Model modifications to test):
+               - Architectural changes to investigate
+               - Rationale for each modification
+               - Implementation complexity
+               - Baseline comparison strategy
+               
+            5. **Dataset & Evaluation Experiments**:
+               - Additional datasets to test generalization
+               - Data augmentation strategies
+               - New evaluation metrics to consider
+               - Cross-validation or test set strategies
+               
+            6. **Comparative Studies** (Benchmarking against other methods):
+               - Methods/baselines to compare against
+               - Fair comparison protocols
+               - Statistical significance testing approach
+               
+            7. **Implementation Roadmap** (Recommended execution order):
+               - Phase 1 (Quick wins, 1-2 weeks)
+               - Phase 2 (Medium complexity, 1-2 months)  
+               - Phase 3 (Advanced investigations, 2-6 months)
+               
+            8. **Success Metrics & KPIs**:
+               - Primary metrics to track
+               - Secondary metrics for deeper insights
+               - Improvement thresholds that indicate success
+               
+            9. **Resource Planning**:
+               - Computational requirements (GPU hours, memory)
+               - Personnel time estimates
+               - Software/tool requirements
+               
+            10. **Risk Assessment & Contingencies**:
+                - What could go wrong with each experiment
+                - Backup plans if primary approaches fail
+                - Early stopping criteria
+            
+            Format the response as a well-structured JSON object with detailed information for each section. Be specific, practical, and actionable. Each suggestion should be implementable by a researcher with the context provided.
+            """
+            
+            response = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[{"role": "user", "content": suggestions_prompt}],
+                    temperature=0.3
+                )
+            )
+            
+            # Parse the suggestions
+            suggestions_text = response.choices[0].message.content.strip()
+            print(f"📝 Generated comprehensive experiment plan ({len(suggestions_text)} characters)")
+            print(suggestions_text)
+            
+            # Try to extract JSON from response
+            suggestions_json = {}
+            try:
+                import json
+                # Look for JSON in the response
+                start = suggestions_text.find('{')
+                end = suggestions_text.rfind('}') + 1
+                if start != -1 and end != -1:
+                    suggestions_json = json.loads(suggestions_text[start:end])
+                    print(f"✅ Successfully parsed {len(suggestions_json)} suggestion categories")
+                else:
+                    # Try to create a structured response from the text
+                    suggestions_json = self._create_fallback_experiment_suggestions(original_prompt, findings_analysis)
+                    print("⚠️ Using fallback structured suggestions")
+                    
+            except Exception as e:
+                print(f"⚠️ JSON parsing failed: {e}, creating structured fallback")
+                suggestions_json = self._create_fallback_experiment_suggestions(original_prompt, findings_analysis)
+            
+            # Extract prioritized experiments for easy access
+            prioritized_experiments = suggestions_json.get("priority_experiments", [])
+            if isinstance(prioritized_experiments, dict):
+                # Convert dict to list if needed
+                prioritized_experiments = list(prioritized_experiments.values()) if prioritized_experiments else []
+            
+            # Create implementation roadmap
+            implementation_roadmap = {
+                "total_experiments": len(prioritized_experiments),
+                "estimated_timeline": suggestions_json.get("implementation_roadmap", {}).get("total_timeline", "3-6 months"),
+                "phases": suggestions_json.get("implementation_roadmap", {}),
+                "next_immediate_actions": prioritized_experiments[:2] if prioritized_experiments else []
+            }
+            
+            # Generate formatted summary
+            formatted_summary = self._format_experiment_suggestions_summary(suggestions_json, original_prompt)
+            
+            # Store results
+            return {
+                **state,
+                "experiment_suggestions": suggestions_json,
+                "prioritized_experiments": prioritized_experiments,
+                "implementation_roadmap": implementation_roadmap,
+                "final_outputs": {
+                    "formatted_summary": formatted_summary,
+                    "full_suggestions": suggestions_text,
+                    "structured_plan": json.dumps(suggestions_json, indent=2)
+                },
+                "current_step": "experiments_suggested"
+            }
+                
+        except Exception as e:
+            print(f"❌ Error in suggest_experiments_node: {str(e)}")
+            return {
+                **state,
+                "errors": state.get("errors", []) + [f"Experiment suggestion error: {str(e)}"],
+                "current_step": "suggestion_error"
+            }
+    
+    def _create_fallback_experiment_suggestions(self, original_prompt: str, findings_analysis: dict) -> dict:
+        """Create structured fallback experiment suggestions when JSON parsing fails."""
+        return {
+            "priority_experiments": [
+                {
+                    "name": "Baseline Comparison Study",
+                    "objective": "Establish performance baseline against standard methods",
+                    "hypothesis": "Current approach outperforms standard baselines",
+                    "methodology": ["Implement standard baseline", "Run comparative evaluation", "Statistical significance testing"],
+                    "success_criteria": "Statistically significant improvement over baseline",
+                    "resources": {"compute": "Medium", "time": "1-2 weeks"},
+                    "risk_level": "Low"
+                },
+                {
+                    "name": "Hyperparameter Optimization",
+                    "objective": "Find optimal hyperparameter configuration",
+                    "hypothesis": "Current hyperparameters are suboptimal",
+                    "methodology": ["Define search space", "Run systematic search", "Validate best configuration"],
+                    "success_criteria": "5-10% performance improvement",
+                    "resources": {"compute": "High", "time": "1-3 weeks"},
+                    "risk_level": "Low"
+                },
+                {
+                    "name": "Architecture Ablation Study",
+                    "objective": "Understand contribution of model components",
+                    "hypothesis": "Some components may be unnecessary or replaceable",
+                    "methodology": ["Remove/modify key components", "Test each variation", "Analyze performance impact"],
+                    "success_criteria": "Identify critical vs. non-critical components",
+                    "resources": {"compute": "Medium", "time": "2-4 weeks"},
+                    "risk_level": "Medium"
+                }
+            ],
+            "ablation_studies": [
+                {"component": "Model architecture components", "importance": "Understand model complexity vs. performance"},
+                {"component": "Data preprocessing steps", "importance": "Validate data pipeline necessity"},
+                {"component": "Training procedures", "importance": "Optimize training efficiency"}
+            ],
+            "hyperparameter_investigations": [
+                {"parameter": "Learning rate", "range": "1e-5 to 1e-2", "strategy": "Logarithmic search"},
+                {"parameter": "Batch size", "range": "16 to 256", "strategy": "Powers of 2"},
+                {"parameter": "Model depth/width", "range": "Architecture dependent", "strategy": "Systematic exploration"}
+            ],
+            "implementation_roadmap": {
+                "phase_1": {"duration": "2-4 weeks", "focus": "Baseline and hyperparameter studies"},
+                "phase_2": {"duration": "1-2 months", "focus": "Architecture modifications and ablations"},
+                "phase_3": {"duration": "2-3 months", "focus": "Advanced comparisons and novel approaches"}
+            },
+            "success_metrics": ["Primary performance metric improvement", "Statistical significance", "Computational efficiency"],
+            "resource_planning": {"gpu_hours": "100-500", "person_weeks": "4-12", "software": "Standard ML stack"}
+        }
+    
+    def _format_experiment_suggestions_summary(self, suggestions: dict, original_prompt: str) -> str:
+        """Format experiment suggestions into a readable summary."""
+        try:
+            summary_parts = []
+            summary_parts.append("# 🧪 COMPREHENSIVE EXPERIMENT PLAN")
+            summary_parts.append("=" * 60)
+            summary_parts.append(f"**Research Context:** {original_prompt[:100]}...")
+            summary_parts.append("")
+            
+            # Priority experiments
+            if "priority_experiments" in suggestions:
+                summary_parts.append("## 🎯 PRIORITY EXPERIMENTS")
+                priority_exps = suggestions["priority_experiments"]
+                if isinstance(priority_exps, list):
+                    for i, exp in enumerate(priority_exps[:5], 1):
+                        if isinstance(exp, dict):
+                            name = exp.get("name", f"Experiment {i}")
+                            objective = exp.get("objective", "Not specified")
+                            risk = exp.get("risk_level", "Unknown")
+                            summary_parts.append(f"{i}. **{name}**")
+                            summary_parts.append(f"   - Objective: {objective}")
+                            summary_parts.append(f"   - Risk Level: {risk}")
+                            summary_parts.append("")
+                elif isinstance(priority_exps, dict):
+                    for i, (key, exp) in enumerate(priority_exps.items(), 1):
+                        summary_parts.append(f"{i}. **{key}**")
+                        if isinstance(exp, dict):
+                            objective = exp.get("objective", "See detailed plan")
+                            summary_parts.append(f"   - {objective}")
+                        summary_parts.append("")
+            
+            # Implementation roadmap
+            if "implementation_roadmap" in suggestions:
+                summary_parts.append("## 📋 IMPLEMENTATION ROADMAP")
+                roadmap = suggestions["implementation_roadmap"]
+                if isinstance(roadmap, dict):
+                    for phase, details in roadmap.items():
+                        if isinstance(details, dict):
+                            duration = details.get("duration", "TBD")
+                            focus = details.get("focus", "See detailed plan")
+                            summary_parts.append(f"**{phase.title()}:** {duration}")
+                            summary_parts.append(f"   - Focus: {focus}")
+                        summary_parts.append("")
+            
+            # Resource planning
+            if "resource_planning" in suggestions:
+                summary_parts.append("## 💰 RESOURCE REQUIREMENTS")
+                resources = suggestions["resource_planning"]
+                if isinstance(resources, dict):
+                    for resource, requirement in resources.items():
+                        summary_parts.append(f"- **{resource.replace('_', ' ').title()}:** {requirement}")
+                summary_parts.append("")
+            
+            summary_parts.append("## 📊 SUCCESS METRICS")
+            success_metrics = suggestions.get("success_metrics", ["Performance improvement", "Statistical significance"])
+            if isinstance(success_metrics, list):
+                for metric in success_metrics:
+                    summary_parts.append(f"- {metric}")
+            summary_parts.append("")
+            
+            summary_parts.append("---")
+            summary_parts.append("💡 **Next Steps:** Start with Priority Experiment #1 and establish baseline metrics.")
+            summary_parts.append("📖 **Full Details:** See the complete structured plan for detailed methodologies and implementation guidance.")
+            
+            return "\n".join(summary_parts)
+            
+        except Exception as e:
+            return f"# Experiment Suggestions Generated\n\nFull details available in structured format.\n\nError creating summary: {str(e)}"
+        except Exception as e:
+            print(f"❌ Error in suggest_experiments_node: {str(e)}")
+            return {
+                **state,
+                "errors": state.get("errors", []) + [f"Suggestions error: {str(e)}"],
+                "current_step": "suggestions_error"
+            }
+    
 class MLResearcherTool:
     """🆕 Simplified wrapper for easy access to all workflows."""
     

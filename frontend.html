@@ -6,6 +6,7 @@
     <title>ML Researcher LangGraph - Frontend</title>
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
     <script src="https://unpkg.com/axios/dist/axios.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <style>
@@ -55,6 +56,51 @@
             font-family: 'Courier New', monospace;
             font-size: 0.875rem;
             overflow-x: auto;
+        }
+        
+        /* Custom prose styling for markdown content */
+        .prose h1, .prose h2, .prose h3, .prose h4 {
+            color: #374151;
+            font-weight: 600;
+            margin-top: 1.5rem;
+            margin-bottom: 0.5rem;
+        }
+        
+        .prose h3 {
+            font-size: 1.25rem;
+            border-bottom: 2px solid #e5e7eb;
+            padding-bottom: 0.5rem;
+        }
+        
+        .prose ul, .prose ol {
+            margin: 1rem 0;
+            padding-left: 1.5rem;
+        }
+        
+        .prose li {
+            margin: 0.5rem 0;
+        }
+        
+        .prose p {
+            margin: 1rem 0;
+            line-height: 1.6;
+        }
+        
+        .prose strong {
+            font-weight: 600;
+            color: #1f2937;
+        }
+        
+        .prose em {
+            font-style: italic;
+            color: #4b5563;
+        }
+        
+        .prose code {
+            background: #f3f4f6;
+            padding: 0.2rem 0.4rem;
+            border-radius: 0.25rem;
+            font-size: 0.875rem;
         }
 
         .status-indicator {
@@ -364,24 +410,30 @@
                     <!-- Model Suggestions Tab -->
                     <div v-if="activeTab === 'model_suggestions' && analysisResult.results.model_suggestions" class="space-y-4">
                         <div class="bg-green-50 rounded-lg p-4">
-                            <pre class="whitespace-pre-wrap text-sm text-gray-800">{{ formatContent(analysisResult.results.model_suggestions) }}</pre>
+                            <div 
+                                class="prose prose-sm max-w-none text-gray-800"
+                                v-html="renderMarkdown(analysisResult.results.model_suggestions)"
+                            ></div>
                         </div>
                     </div>
 
                     <!-- Research Plan Tab -->
                     <div v-if="activeTab === 'research_plan' && analysisResult.results.research_plan" class="space-y-4">
                         <div class="bg-purple-50 rounded-lg p-4">
-                            <pre class="whitespace-pre-wrap text-sm text-gray-800">{{ formatContent(analysisResult.results.research_plan) }}</pre>
+                            <div 
+                                class="prose prose-sm max-w-none text-gray-800"
+                                v-html="renderMarkdown(analysisResult.results.research_plan)"
+                            ></div>
                         </div>
                     </div>
 
                     <!-- Quality Assessment Tab -->
                     <div v-if="activeTab === 'quality' && analysisResult.results.critique_results" class="space-y-4">
                         <div class="bg-blue-50 rounded-lg p-4">
-                            <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4" v-if="analysisResult.results.critique_results.total_score">
+                            <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4" v-if="formatQualityData(analysisResult.results.critique_results).total_score">
                                 <div class="text-center">
                                     <div class="text-3xl font-bold text-blue-600">
-                                        {{ (analysisResult.results.critique_results.total_score || 0).toFixed(1) }}
+                                        {{ (formatQualityData(analysisResult.results.critique_results).total_score || 0).toFixed(1) }}
                                     </div>
                                     <div class="text-sm text-gray-600">Overall Score</div>
                                 </div>
@@ -936,8 +988,55 @@ To get actual AI-powered analysis, please:
                 },
 
                 formatContent(content) {
-                    if (typeof content === 'string') return content;
+                    if (typeof content === 'string') {
+                        // Check if the string is actually JSON that needs to be parsed
+                        try {
+                            // If it's a JSON string, parse and re-stringify it for better formatting
+                            if (content.trim().startsWith('{') || content.trim().startsWith('[')) {
+                                const parsed = JSON.parse(content);
+                                return JSON.stringify(parsed, null, 2);
+                            }
+                            return content;
+                        } catch (e) {
+                            // If parsing fails, return as is (it's probably regular text/markdown)
+                            return content;
+                        }
+                    }
                     return JSON.stringify(content, null, 2);
+                },
+
+                formatQualityData(data) {
+                    if (typeof data === 'string') {
+                        try {
+                            return JSON.parse(data);
+                        } catch (e) {
+                            return data;
+                        }
+                    }
+                    return data;
+                },
+
+                renderMarkdown(content) {
+                    if (typeof content === 'string') {
+                        // Check if content contains markdown formatting
+                        if (content.includes('#') || content.includes('**') || content.includes('*') || content.includes('-') || content.includes('1.')) {
+                            try {
+                                // Configure marked for better security and formatting
+                                marked.setOptions({
+                                    breaks: true,
+                                    gfm: true,
+                                    sanitize: false,
+                                    smartypants: true
+                                });
+                                return marked.parse(content);
+                            } catch (e) {
+                                console.warn('Markdown parsing failed:', e);
+                                return `<pre class="whitespace-pre-wrap">${content}</pre>`;
+                            }
+                        }
+                        return `<pre class="whitespace-pre-wrap">${content}</pre>`;
+                    }
+                    return `<pre class="whitespace-pre-wrap">${this.formatContent(content)}</pre>`;
                 },
 
                 exportResults(format) {

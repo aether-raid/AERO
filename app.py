@@ -14,6 +14,8 @@ Usage:
 import os
 import json
 import asyncio
+import logging
+import sys
 from datetime import datetime
 from typing import Dict, List, Any, Optional
 from fastapi import FastAPI, HTTPException, BackgroundTasks
@@ -22,6 +24,10 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("uvicorn.error")
 
 # Import our ML Researcher LangGraph system
 from ml_researcher_langgraph import MLResearcherLangGraph
@@ -70,9 +76,14 @@ async def startup_event():
     """Initialize the ML Researcher on startup."""
     global ml_researcher
     try:
+        logger.info("🚀 Starting ML Researcher LangGraph backend...")
+        logger.info("🔧 Initializing ML Researcher system...")
         ml_researcher = MLResearcherLangGraph()
-        print("✅ ML Researcher LangGraph initialized successfully")
+        logger.info("✅ ML Researcher LangGraph initialized successfully")
+        logger.info("🌐 Backend ready to receive requests on /analyze")
+        logger.info("📡 Frontend available at http://localhost:8000")
     except Exception as e:
+        logger.error(f"❌ Failed to initialize ML Researcher: {str(e)}")
         print(f"❌ Failed to initialize ML Researcher: {str(e)}")
         raise
 
@@ -98,12 +109,38 @@ async def analyze_research_task(request: ResearchRequest, background_tasks: Back
     
     start_time = datetime.now()
     
+    # Log incoming request
+    logger.info("=" * 60)
+    logger.info("🔥 NEW POST REQUEST TO /analyze")
+    logger.info(f"📝 Prompt: {request.prompt[:100]}{'...' if len(request.prompt) > 100 else ''}")
+    logger.info(f"🌊 Stream requested: {request.stream}")
+    logger.info(f"⏰ Request time: {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    logger.info("=" * 60)
+    
+    # Backup print statements in case logging doesn't work
+    print("=" * 60)
+    print("🔥 NEW POST REQUEST TO /analyze")
+    print(f"📝 Prompt: {request.prompt[:100]}{'...' if len(request.prompt) > 100 else ''}")
+    print(f"🌊 Stream requested: {request.stream}")
+    print(f"⏰ Request time: {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    print("=" * 60)
+    sys.stdout.flush()  # Force output to appear immediately
+    
     try:
+        logger.info("🤖 Starting ML Researcher analysis...")
+        
         # Run the analysis
         results = await ml_researcher.analyze_research_task(request.prompt)
         
         end_time = datetime.now()
         processing_time = (end_time - start_time).total_seconds()
+        
+        logger.info(f"✅ Analysis completed in {processing_time:.2f} seconds")
+        logger.info(f"🎯 Workflow type: {results.get('workflow_type', 'unknown')}")
+        
+        print(f"✅ Analysis completed in {processing_time:.2f} seconds")
+        print(f"🎯 Workflow type: {results.get('workflow_type', 'unknown')}")
+        sys.stdout.flush()
         
         # Create response
         response = AnalysisResponse(
@@ -126,9 +163,18 @@ async def analyze_research_task(request: ResearchRequest, background_tasks: Back
         # Save to file in background
         background_tasks.add_task(save_analysis_to_file, analysis_record)
         
+        logger.info("📤 Sending response back to frontend")
+        logger.info("=" * 60)
+        
+        print("📤 Sending response back to frontend")
+        print("=" * 60)
+        sys.stdout.flush()
+        
         return response
         
     except Exception as e:
+        logger.error(f"❌ Analysis failed: {str(e)}")
+        logger.error("=" * 60)
         raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
 
 @app.post("/analyze/stream")
@@ -137,20 +183,28 @@ async def analyze_research_task_stream(request: ResearchRequest):
     if not ml_researcher:
         raise HTTPException(status_code=500, detail="ML Researcher not initialized")
     
+    logger.info("🌊 NEW STREAMING REQUEST TO /analyze/stream")
+    logger.info(f"📝 Prompt: {request.prompt[:100]}{'...' if len(request.prompt) > 100 else ''}")
+    
     async def generate_stream():
         try:
             # This is a simplified streaming approach
             # In a full implementation, you'd modify the LangGraph to yield intermediate results
             yield f"data: {json.dumps({'type': 'status', 'message': 'Starting analysis...'})}\n\n"
             
+            logger.info("🤖 Starting streaming analysis...")
+            
             # Run the analysis
             results = await ml_researcher.analyze_research_task(request.prompt)
+            
+            logger.info("✅ Streaming analysis completed")
             
             # Stream the final results
             yield f"data: {json.dumps({'type': 'result', 'data': results})}\n\n"
             yield f"data: {json.dumps({'type': 'complete'})}\n\n"
             
         except Exception as e:
+            logger.error(f"❌ Streaming analysis failed: {str(e)}")
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
     
     return StreamingResponse(
@@ -219,6 +273,7 @@ def get_frontend_html() -> str:
         }
         .model-suggestion { @apply bg-green-100 text-green-800; }
         .research-planning { @apply bg-purple-100 text-purple-800; }
+        .experiment-suggestion { @apply bg-orange-100 text-orange-800; }
         .direct-llm { @apply bg-blue-100 text-blue-800; }
         .unknown { @apply bg-gray-100 text-gray-800; }
         
@@ -371,6 +426,17 @@ Examples:
                         </h3>
                         <div class="bg-purple-50 rounded-lg p-4">
                             <pre class="whitespace-pre-wrap text-sm">{{ formatResearchPlan(analysisResult.results.research_plan) }}</pre>
+                        </div>
+                    </div>
+
+                    <!-- Experiment Suggestions -->
+                    <div v-if="analysisResult.workflow_type === 'additional_experiment_suggestion' && analysisResult.results.experiment_suggestions">
+                        <h3 class="font-semibold text-gray-800 mb-3">
+                            <i class="fas fa-flask mr-2"></i>
+                            Experiment Suggestions
+                        </h3>
+                        <div class="bg-orange-50 rounded-lg p-4">
+                            <pre class="whitespace-pre-wrap text-sm">{{ formatExperimentSuggestions(analysisResult.results) }}</pre>
                         </div>
                     </div>
 
@@ -541,6 +607,7 @@ Examples:
                     const classes = {
                         'model_suggestion': 'model-suggestion',
                         'research_planning': 'research-planning',
+                        'additional_experiment_suggestion': 'experiment-suggestion',
                         'direct_llm': 'direct-llm'
                     };
                     return classes[workflowType] || 'unknown';
@@ -550,6 +617,7 @@ Examples:
                     const icons = {
                         'model_suggestion': 'fas fa-robot',
                         'research_planning': 'fas fa-clipboard-list',
+                        'additional_experiment_suggestion': 'fas fa-flask',
                         'direct_llm': 'fas fa-comments'
                     };
                     return icons[workflowType] || 'fas fa-question';
@@ -576,6 +644,94 @@ Examples:
                 formatCritiqueResults(critique) {
                     if (typeof critique === 'string') return critique;
                     return JSON.stringify(critique, null, 2);
+                },
+
+                formatExperimentSuggestions(results) {
+                    // Check if we have a formatted summary in final_outputs
+                    if (results.final_outputs && results.final_outputs.formatted_summary) {
+                        return results.final_outputs.formatted_summary;
+                    }
+                    
+                    // If no formatted summary, try to format the experiment_suggestions
+                    const suggestions = results.experiment_suggestions;
+                    if (!suggestions) {
+                        return "No experiment suggestions available.";
+                    }
+                    
+                    let formatted = "🧪 EXPERIMENT SUGGESTIONS\\n";
+                    formatted += "=" + "=".repeat(50) + "\\n\\n";
+                    
+                    // Priority Experiments
+                    if (suggestions.priority_experiments) {
+                        formatted += "🎯 PRIORITY EXPERIMENTS\\n";
+                        formatted += "-".repeat(25) + "\\n";
+                        
+                        const experiments = Array.isArray(suggestions.priority_experiments) 
+                            ? suggestions.priority_experiments 
+                            : Object.values(suggestions.priority_experiments);
+                            
+                        experiments.slice(0, 5).forEach((exp, i) => {
+                            if (typeof exp === 'object' && exp.name) {
+                                formatted += `${i + 1}. **${exp.name}**\\n`;
+                                if (exp.objective) formatted += `   Objective: ${exp.objective}\\n`;
+                                if (exp.risk_level) formatted += `   Risk Level: ${exp.risk_level}\\n`;
+                                if (exp.resources && exp.resources.time) formatted += `   Time Estimate: ${exp.resources.time}\\n`;
+                                formatted += "\\n";
+                            } else if (typeof exp === 'string') {
+                                formatted += `${i + 1}. ${exp}\\n`;
+                            }
+                        });
+                        formatted += "\\n";
+                    }
+                    
+                    // Implementation Roadmap
+                    if (suggestions.implementation_roadmap) {
+                        formatted += "📋 IMPLEMENTATION ROADMAP\\n";
+                        formatted += "-".repeat(30) + "\\n";
+                        
+                        const roadmap = suggestions.implementation_roadmap;
+                        Object.entries(roadmap).forEach(([phase, details]) => {
+                            if (typeof details === 'object' && details.duration) {
+                                formatted += `**${phase.replace('_', ' ').toUpperCase()}**: ${details.duration}\\n`;
+                                if (details.focus) formatted += `   Focus: ${details.focus}\\n`;
+                            } else if (typeof details === 'string') {
+                                formatted += `**${phase.replace('_', ' ').toUpperCase()}**: ${details}\\n`;
+                            }
+                        });
+                        formatted += "\\n";
+                    }
+                    
+                    // Success Metrics
+                    if (suggestions.success_metrics) {
+                        formatted += "📊 SUCCESS METRICS\\n";
+                        formatted += "-".repeat(20) + "\\n";
+                        
+                        const metrics = Array.isArray(suggestions.success_metrics) 
+                            ? suggestions.success_metrics 
+                            : Object.values(suggestions.success_metrics);
+                            
+                        metrics.forEach(metric => {
+                            formatted += `• ${metric}\\n`;
+                        });
+                        formatted += "\\n";
+                    }
+                    
+                    // Resource Planning
+                    if (suggestions.resource_planning) {
+                        formatted += "💰 RESOURCE REQUIREMENTS\\n";
+                        formatted += "-".repeat(25) + "\\n";
+                        
+                        Object.entries(suggestions.resource_planning).forEach(([resource, requirement]) => {
+                            formatted += `• **${resource.replace('_', ' ').replace(/\\b\\w/g, l => l.toUpperCase())}**: ${requirement}\\n`;
+                        });
+                        formatted += "\\n";
+                    }
+                    
+                    formatted += "---\\n";
+                    formatted += "💡 **Next Steps**: Review the priority experiments and start with the highest-impact, lowest-risk options.\\n";
+                    formatted += "📖 **Full Details**: Expand 'Raw JSON Results' below for complete implementation details.";
+                    
+                    return formatted;
                 }
             }
         }).mount('#app');

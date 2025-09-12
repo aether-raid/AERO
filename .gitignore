@@ -203,3 +203,6 @@ Faiss/
 # Generated Word reports
 suggestion_reports/
 *.docx
+
+# Downloaded papers and extracted content
+downloaded_papers/

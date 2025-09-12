@@ -92,7 +92,7 @@ Write-Host ""
 
 # Start the backend
 try {
-    python start_backend.py
+    python -u start_backend.py
 } catch {
     Write-Host ""
     Write-Host "❌ Failed to start backend" -ForegroundColor Red

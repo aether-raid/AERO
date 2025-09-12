@@ -49,7 +49,7 @@ echo.
 echo ===============================================
 echo.
 
-python start_backend.py
+python -u start_backend.py
 
 echo.
 echo 👋 Backend stopped

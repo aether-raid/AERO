@@ -1,8 +1,19 @@
 import requests
 import feedparser
 import PyPDF2
-from io import BytesIO
-import re
+from io import Byt        # Save PDF file if requested and metadata is available
+        pdf_path = None
+        if save_files and paper_title and paper_id:
+            try:
+                filename, pdf_dir, txt_dir = create_paper_directory(paper_title, paper_id)
+                pdf_filename = f"{filename}.pdf"
+                pdf_path = Path(pdf_dir) / pdf_filename
+                
+                with open(pdf_path, 'wb') as f:
+                    f.write(response.content)
+                print(f"💾 PDF saved to: {pdf_path}")
+            except Exception as e:
+                print(f"⚠️ Failed to save PDF: {e}")e
 from pathlib import Path
 
 def sanitize_filename(filename):
@@ -46,23 +57,22 @@ def create_paper_directory(paper_title, paper_id, base_dir="downloaded_papers"):
     
     return filename, str(pdf_dir), str(txt_dir)
 
-def extract_pdf_text(pdf_url, save_files=False, paper_title=None, paper_id=None):
-    """
-    Download and extract text from a PDF URL.
+def extract_pdf_text(pdf_url, paper_title=None, paper_id=None, save_files=True):
+    """Download PDF and extract text content. Optionally save PDF and text files.
     
     Args:
-        pdf_url (str): URL of the PDF to download
-        save_files (bool): Whether to save PDF and text files
-        paper_title (str): Title of the paper (for file naming)
-        paper_id (str): ID of the paper (for file naming)
-    
+        pdf_url: URL to the PDF
+        paper_title: Title of the paper (for file naming)
+        paper_id: ArXiv ID of the paper (for file naming)
+        save_files: Whether to save PDF and text files to disk
+        
     Returns:
         str: Extracted text content
     """
     try:
         print(f"Fetching PDF from: {pdf_url}")
         
-        # Download the PDF
+        # Get the PDF content
         response = requests.get(pdf_url)
         response.raise_for_status()
         
@@ -72,17 +82,18 @@ def extract_pdf_text(pdf_url, save_files=False, paper_title=None, paper_id=None)
         pdf_path = None
         if save_files and paper_title and paper_id:
             try:
-                filename, pdf_dir, txt_dir = create_paper_directory(paper_title, paper_id)
-                pdf_filename = f"{filename}.pdf"
+                paper_dir, pdf_dir, txt_dir = create_paper_directory(paper_title, paper_id)
+                safe_id = sanitize_filename(paper_id)
+                pdf_filename = f"{safe_id}.pdf"
                 pdf_path = Path(pdf_dir) / pdf_filename
                 
                 with open(pdf_path, 'wb') as f:
                     f.write(response.content)
-                print(f"💾 PDF saved to: {pdf_path}")
+                print(f"� PDF saved to: {pdf_path}")
             except Exception as e:
                 print(f"⚠️ Failed to save PDF: {e}")
         
-        print("📄 Extracting text content...")
+        print("�📄 Extracting text content...")
         
         # Create a BytesIO object from the PDF content
         pdf_file = BytesIO(response.content)
@@ -104,9 +115,10 @@ def extract_pdf_text(pdf_url, save_files=False, paper_title=None, paper_id=None)
         if save_files and paper_title and paper_id and text_content:
             try:
                 if 'txt_dir' not in locals():
-                    filename, pdf_dir, txt_dir = create_paper_directory(paper_title, paper_id)
+                    paper_dir, pdf_dir, txt_dir = create_paper_directory(paper_title, paper_id)
                 
-                txt_filename = f"{filename}.txt"
+                safe_id = sanitize_filename(paper_id)
+                txt_filename = f"{safe_id}.txt"
                 txt_path = Path(txt_dir) / txt_filename
                 
                 with open(txt_path, 'w', encoding='utf-8') as f:
@@ -117,58 +129,50 @@ def extract_pdf_text(pdf_url, save_files=False, paper_title=None, paper_id=None)
         
         return text_content
         
-    except requests.exceptions.RequestException as e:
-        print(f"❌ Error downloading PDF: {e}")
-        return None
     except Exception as e:
-        print(f"❌ Error processing PDF: {e}")
+        print(f"❌ Error extracting PDF text: {e}")
         return None
-
-def get_arxiv_paper_details(paper_id):
-    """Get paper details from ArXiv API."""
-    url = f"http://export.arxiv.org/api/query?id_list={paper_id}"
-    response = requests.get(url)
     
-    if response.status_code == 200:
-        feed = feedparser.parse(response.content)
-        if feed.entries:
-            entry = feed.entries[0]
-            return {
-                'title': entry.title,
-                'authors': ', '.join([author.name for author in entry.authors]),
-                'published': entry.published,
-                'summary': entry.summary
-            }
-    return None
-
-# Example usage
 if __name__ == "__main__":
-    # Example ArXiv paper ID
-    paper_id = "2111.00715v1"
-    
-    # Get paper details
-    details = get_arxiv_paper_details(paper_id)
-    if details:
-        print("="*60)
-        print("📋 PAPER DETAILS")
-        print("-"*60)
-        print(f"Title: {details['title']}")
-        print(f"Authors: {details['authors']}")
-        print(f"Published: {details['published']}")
-        print("="*60)
+    # Example: Get metadata for a paper by ID
+    arxiv_id = "2111.00715v1"
+    url = f"http://export.arxiv.org/api/query?id_list={arxiv_id}"
+
+    response = requests.get(url)
+    feed = feedparser.parse(response.text)
+    entry = feed.entries[0]
+
+    print("="*60)
+    print("📋 PAPER DETAILS")
+    print("-"*60)
+    print("Title:", entry.title)
+    print("Authors:", ', '.join([author.name for author in entry.authors]))
+    print("Published:", entry.published)
+    print("="*60)
+
+    # Find PDF link
+    pdf_link = None
+    for link in entry.links:
+        if link.type == 'application/pdf':
+            pdf_link = link.href
+            break
+
         
-        # Construct PDF URL
-        pdf_url = f"http://arxiv.org/pdf/{paper_id}"
+
+    if pdf_link:
+        print("PDF Link:", pdf_link)
         
-        # Extract text and save files
-        text_content = extract_pdf_text(pdf_url, save_files=True, 
-                                      paper_title=details['title'], 
-                                      paper_id=paper_id)
-        
-        if text_content:
-            print("="*60)
+        # Extract text from PDF and save files
+        pdf_text = extract_pdf_text(
+            pdf_link, 
+            paper_title=entry.title, 
+            paper_id=arxiv_id, 
+            save_files=True
+        )
+        if pdf_text:
+            print("\n" + "="*60)
             print("📄 PDF TEXT CONTENT (First 500 characters)")
             print("="*60)
-            print(text_content[:500] + "..." if len(text_content) > 500 else text_content)
+            print(pdf_text[:500] + "..." if len(pdf_text) > 500 else pdf_text)
     else:
-        print("❌ Could not fetch paper details")
+        print("❌ No PDF link found")
