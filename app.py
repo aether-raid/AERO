@@ -18,16 +18,56 @@ import logging
 import sys
 from datetime import datetime
 from typing import Dict, List, Any, Optional
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, UploadFile, File, Form
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import FileResponse
+from pathlib import Path
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
+import tempfile
+from io import BytesIO
+
+try:
+    import pandas as pd  # for CSV/XLSX
+except Exception:
+    pd = None
+try:
+    from docx import Document  # python-docx for DOCX
+except Exception:
+    Document = None
+
+# -------------------------
+# Helpers for file parsing
+# -------------------------
+def _chunk_text(text: str, size: int = 8000) -> List[str]:
+    if not text:
+        return []
+    return [text[i:i+size] for i in range(0, len(text), size)]
+
+def _docx_extract_full(doc_bytes: bytes) -> str:
+    """Extract full text from DOCX, including tables."""
+    if Document is None:
+        return "(python-docx not available)"
+    doc = Document(BytesIO(doc_bytes))
+    parts: List[str] = []
+    # Paragraphs
+    for p in doc.paragraphs:
+        if p.text is not None:
+            parts.append(p.text)
+    # Tables
+    for t in getattr(doc, 'tables', []):
+        for row in t.rows:
+            cells = [c.text.replace('\n', ' ').strip() for c in row.cells]
+            parts.append("\t".join(cells))
+    return "\n".join([p for p in parts if p and p.strip()])
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("uvicorn.error")
+# Suppress httpx verbose logging
+logging.getLogger('httpx').setLevel(logging.WARNING)
 
 # Import our ML Researcher LangGraph system
 from ml_researcher_langgraph import MLResearcherLangGraph
@@ -177,6 +217,80 @@ async def analyze_research_task(request: ResearchRequest, background_tasks: Back
         logger.error("=" * 60)
         raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
 
+
+@app.post("/analyze_with_files", response_model=AnalysisResponse)
+async def analyze_with_files(background_tasks: BackgroundTasks, prompt: str = Form(...), stream: bool = Form(False), files: List[UploadFile] = File(...)):
+    """Analyze a research task with attached files (DOC/DOCX/CSV/XLSX).
+
+    Parses supported files into text or tabular summaries and forwards to the LangGraph.
+    """
+    if not ml_researcher:
+        raise HTTPException(status_code=500, detail="ML Researcher not initialized")
+
+    start_time = datetime.now()
+    logger.info("📎 NEW POST TO /analyze_with_files (%d files)", len(files))
+
+    # Parse files (extract ALL content)
+    parsed_contexts: List[str] = []
+    for f in files:
+        try:
+            name = f.filename or "file"
+            content = await f.read()
+            lower = name.lower()
+            if lower.endswith((".csv",)) and pd is not None:
+                df = pd.read_csv(BytesIO(content))
+                csv_full = df.to_csv(index=False)
+                # No chunking: include full CSV content
+                parsed_contexts.append(f"[CSV:{name}]\n{csv_full}")
+            elif lower.endswith((".xlsx", ".xls")) and pd is not None:
+                xls = pd.ExcelFile(BytesIO(content))
+                for sheet in xls.sheet_names:
+                    df = xls.parse(sheet)
+                    csv_full = df.to_csv(index=False)
+                    # No chunking per sheet
+                    parsed_contexts.append(f"[XLSX:{name}:{sheet}]\n{csv_full}")
+            elif lower.endswith((".docx",)) and Document is not None:
+                text = _docx_extract_full(content)
+                # No chunking for DOCX
+                parsed_contexts.append(f"[DOCX:{name}]\n{text}")
+            elif lower.endswith((".doc",)):
+                parsed_contexts.append(f"[DOC:{name}] (binary; unsupported here)")
+            else:
+                parsed_contexts.append(f"[{name}] (unsupported type)")
+        except Exception as ex:
+            logger.warning("Failed to parse file %s: %s", f.filename, ex)
+            parsed_contexts.append(f"[{f.filename}] (parse error: {ex})")
+
+    # Combine prompt with parsed contexts
+    combined_prompt = prompt
+    if parsed_contexts:
+        combined_prompt += "\n\nAttached Contexts:\n" + "\n\n".join(parsed_contexts)
+
+    try:
+        results = await ml_researcher.analyze_research_task(combined_prompt)
+        end_time = datetime.now()
+        processing_time = (end_time - start_time).total_seconds()
+        response = AnalysisResponse(
+            workflow_type=results.get("workflow_type", "unknown"),
+            router_decision=results.get("router_decision", {}),
+            results=results,
+            timestamp=start_time.isoformat(),
+            processing_time=processing_time
+        )
+
+        record = {
+            "id": len(analysis_history) + 1,
+            "prompt": prompt,
+            "response": response.dict(),
+            "timestamp": start_time.isoformat(),
+            "files": [f.filename for f in files]
+        }
+        analysis_history.append(record)
+        background_tasks.add_task(save_analysis_to_file, record)
+        return response
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Analysis with files failed: {str(e)}")
+
 @app.post("/analyze/stream")
 async def analyze_research_task_stream(request: ResearchRequest):
     """Stream the analysis results in real-time."""
@@ -249,7 +363,19 @@ async def save_analysis_to_file(analysis_record: Dict[str, Any]):
         print(f"❌ Failed to save analysis to file: {str(e)}")
 
 def get_frontend_html() -> str:
-    """Return the frontend HTML content."""
+    """Return the frontend HTML content.
+
+    Prefer serving the standalone frontend.html file from the project root
+    so changes to the frontend are immediately reflected. If the file isn't
+    found, fall back to the embedded minimal UI below.
+    """
+    try:
+        project_root = Path(__file__).resolve().parent
+        frontend_path = project_root / "frontend.html"
+        if frontend_path.exists():
+            return frontend_path.read_text(encoding="utf-8")
+    except Exception as e:
+        logger.warning(f"Failed to load external frontend.html, using embedded UI: {e}")
     return """
 <!DOCTYPE html>
 <html lang="en">

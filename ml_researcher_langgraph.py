@@ -31,6 +31,8 @@ import logging
 # Use Uvicorn's error logger so messages are visible in the server console
 logger = logging.getLogger("uvicorn.error")
 logging.getLogger('tensorflow').setLevel(logging.ERROR)
+# Suppress httpx verbose logging
+logging.getLogger('httpx').setLevel(logging.WARNING)
 
 import sys
 import json

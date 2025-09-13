@@ -131,34 +131,14 @@
             white-space: pre-wrap;
         }
 
-        .workflow-diagram {
-            text-align: center;
-            margin: 2rem 0;
-        }
-
-        .workflow-step {
-            display: inline-block;
-            background: white;
-            border: 2px solid #e5e7eb;
-            border-radius: 0.5rem;
-            padding: 1rem;
-            margin: 0.5rem;
-            min-width: 120px;
-        }
-
-        .workflow-arrow {
-            display: inline-block;
-            margin: 0 1rem;
-            font-size: 1.5rem;
-            color: #6b7280;
-        }
+        /* removed workflow diagram styles */
     </style>
 </head>
 <body class="bg-gray-50">
     <div id="app">
         <!-- Header -->
         <header class="gradient-bg text-white shadow-lg">
-            <div class="container mx-auto px-4 py-6">
+            <div class="container mx-auto px-4 py-4">
                 <div class="flex items-center justify-between">
                     <div class="flex items-center space-x-3">
                         <i class="fas fa-microscope text-3xl"></i>
@@ -216,58 +196,12 @@
             </div>
         </div>
 
-        <!-- Workflow Overview -->
-        <section class="container mx-auto px-4 py-8">
-            <div class="card-shadow bg-white rounded-lg p-6 mb-8">
-                <h2 class="text-2xl font-bold text-gray-800 mb-4">
-                    <i class="fas fa-sitemap mr-2"></i>
-                    System Architecture Overview
-                </h2>
-                
-                <div class="workflow-diagram">
-                    <div class="workflow-step border-purple-300 bg-purple-50">
-                        <i class="fas fa-user text-purple-600 text-xl mb-2"></i>
-                        <div class="font-medium">User Input</div>
-                    </div>
-                    <span class="workflow-arrow">→</span>
-                    <div class="workflow-step border-blue-300 bg-blue-50">
-                        <i class="fas fa-route text-blue-600 text-xl mb-2"></i>
-                        <div class="font-medium">Router</div>
-                    </div>
-                    <span class="workflow-arrow">→</span>
-                    <div class="workflow-step border-green-300 bg-green-50">
-                        <i class="fas fa-robot text-green-600 text-xl mb-2"></i>
-                        <div class="font-medium">Model Suggestion</div>
-                    </div>
-                </div>
-
-                <div class="text-center">
-                    <span class="workflow-arrow">↓</span>
-                </div>
-
-                <div class="workflow-diagram">
-                    <div class="workflow-step border-purple-300 bg-purple-50">
-                        <i class="fas fa-clipboard-list text-purple-600 text-xl mb-2"></i>
-                        <div class="font-medium">Research Planning</div>
-                    </div>
-                    <span class="workflow-arrow">→</span>
-                    <div class="workflow-step border-yellow-300 bg-yellow-50">
-                        <i class="fas fa-star text-yellow-600 text-xl mb-2"></i>
-                        <div class="font-medium">AI Critique</div>
-                    </div>
-                    <span class="workflow-arrow">→</span>
-                    <div class="workflow-step border-green-300 bg-green-50">
-                        <i class="fas fa-check text-green-600 text-xl mb-2"></i>
-                        <div class="font-medium">Quality Output</div>
-                    </div>
-                </div>
-            </div>
-        </section>
+        
 
         <!-- Main Content -->
-        <main class="container mx-auto px-4">
+    <main class="container mx-auto px-4 mt-6">
             <!-- Input Section -->
-            <div class="card-shadow bg-white rounded-lg p-6 mb-8">
+            <div class="card-shadow bg-white rounded-lg p-6 mb-6">
                 <h2 class="text-2xl font-bold text-gray-800 mb-4">
                     <i class="fas fa-search mr-2"></i>
                     Research Task Analysis
@@ -300,6 +234,33 @@
                         class="w-full h-32 p-4 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent resize-none"
                         :disabled="isAnalyzing"
                     ></textarea>
+                    
+                    <!-- File Uploads -->
+                    <div class="bg-gray-50 border border-gray-200 rounded-lg p-3">
+                        <div class="flex items-center justify-between">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">Attach files (DOCX, CSV, XLSX)</label>
+                                <input 
+                                    type="file"
+                                    multiple
+                                    :disabled="isAnalyzing"
+                                    @change="onFilesSelected"
+                                    accept=".doc,.docx,.csv,.xlsx,.xls"
+                                    class="block w-full text-sm text-gray-600 file:mr-4 file:py-2 file:px-4 file:rounded file:border-0 file:text-sm file:font-semibold file:bg-purple-50 file:text-purple-700 hover:file:bg-purple-100"
+                                />
+                            </div>
+                            <button v-if="uploadedFiles.length"
+                                @click="clearFiles"
+                                class="h-9 px-3 text-sm text-gray-600 border border-gray-300 rounded hover:bg-gray-100"
+                                :disabled="isAnalyzing"
+                            >Clear files ({{ uploadedFiles.length }})</button>
+                        </div>
+                        <div v-if="uploadedFiles.length" class="mt-2 text-sm text-gray-700">
+                            <ul class="list-disc pl-5 space-y-1 max-h-28 overflow-y-auto">
+                                <li v-for="(f, i) in uploadedFiles" :key="i">{{ f.name }} <span class="text-gray-400">({{ (f.size/1024).toFixed(1) }} KB)</span></li>
+                            </ul>
+                        </div>
+                    </div>
                     
                     <div class="flex items-center justify-between">
                         <div class="flex items-center space-x-4">
@@ -336,7 +297,7 @@
             </div>
 
             <!-- Progress/Status Section -->
-            <div v-if="isAnalyzing || analysisLog.length > 0" class="card-shadow bg-white rounded-lg p-6 mb-8">
+            <div v-if="isAnalyzing || analysisLog.length > 0" class="card-shadow bg-white rounded-lg p-6 mb-6">
                 <h3 class="text-lg font-bold text-gray-800 mb-4">
                     <i class="fas fa-terminal mr-2"></i>
                     Analysis Progress
@@ -350,7 +311,7 @@
             </div>
 
             <!-- Results Section -->
-            <div v-if="analysisResult" class="result-animation card-shadow bg-white rounded-lg p-6 mb-8">
+            <div v-if="analysisResult" class="result-animation card-shadow bg-white rounded-lg p-6 mb-6">
                 <div class="flex items-center justify-between mb-6">
                     <h2 class="text-2xl font-bold text-gray-800">
                         <i class="fas fa-chart-bar mr-2"></i>
@@ -412,7 +373,7 @@
                         <div class="bg-green-50 rounded-lg p-4">
                             <div 
                                 class="prose prose-sm max-w-none text-gray-800"
-                                v-html="renderMarkdown(analysisResult.results.model_suggestions)"
+                                v-html="renderMarkdown(getModelSuggestionsContent(analysisResult.results.model_suggestions))"
                             ></div>
                         </div>
                     </div>
@@ -422,7 +383,7 @@
                         <div class="bg-purple-50 rounded-lg p-4">
                             <div 
                                 class="prose prose-sm max-w-none text-gray-800"
-                                v-html="renderMarkdown(analysisResult.results.research_plan)"
+                                v-html="renderMarkdown(extractContentFromNestedObject(analysisResult.results.research_plan))"
                             ></div>
                         </div>
                     </div>
@@ -438,14 +399,14 @@
                                     <div class="text-sm text-gray-600">Overall Score</div>
                                 </div>
                             </div>
-                            <pre class="whitespace-pre-wrap text-sm text-gray-800">{{ formatContent(analysisResult.results.critique_results) }}</pre>
+                            <div class="prose prose-sm max-w-none text-gray-800" v-html="renderMarkdown(formatQualityAssessment(analysisResult.results.critique_results))"></div>
                         </div>
                     </div>
 
                     <!-- ArXiv Papers Tab -->
                     <div v-if="activeTab === 'arxiv' && analysisResult.results.arxiv_results" class="space-y-4">
                         <div class="bg-orange-50 rounded-lg p-4">
-                            <pre class="whitespace-pre-wrap text-sm text-gray-800">{{ formatContent(analysisResult.results.arxiv_results) }}</pre>
+                            <div class="prose prose-sm max-w-none text-gray-800" v-html="renderMarkdown(formatArxivResults(analysisResult.results.arxiv_results))"></div>
                         </div>
                     </div>
 
@@ -484,7 +445,7 @@
             </div>
 
             <!-- Analysis History -->
-            <div class="card-shadow bg-white rounded-lg p-6 mb-8">
+            <div class="card-shadow bg-white rounded-lg p-6">
                 <div class="flex items-center justify-between mb-4">
                     <h2 class="text-2xl font-bold text-gray-800">
                         <i class="fas fa-history mr-2"></i>
@@ -574,6 +535,7 @@
                     isAnalyzing: false,
                     analysisResult: null,
                     analysisLog: [],
+                    uploadedFiles: [],
                     
                     // UI state
                     activeTab: 'model_suggestions',
@@ -669,7 +631,11 @@
 
                     try {
                         if (this.operationMode === 'api') {
-                            await this.analyzeWithAPI();
+                            if (this.uploadedFiles.length > 0) {
+                                await this.analyzeWithFiles();
+                            } else {
+                                await this.analyzeWithAPI();
+                            }
                         } else {
                             await this.analyzeWithDemo();
                         }
@@ -693,12 +659,49 @@
                     this.addLog('✅ Analysis completed successfully');
                     this.analysisResult = response.data;
                     
+                    // DEBUG: Log the actual structure being received
+                    console.log('=== DEBUG: Full response structure ===');
+                    console.log('response.data:', response.data);
+                    console.log('results:', response.data.results);
+                    if (response.data.results.model_suggestions) {
+                        console.log('model_suggestions type:', typeof response.data.results.model_suggestions);
+                        console.log('model_suggestions:', response.data.results.model_suggestions);
+                    }
+                    if (response.data.results.research_plan) {
+                        console.log('research_plan type:', typeof response.data.results.research_plan);
+                        console.log('research_plan:', response.data.results.research_plan);
+                    }
+                    console.log('=== END DEBUG ===');
+                    
                     // Set active tab to first available
                     if (this.availableTabs.length > 0) {
                         this.activeTab = this.availableTabs[0].key;
                     }
                     
                     // Save to local history
+                    this.saveToLocalHistory();
+                },
+
+                async analyzeWithFiles() {
+                    this.addLog('📎 Uploading files and analyzing...');
+                    const form = new FormData();
+                    form.append('prompt', this.prompt);
+                    form.append('stream', this.streamMode ? 'true' : 'false');
+                    this.uploadedFiles.forEach(f => form.append('files', f, f.name));
+
+                    const response = await axios.post(`${this.backendUrl}/analyze_with_files`, form, {
+                        headers: { 'Content-Type': 'multipart/form-data' },
+                        maxBodyLength: Infinity,
+                        maxContentLength: Infinity
+                    });
+
+                    this.addLog('✅ Analysis (with files) completed');
+                    this.analysisResult = response.data;
+
+                    // Set active tab
+                    if (this.availableTabs.length > 0) {
+                        this.activeTab = this.availableTabs[0].key;
+                    }
                     this.saveToLocalHistory();
                 },
 
@@ -897,6 +900,18 @@ To get actual AI-powered analysis, please:
                     this.prompt = '';
                     this.analysisResult = null;
                     this.analysisLog = [];
+                    this.uploadedFiles = [];
+                },
+
+                onFilesSelected(e) {
+                    const files = Array.from(e.target.files || []);
+                    // Basic client-side filter for allowed types
+                    const allowed = ['application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/msword', 'text/csv', 'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'];
+                    this.uploadedFiles = files.filter(f => allowed.includes(f.type) || /\.(docx?|csv|xlsx?)$/i.test(f.name));
+                },
+
+                clearFiles() {
+                    this.uploadedFiles = [];
                 },
 
                 saveToLocalHistory() {
@@ -1005,6 +1020,78 @@ To get actual AI-powered analysis, please:
                     return JSON.stringify(content, null, 2);
                 },
 
+                formatQualityAssessment(data) {
+                    // Accept string or object
+                    let obj = typeof data === 'string' ? (() => { try { return JSON.parse(data); } catch { return {}; } })() : (data || {});
+                    const cd = obj.critique_data || obj.critique || obj;
+                    const lines = [];
+                    if (obj.total_score != null) {
+                        lines.push(`# Quality Assessment\n`);
+                        lines.push(`**Overall Score:** ${obj.total_score.toFixed ? obj.total_score.toFixed(1) : obj.total_score}`);
+                    } else {
+                        lines.push(`# Quality Assessment\n`);
+                    }
+                    if (cd.overall_quality) lines.push(`**Quality:** ${cd.overall_quality}`);
+                    if (cd.confidence != null) lines.push(`**Confidence:** ${cd.confidence}`);
+
+                    const section = (title, arr) => {
+                        if (Array.isArray(arr) && arr.length) {
+                            lines.push(`\n## ${title}`);
+                            arr.forEach(item => lines.push(`- ${item}`));
+                        }
+                    };
+                    section('Strengths', cd.strengths);
+                    section('Weaknesses', cd.weaknesses);
+                    section('Missing Considerations', cd.missing_considerations || cd["missing_considerations"]);
+                    section('Factual Errors', cd.factual_errors);
+                    if (cd.evidence_utilization) {
+                        lines.push(`\n## Evidence Utilization`);
+                        lines.push(cd.evidence_utilization);
+                    }
+                    if (cd.paper_utilization_analysis) {
+                        lines.push(`\n## Paper Utilization`);
+                        lines.push(cd.paper_utilization_analysis);
+                    }
+                    if (cd.recommendation || obj.recommendation) {
+                        lines.push(`\n**Recommendation:** ${cd.recommendation || obj.recommendation}`);
+                    }
+                    return lines.join('\n');
+                },
+
+                formatArxivResults(data) {
+                    // Summarize papers: show title, id, published, and a short summary (first paragraph, trimmed)
+                    const obj = typeof data === 'string' ? (() => { try { return JSON.parse(data); } catch { return {}; } })() : (data || {});
+                    const papers = obj.papers || obj.results || [];
+                    const total = obj.papers_returned ?? obj.total_results ?? papers.length;
+                    const hdr = `# ArXiv Results\n` + (obj.search_query ? `**Query:** ${obj.search_query}\n` : '') + `**Papers Returned:** ${total}\n`;
+                    const lines = [hdr];
+                    if (!Array.isArray(papers) || papers.length === 0) {
+                        lines.push('\n_No papers to display._');
+                        return lines.join('\n');
+                    }
+                    papers.slice(0, 5).forEach((p, idx) => {
+                        const title = p.title || 'Untitled';
+                        const pid = p.id || p.arxiv_id || '';
+                        const pub = p.published || p.date || '';
+                        let summary = p.summary || p.abstract || '';
+                        if (typeof summary === 'string') {
+                            summary = summary.replace(/\n+/g, ' ').trim();
+                            if (summary.length > 400) summary = summary.slice(0, 400) + '…';
+                        } else {
+                            summary = '';
+                        }
+                        lines.push(`\n## ${idx + 1}. ${title}`);
+                        if (pid) lines.push(`- ID: ${pid}`);
+                        if (pub) lines.push(`- Published: ${pub}`);
+                        if (summary) lines.push(`- Summary: ${summary}`);
+                        if (p.pdf_url || p.link) lines.push(`- PDF: ${p.pdf_url || p.link}`);
+                    });
+                    if (papers.length > 5) {
+                        lines.push(`\n_+${papers.length - 5} more not shown…_`);
+                    }
+                    return lines.join('\n');
+                },
+
                 formatQualityData(data) {
                     if (typeof data === 'string') {
                         try {
@@ -1037,6 +1124,44 @@ To get actual AI-powered analysis, please:
                         return `<pre class="whitespace-pre-wrap">${content}</pre>`;
                     }
                     return `<pre class="whitespace-pre-wrap">${this.formatContent(content)}</pre>`;
+                },
+
+                getModelSuggestionsContent(modelSuggestions) {
+                    // Handle nested model suggestions structure from backend
+                    if (typeof modelSuggestions === 'object' && modelSuggestions !== null) {
+                        // If it's an object, try to extract the actual content
+                        if (modelSuggestions.model_suggestions) {
+                            return modelSuggestions.model_suggestions;
+                        }
+                        if (modelSuggestions.revised_suggestions) {
+                            return modelSuggestions.revised_suggestions;
+                        }
+                        // If it's just the object itself, stringify it
+                        return JSON.stringify(modelSuggestions, null, 2);
+                    }
+                    // If it's already a string, return as is
+                    return modelSuggestions || 'No model suggestions available';
+                },
+
+                extractContentFromNestedObject(data, contentKeys = ['research_plan', 'model_suggestions', 'content', 'text', 'response']) {
+                    // General method to extract actual content from nested backend objects
+                    if (typeof data === 'string') {
+                        return data;
+                    }
+                    
+                    if (typeof data === 'object' && data !== null) {
+                        // Try each potential content key
+                        for (const key of contentKeys) {
+                            if (data[key] && typeof data[key] === 'string') {
+                                return data[key];
+                            }
+                        }
+                        
+                        // If no content key found, stringify the object nicely
+                        return JSON.stringify(data, null, 2);
+                    }
+                    
+                    return data || 'No content available';
                 },
 
                 exportResults(format) {
