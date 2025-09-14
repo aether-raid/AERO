@@ -54,6 +54,9 @@ faiss-cpu>=1.7.0
 tensorflow>=2.20.0
 tf-keras>=2.20.0
 
+# Sakana AI's TreeQuest for tree-based experimentation
+treequest==0.1.2
+
 # ============================================================================
 # WEB FRAMEWORK AND API
 # ============================================================================
