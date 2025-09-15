@@ -3390,7 +3390,25 @@ Return only a JSON object with this exact structure. For 'major_issues' and 'sug
                 
                 critique_data = json.loads(critique_response)
                 
-                # Store critique results
+                # Store critique in history with iteration info
+                iteration_count = state.get("refinement_count", 0)
+                historical_entry = {
+                    "iteration": iteration_count,
+                    "critique_data": critique_data,
+                    "timestamp": f"iteration_{iteration_count}",
+                    "major_issues": critique_data.get("major_issues", []),
+                    "suggestions": critique_data.get("suggestions", []),
+                    "strengths": critique_data.get("strengths", []),
+                    "overall_score": critique_data.get("overall_score", 0.0)
+                }
+                
+                # Initialize critique_history if it doesn't exist
+                if "critique_history" not in state:
+                    state["critique_history"] = []
+                
+                state["critique_history"].append(historical_entry)
+                
+                # Store critique results (current format for compatibility)
                 state["critique_results"] = critique_data
                 
                 # Track score history
@@ -3486,42 +3504,62 @@ Return only a JSON object with this exact structure. For 'major_issues' and 'sug
                 state["previous_plans"] = []
             state["previous_plans"].append(current_plan)
             
-            # Get critique feedback
+            # Get critique feedback and all historical critiques
             critique = state.get("critique_results", {})
+            critique_history = state.get("critique_history", [])
             selected_problem = state.get("selected_problem", {})
             original_plan = current_plan.get("research_plan", "")
             
-            # Create refinement prompt
-            refinement_content = f"""
-You are refining a research plan based on expert critique feedback. Your goal is to address the specific issues while maintaining the overall structure and strengths.
-
-**ORIGINAL RESEARCH PROBLEM:**
-{selected_problem.get('statement', 'N/A')}
-
-**ORIGINAL RESEARCH PLAN:**
-{original_plan}
-
-**CRITIQUE FEEDBACK:**
+            # Build cumulative critique feedback from all iterations
+            critique_feedback_section = ""
+            if critique_history:
+                critique_feedback_section = "\n**COMPLETE CRITIQUE HISTORY (All Iterations):**\n"
+                for i, hist_entry in enumerate(critique_history, 1):
+                    crit_data = hist_entry.get("critique_data", {})
+                    critique_feedback_section += f"""
+**Iteration {i} Critique:**
+- Score: {crit_data.get('overall_score', 0):.1f}/10
+- Major Issues: {crit_data.get('major_issues', [])}
+- Suggestions: {crit_data.get('suggestions', [])}
+- Strengths: {crit_data.get('strengths', [])}
+"""
+            else:
+                # Fallback to current critique if no history
+                critique_feedback_section = f"""
+**CURRENT CRITIQUE FEEDBACK:**
 - Overall Score: {critique.get('overall_score', 0)}/10
 - Major Issues: {critique.get('major_issues', [])}
 - Specific Suggestions: {critique.get('suggestions', [])}
 - Identified Strengths: {critique.get('strengths', [])}
+"""
+
+            # Create refinement prompt with only most recent plan + all critique history
+            refinement_content = f"""
+You are refining a research plan based on comprehensive critique feedback from multiple iterations. Your goal is to address the cumulative issues while maintaining the overall structure and identified strengths.
+
+**ORIGINAL RESEARCH PROBLEM:**
+{selected_problem.get('statement', 'N/A')}
+
+**MOST RECENT RESEARCH PLAN (to refine):**
+{original_plan}
+{critique_feedback_section}
 
 **REFINEMENT INSTRUCTIONS:**
 
-1. **Address Major Issues:** Fix each issue mentioned in the critique
-2. **Implement Suggestions:** Incorporate the specific improvement recommendations
-3. **Preserve Strengths:** Keep and build upon identified strong points
-4. **Maintain Structure:** Keep the overall plan organization and phase structure
-5. **Focus on Critiqued Dimensions:** Pay special attention to low-scoring areas
+1. **Address ALL Historical Issues:** Review and fix issues from all critique iterations
+2. **Learn from Pattern:** Look for recurring issues across iterations and address root causes  
+3. **Implement All Suggestions:** Incorporate improvement recommendations from all critiques
+4. **Preserve All Strengths:** Keep and build upon strengths identified across iterations
+5. **Maintain Structure:** Keep the overall plan organization and phase structure
+6. **Show Iteration Learning:** Demonstrate understanding of feedback evolution
 
-**SPECIFIC AREAS TO IMPROVE:**
-{chr.join([f"- {issue}" for issue in critique.get('major_issues', [])[:3]])}
+**KEY AREAS NEEDING ATTENTION:**
+{chr(10).join([f"- {issue}" for hist in critique_history for issue in hist.get('critique_data', {}).get('major_issues', [])[:2]][:5])}
 
-**IMPLEMENTATION GUIDANCE:**
-{chr.join([f"- {suggestion}" for suggestion in critique.get('suggestions', [])[:3]])}
+**CUMULATIVE IMPROVEMENT GUIDANCE:**
+{chr(10).join([f"- {suggestion}" for hist in critique_history for suggestion in hist.get('critique_data', {}).get('suggestions', [])[:2]][:5])}
 
-Generate an improved version of the research plan that directly addresses the critique while maintaining the validated problem focus and web search integration. Keep the same overall structure but enhance the content based on the feedback.
+Generate an improved version of the research plan that comprehensively addresses ALL critique feedback across iterations while maintaining validated strengths. Show clear improvement over previous versions.
 
 Provide the complete refined research plan:
 """
@@ -3543,18 +3581,31 @@ Provide the complete refined research plan:
                 "selected_problem": selected_problem,
                 "refinement_iteration": state["refinement_count"],
                 "previous_score": critique.get("overall_score", 0),
-                "addressed_issues": critique.get("major_issues", [])
+                "addressed_issues": critique.get("major_issues", []),
+                "total_critiques_incorporated": len(critique_history),
+                "cumulative_issues_addressed": sum(len(hist.get('critique_data', {}).get('major_issues', [])) for hist in critique_history),
+                "cumulative_suggestions_implemented": sum(len(hist.get('critique_data', {}).get('suggestions', [])) for hist in critique_history)
             }
             
             print(f"✅ Research plan refined (iteration {state['refinement_count']})")
             
-            # Show specific progress on issues
-            previous_issues = critique.get("major_issues", [])
-            print(f"🎯 Targeted {len(previous_issues)} major issues:")
-            for i, issue in enumerate(previous_issues[:3], 1):
-                print(f"   {i}. {issue[:80]}...")
+            # Show comprehensive feedback incorporation
+            total_critiques = len(critique_history)
+            total_issues = sum(len(hist.get('critique_data', {}).get('major_issues', [])) for hist in critique_history)
+            total_suggestions = sum(len(hist.get('critique_data', {}).get('suggestions', [])) for hist in critique_history)
             
-            print(f"💡 Implemented {len(critique.get('suggestions', []))} suggestions")
+            print(f"🎯 Incorporated feedback from {total_critiques} critique iterations")
+            print(f"🔧 Addressed {total_issues} cumulative major issues")
+            print(f"💡 Implemented {total_suggestions} total suggestions")
+            
+            # Show most recent issues addressed
+            if critique_history:
+                latest_critique = critique_history[-1].get('critique_data', {})
+                latest_issues = latest_critique.get('major_issues', [])
+                print(f"� Latest iteration targeted {len(latest_issues)} issues:")
+                for i, issue in enumerate(latest_issues[:3], 1):
+                    print(f"   {i}. {issue[:80]}...")
+            
             print(f"📈 Previous score: {critique.get('overall_score', 0):.1f}/10")
             print("🔄 Re-evaluating refined plan...")
             
