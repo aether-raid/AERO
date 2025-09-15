@@ -434,7 +434,7 @@ Paper content:
         # Sort by relevance score (highest first) and return top 5
         ranked_papers = sorted(scored_papers, key=lambda x: x.get('relevance_score', 0), reverse=True)
         
-        print(f"\n✅ Papers ranked by cosine similarity to: '{original_query}'")
+        print(f"\n Papers ranked by cosine similarity to: '{original_query}'")
         return ranked_papers[:5]  # Return only top 5
 
     async def chunk_and_embed(self, paper: Dict, faiss_db=None, embedding_dim: int = 768) -> List[Dict]:

@@ -169,8 +169,8 @@ async def analyze_research_task(request: ResearchRequest, background_tasks: Back
     try:
         logger.info("🤖 Starting ML Researcher analysis...")
         
-        # Run the analysis
-        results = await ml_researcher.analyze_research_task(request.prompt)
+        # Run the analysis with no uploaded data
+        results = await ml_researcher.analyze_research_task(request.prompt, [])
         
         end_time = datetime.now()
         processing_time = (end_time - start_time).total_seconds()
@@ -261,13 +261,12 @@ async def analyze_with_files(background_tasks: BackgroundTasks, prompt: str = Fo
             logger.warning("Failed to parse file %s: %s", f.filename, ex)
             parsed_contexts.append(f"[{f.filename}] (parse error: {ex})")
 
-    # Combine prompt with parsed contexts
-    combined_prompt = prompt
-    if parsed_contexts:
-        combined_prompt += "\n\nAttached Contexts:\n" + "\n\n".join(parsed_contexts)
+    # Keep query and uploaded data separate
+    user_query = prompt
+    uploaded_data = parsed_contexts if parsed_contexts else []
 
     try:
-        results = await ml_researcher.analyze_research_task(combined_prompt)
+        results = await ml_researcher.analyze_research_task(user_query, uploaded_data)
         end_time = datetime.now()
         processing_time = (end_time - start_time).total_seconds()
         response = AnalysisResponse(
@@ -308,8 +307,8 @@ async def analyze_research_task_stream(request: ResearchRequest):
             
             logger.info("🤖 Starting streaming analysis...")
             
-            # Run the analysis
-            results = await ml_researcher.analyze_research_task(request.prompt)
+            # Run the analysis with no uploaded data
+            results = await ml_researcher.analyze_research_task(request.prompt, [])
             
             logger.info("✅ Streaming analysis completed")
             

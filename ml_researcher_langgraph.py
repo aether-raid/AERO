@@ -135,7 +135,8 @@ ML_RESEARCH_CATEGORIES = {
 class BaseState(TypedDict):
     """Base state for all workflows."""
     messages: Annotated[List[BaseMessage], add_messages]
-    original_prompt: str
+    original_prompt: str  # Pure user query without uploaded data
+    uploaded_data: List[str]  # Uploaded file contents as separate field
     current_step: str
     errors: List[str]
     workflow_type: str  # "model_suggestion" or "research_planning"
@@ -210,6 +211,13 @@ class ExperimentSuggestionState(BaseState):
     # Processing state
     analysis_completed: bool                  # Whether initial analysis is done
     experiment_categories: List[str]          # Types of experiments identified
+    experiment_papers: List[Dict[str, Any]]   # Papers retrieved for experimental guidance
+    experiment_search_query: str              # Query used for paper search
+    experiment_search_iteration: int          # Current search iteration count
+    experiment_validation_results: Dict[str, Any]  # Results from paper validation
+    experiment_paper_validation_decision: str # Decision from validation (continue/search_new/search_backup)
+    research_direction: Dict[str, Any]        # Research direction analysis
+    validated_experiment_papers: List[Dict[str, Any]]  # Validated papers for suggestions
     
     # Output
     experiment_suggestions: Dict[str, Any]    # Comprehensive experiment suggestions
@@ -220,7 +228,8 @@ class ExperimentSuggestionState(BaseState):
 class RouterState(TypedDict):
     """State object for the router agent."""
     messages: Annotated[List[BaseMessage], add_messages]
-    original_prompt: str
+    original_prompt: str  # Pure user query
+    uploaded_data: List[str]  # Uploaded file contents
     routing_decision: str  # "model_suggestion", "research_planning", or "paper_writing"
     routing_confidence: float
     routing_reasoning: str
@@ -277,6 +286,120 @@ class MLResearcherLangGraph:
         except Exception:
             pass
         return None
+    
+    def _combine_query_and_data(self, user_query: str, uploaded_data: List[str]) -> str:
+        """Combine user query with uploaded data for LLM prompts when needed."""
+        if not uploaded_data:
+            return user_query
+        
+        combined = user_query
+        combined += "\n\nAttached Contexts:\n" + "\n\n".join(uploaded_data)
+        return combined
+    
+    def _get_query_for_ranking(self, user_query: str, uploaded_data: List[str]) -> str:
+        """Get the appropriate query for paper ranking - uses pure user query for better relevance."""
+        return user_query  # Always use pure user query for ranking
+    
+    def _create_ranking_context_from_analysis(self, state: ModelSuggestionState) -> str:
+        """Create enhanced ranking context using extracted analysis information."""
+        # Start with the original user query
+        context_parts = [f"User Query: {state['original_prompt']}"]
+        
+        # Add detected categories if available
+        categories = state.get("detected_categories", [])
+        if categories:
+            relevant_categories = [cat for cat in categories if cat.get("confidence", 0) > 0.5]
+            if relevant_categories:
+                context_parts.append("Relevant Research Categories:")
+                for cat in relevant_categories[:3]:  # Top 3 categories
+                    context_parts.append(f"- {cat['name']} (confidence: {cat['confidence']:.2f})")
+        
+        # Add structured analysis if available
+        detailed_analysis = state.get("detailed_analysis", {})
+        if detailed_analysis and "llm_analysis" in detailed_analysis:
+            llm_analysis = detailed_analysis["llm_analysis"]
+            if llm_analysis and isinstance(llm_analysis, str):
+                # Extract key components from the LLM analysis
+                analysis_lines = llm_analysis.split('\n')
+                relevant_lines = []
+                
+                # Look for specific sections that would help with paper ranking
+                for line in analysis_lines:
+                    line = line.strip()
+                    if any(keyword in line.lower() for keyword in [
+                        'domain:', 'task type:', 'approach:', 'methodology:', 'technique:',
+                        'model type:', 'application:', 'requirements:', 'constraints:'
+                    ]):
+                        relevant_lines.append(line)
+                
+                if relevant_lines:
+                    context_parts.append("Key Analysis Points:")
+                    context_parts.extend(relevant_lines[:5])  # Top 5 relevant lines
+        
+        # Combine all parts
+        ranking_context = '\n'.join(context_parts)
+        
+        # Limit total length to avoid token issues
+        if len(ranking_context) > 1500:
+            ranking_context = ranking_context[:1500] + "..."
+        
+        return ranking_context
+    
+    def _create_experiment_ranking_context_from_analysis(self, state: ExperimentSuggestionState) -> str:
+        """Create enhanced ranking context for experiment suggestions using extracted analysis."""
+        # Start with the original user query
+        context_parts = [f"User Query: {state['original_prompt']}"]
+        
+        # Add findings analysis if available
+        findings_analysis = state.get("findings_analysis", {})
+        if findings_analysis:
+            # Add domain information
+            domain_analysis = findings_analysis.get("domain_analysis", {})
+            if domain_analysis:
+                context_parts.append("Research Domain Context:")
+                if domain_analysis.get("primary_domain"):
+                    context_parts.append(f"- Primary Domain: {domain_analysis['primary_domain']}")
+                if domain_analysis.get("task_type"):
+                    context_parts.append(f"- Task Type: {domain_analysis['task_type']}")
+                if domain_analysis.get("application_area"):
+                    context_parts.append(f"- Application: {domain_analysis['application_area']}")
+                if domain_analysis.get("data_type"):
+                    context_parts.append(f"- Data Type: {domain_analysis['data_type']}")
+            
+            # Add research opportunities 
+            opportunities = findings_analysis.get("research_opportunities", [])
+            if opportunities:
+                context_parts.append("Research Focus Areas:")
+                for opp in opportunities[:3]:  # Top 3 opportunities
+                    context_parts.append(f"- {opp}")
+            
+            # Add current state information
+            current_state = findings_analysis.get("current_state", {})
+            if current_state and current_state.get("findings"):
+                context_parts.append(f"Current Research State: {current_state['findings']}")
+        
+        # Add research direction if available
+        research_direction = state.get("research_direction", {})
+        if research_direction:
+            selected_direction = research_direction.get("selected_direction", {})
+            if selected_direction.get("direction"):
+                context_parts.append(f"Research Direction: {selected_direction['direction']}")
+            
+            # Add key questions
+            key_questions = selected_direction.get("key_questions", [])
+            if key_questions:
+                context_parts.append("Key Research Questions:")
+                for question in key_questions[:2]:  # Top 2 questions
+                    context_parts.append(f"- {question}")
+        
+        # Combine all parts
+        ranking_context = '\n'.join(context_parts)
+        
+        # Limit total length to avoid token issues
+        if len(ranking_context) > 1500:
+            ranking_context = ranking_context[:1500] + "..."
+        
+        return ranking_context
     
     def _build_router_graph(self) -> StateGraph:
         """Build the router workflow to decide which main workflow to use."""
@@ -459,10 +582,13 @@ class MLResearcherLangGraph:
         print("\n🤖 Router: Analyzing user request to determine workflow...")
         
         try:
+            # Combine user query with uploaded data for routing decision
+            full_context = self._combine_query_and_data(state["original_prompt"], state["uploaded_data"])
+            
             content = f"""
                 You are an expert AI system router. Analyze the user's request and determine which workflow is most appropriate.
 
-                User Request: "{state["original_prompt"]}"
+                User Request: "{full_context}"
 
                 Available Workflows:
                 1. **MODEL_SUGGESTION**: For requests asking about:
@@ -1126,19 +1252,16 @@ class MLResearcherLangGraph:
                 # Initial search: get 100 papers
                 max_results = 200
                 start_offset = 0
-                print(f"🔍 INITIAL SEARCH - arXiv: {search_query}")
             elif is_backup_search:
                 # Backup search: get additional papers with offset to avoid duplicates
                 # Use offset based on how many papers we already have
                 existing_count = len(existing_papers) if existing_papers else 0
                 start_offset = max(100, existing_count)  # Start after existing papers
                 max_results = 50  # Get additional papers
-                print(f"🔍 BACKUP SEARCH - arXiv: {search_query} (offset: {start_offset}, additional: {max_results})")
             else:
                 # New search with different query: get 100 fresh papers
                 max_results = 100  
                 start_offset = 0
-                print(f"🔍 NEW SEARCH #{search_iteration + 1} - arXiv: {search_query}")
             
             print("=" * 80)
             
@@ -1149,7 +1272,6 @@ class MLResearcherLangGraph:
             # Build the URL with proper offset
             url = f"http://export.arxiv.org/api/query?search_query={formatted_query}&start={start_offset}&max_results={max_results}"
             print(f"🌐 Full URL: {url}")
-            print(f"📊 Search Parameters: max_results={max_results}, start_offset={start_offset}")
             
             with libreq.urlopen(url) as response:
                 xml_data = response.read()
@@ -1181,13 +1303,10 @@ class MLResearcherLangGraph:
                 
                 # If no entries found with namespace, try alternative approach
                 if len(entries) == 0 and len(entries_no_ns) > 0:
-                    print("⚠️ Using entries found without namespace")
                     entries = entries_no_ns
                 
                 # If we got very few results compared to total, try a simpler query
                 if len(entries) < 5 and total_results > 1000:
-                    print(f"⚠️ Only found {len(entries)} entries despite {total_results} total results")
-                    print("🔄 Attempting fallback with simpler query...")
                     
                     # Try a simpler query by removing the most specific terms
                     query_parts = search_query.split('/')
@@ -1228,9 +1347,14 @@ class MLResearcherLangGraph:
                     papers.append(paper_info)
                     print(f"✅ Basic info extracted for paper #{i}: {paper_info['title'][:50]}...")
                 
-                # Stage 2: Rank papers by relevance using title + abstract only
-                print(f"\n🎯 Stage 2: Ranking papers by relevance (based on title + abstract)...")
-                papers = await self.arxiv_processor.rank_papers_by_relevance(papers, original_prompt)
+                # Stage 2: Rank papers by relevance using enhanced analysis context
+                print(f"\n🎯 Stage 2: Ranking papers by relevance (using extracted analysis)...")
+                
+                # Create enhanced ranking context from the detailed analysis
+                ranking_context = self._create_ranking_context_from_analysis(state)
+                print(f"📊 Using enhanced context for ranking: {ranking_context[:100]}...")
+                
+                papers = await self.arxiv_processor.rank_papers_by_relevance(papers, ranking_context)
                 
                 # Stage 3: Download full content for top 5 papers only
                 top_papers = papers  # Get top 5 papers
@@ -3945,9 +4069,19 @@ Provide the complete refined research plan:
         
         return cleaned
 
-    async def analyze_research_task(self, prompt: str) -> Dict[str, Any]:
-        """Main method to analyze a research task using multi-workflow LangGraph architecture."""
-        print(f"🔍 Analyzing research task: {prompt}")
+    async def analyze_research_task(self, user_query: str, uploaded_data: List[str] = None) -> Dict[str, Any]:
+        """Main method to analyze a research task using multi-workflow LangGraph architecture.
+        
+        Args:
+            user_query: The user's actual question/prompt
+            uploaded_data: List of parsed file contents (optional)
+        """
+        if uploaded_data is None:
+            uploaded_data = []
+            
+        print(f"🔍 Analyzing research task: {user_query}")
+        if uploaded_data:
+            print(f"📎 With {len(uploaded_data)} uploaded file(s)")
         print("=" * 50)
         
         # Step 1: Route the request to determine which workflow to use
@@ -3955,8 +4089,9 @@ Provide the complete refined research plan:
         print("=" * 40)
         
         router_state: RouterState = {
-            "messages": [HumanMessage(content=prompt)],
-            "original_prompt": prompt,
+            "messages": [HumanMessage(content=user_query)],
+            "original_prompt": user_query,  # Keep pure user query
+            "uploaded_data": uploaded_data,  # Keep uploaded data separate
             "routing_decision": "",
             "routing_confidence": 0.0,
             "routing_reasoning": "",
@@ -3975,8 +4110,9 @@ Provide the complete refined research plan:
             
             # Initialize model suggestion state
             model_state: ModelSuggestionState = {
-                "messages": [HumanMessage(content=prompt)],
-                "original_prompt": prompt,
+                "messages": [HumanMessage(content=user_query)],
+                "original_prompt": user_query,
+                "uploaded_data": uploaded_data,
                 "detected_categories": [],
                 "detailed_analysis": {},
                 "arxiv_search_query": "",
@@ -4040,8 +4176,9 @@ Provide the complete refined research plan:
             
             # Initialize research planning state
             research_state: ResearchPlanningState = {
-                "messages": [HumanMessage(content=prompt)],
-                "original_prompt": prompt,
+                "messages": [HumanMessage(content=user_query)],
+                "original_prompt": user_query,
+                "uploaded_data": uploaded_data,
                 "generated_problems": [],
                 "validated_problems": [],
                 "current_problem": {},
@@ -4085,11 +4222,12 @@ Provide the complete refined research plan:
             
             # Initialize paper writing state
             paper_state: PaperWritingState = {
-                "messages": [HumanMessage(content=prompt)],
-                "original_prompt": prompt,
-                "experimental_results": {},  # Could be extracted from prompt
-                "research_context": prompt,
-                "target_venue": "general",  # Could be extracted from prompt
+                "messages": [HumanMessage(content=user_query)],
+                "original_prompt": user_query,
+                "uploaded_data": uploaded_data,
+                "experimental_results": {},  # Could be extracted from uploaded data
+                "research_context": user_query,
+                "target_venue": "general",  # Could be extracted from user_query
                 "research_analysis": {},
                 "paper_structure": {},
                 "template_config": {},
@@ -4138,9 +4276,10 @@ Provide the complete refined research plan:
             
             # Initialize experiment suggestion state
             experiment_state: ExperimentSuggestionState = {
-                "messages": [HumanMessage(content=prompt)],
-                "original_prompt": prompt,
-                "experimental_results": {},  # Could be extracted from prompt
+                "messages": [HumanMessage(content=user_query)],
+                "original_prompt": user_query,
+                "uploaded_data": uploaded_data,
+                "experimental_results": {},  # Could be extracted from uploaded data
                 "findings_analysis": {},
                 "experiment_suggestions": {},
                 "current_step": "",
@@ -4180,7 +4319,8 @@ Provide the complete refined research plan:
                     "confidence": final_router_state["routing_confidence"],
                     "reasoning": final_router_state["routing_reasoning"]
                 },
-                "original_prompt": prompt,
+                "original_prompt": user_query,
+                "uploaded_data": uploaded_data,
                 "errors": final_router_state["errors"] + [f"Unknown workflow decision: {workflow_decision}"],
                 "summary": {
                     "workflow_used": "Error - Unknown Workflow",
@@ -4649,8 +4789,8 @@ Provide the complete refined research plan:
                     print("❌ Please enter a research task.")
                     continue
                 
-                # Analyze the task
-                results = await self.analyze_research_task(prompt)
+                # Analyze the task (no uploaded data in interactive mode)
+                results = await self.analyze_research_task(prompt, [])
                 
                 # Display results
                 print("\n" + "=" * 60)
@@ -4954,7 +5094,7 @@ Provide the complete refined research plan:
                - Key challenges specific to this research domain
                - Standard experimental practices in this field
                - Important datasets, benchmarks, or evaluation protocols
-               - Recent advances or trends in this domain
+              
             
             Return your analysis in JSON format with clear, domain-specific insights that will inform targeted literature search and experiment suggestions.
             
@@ -4989,7 +5129,7 @@ Provide the complete refined research plan:
             
             # Parse the analysis
             analysis_text = response.choices[0].message.content.strip()
-            print(f"📋 Research Analysis: {analysis_text[:150]}...")
+            print(f"📋 Research Analysis: {analysis_text}")
             
             # Try to extract JSON from response
             try:
@@ -5419,18 +5559,15 @@ Provide the complete refined research plan:
                 # Initial search: get 100 papers for ranking
                 max_results = 100
                 start_offset = 0
-                print(f"🔍 INITIAL EXPERIMENT SEARCH - ArXiv: {search_query}")
             elif is_backup_search:
                 # Backup search: get additional papers with offset
                 existing_count = len(existing_papers) if existing_papers else 0
                 start_offset = max(50, existing_count)
                 max_results = 50
-                print(f"🔍 BACKUP EXPERIMENT SEARCH - ArXiv: {search_query} (offset: {start_offset}, additional: {max_results})")
             else:
                 # New search with different query: get 100 fresh papers
                 max_results = 100
                 start_offset = 0
-                print(f"🔍 NEW EXPERIMENT SEARCH #{search_iteration + 1} - ArXiv: {search_query}")
             
             print("=" * 80)
             
@@ -5440,7 +5577,6 @@ Provide the complete refined research plan:
             
             print(f"Formatted query: {formatted_query}")
             print(f"🌐 Full URL: {url}")
-            print(f"📊 Search Parameters: max_results={max_results}, start_offset={start_offset}")
             
             # Fetch and parse ArXiv results
             with libreq.urlopen(url) as response:
@@ -5486,21 +5622,21 @@ Provide the complete refined research plan:
                     print(f"⚠️ Error processing paper entry {i}: {e}")
                     continue
             
-            # Stage 2: Rank papers by relevance using title + abstract only
-            print(f"\n🎯 Stage 2: Ranking experimental papers by relevance to research direction...")
+            # Stage 2: Rank papers by relevance using enhanced analysis context
+            print(f"\n🎯 Stage 2: Ranking experimental papers by relevance using extracted analysis...")
             
-            # Create context for ranking experimental papers
-            direction_context = research_direction.get("selected_direction", {}).get("direction", "")
-            ranking_context = f"{original_prompt}\n\nResearch Direction: {direction_context}"
+            # Create enhanced ranking context from the analysis findings
+            ranking_context = self._create_experiment_ranking_context_from_analysis(state)
+            print(f"📊 Using enhanced context for ranking: {ranking_context[:100]}...")
             
             papers = await self.arxiv_processor.rank_papers_by_relevance(papers, ranking_context)
             
             # Stage 3: Download full content for top 5 papers only
             top_papers = papers[:5]  # Get top 5 papers
             
-            print(f"\n� Stage 3: Downloading full PDF content for top {len(top_papers)} experimental papers...")
-            
-            with ThreadPoolExecutor(max_workers=3) as executor:  # Limit concurrent downloads
+            print(f"\n🔄 Stage 3: Downloading full PDF content for top {len(top_papers)} experimental papers...")
+
+            with ThreadPoolExecutor(max_workers=5) as executor:  # Limit concurrent downloads
                 # Submit download tasks for top papers only
                 future_to_paper = {
                     executor.submit(self.arxiv_processor.download_paper_content, paper): paper 
@@ -5538,8 +5674,6 @@ Provide the complete refined research plan:
                 if paper.get('summary'):
                     print(f"Summary: {paper['summary'][:300]}...")
                 
-                if paper.get('content'):
-                    print(f"Full Content Preview:\n{paper['content'][:500]}...")
                 print("-" * 60)
             
             # Combine with existing papers if this is a backup search
@@ -5549,7 +5683,6 @@ Provide the complete refined research plan:
                 existing_ids = {p['id'] for p in existing_papers}
                 new_papers = [p for p in papers if p['id'] not in existing_ids]
                 final_papers = existing_papers + new_papers
-                print(f"📚 Combined {len(existing_papers)} existing + {len(new_papers)} new papers = {len(final_papers)} total")
             
             return {
                 **state,
@@ -5592,11 +5725,11 @@ Provide the complete refined research plan:
                 content_status = "FULL CONTENT" if has_content else "TITLE+ABSTRACT"
                 
                 papers_summary += f"""
-Paper {i} [{content_status}] - Relevance: {relevance_score:.1f}/10.0:
-Title: {clean_title}
-Abstract: {clean_abstract}
----
-"""
+                    Paper {i} [{content_status}] - Relevance: {relevance_score:.1f}/10.0:
+                    Title: {clean_title}
+                    Abstract: {clean_abstract}
+                    ---
+                """
             
             # Extract research direction context
             selected_direction = research_direction.get("selected_direction", {})
@@ -5605,47 +5738,47 @@ Abstract: {clean_abstract}
             
             # Create enhanced validation prompt with decision guidance
             validation_prompt = f"""
-You are an expert research analyst. Evaluate the retrieved papers for experimental guidance and determine the best course of action.
+                You are an expert research analyst. Evaluate the retrieved papers for experimental guidance and determine the best course of action.
 
-USER'S QUERY: {self._clean_text_for_utf8(user_query)}
-RESEARCH DIRECTION: {direction_text}
-KEY QUESTIONS: {', '.join(key_questions[:3]) if key_questions else 'General experimental guidance'}
-CURRENT SEARCH ITERATION: {search_iteration + 1}
+                USER'S QUERY: {self._clean_text_for_utf8(user_query)}
+                RESEARCH DIRECTION: {direction_text}
+                KEY QUESTIONS: {', '.join(key_questions[:3]) if key_questions else 'General experimental guidance'}
+                CURRENT SEARCH ITERATION: {search_iteration + 1}
 
-RETRIEVED PAPERS:
-{papers_summary}
+                RETRIEVED PAPERS:
+                {papers_summary}
 
-SEARCH STATISTICS:
-- Total papers found: {len(papers)}
-- Papers with full content: {len(full_content_papers)}
-- Average relevance score: {sum(p.get('relevance_score', 0) for p in papers) / len(papers) if papers else 0:.2f}/10.0
+                SEARCH STATISTICS:
+                - Total papers found: {len(papers)}
+                - Papers with full content: {len(full_content_papers)}
+                - Average relevance score: {sum(p.get('relevance_score', 0) for p in papers) / len(papers) if papers else 0:.2f}/10.0
 
-Please provide your assessment in the following JSON format:
+                Please provide your assessment in the following JSON format:
 
-{{
-    "relevance_assessment": "excellent" | "good" | "fair" | "poor",
-    "coverage_analysis": "complete" | "partial" | "insufficient",
-    "quality_evaluation": "high" | "medium" | "low",
-    "decision": "continue" | "search_backup" | "search_new",
-    "confidence": 0.0-1.0,
-    "reasoning": "Brief explanation of the decision",
-    "missing_aspects": ["list", "of", "missing", "experimental", "aspects"],
-    "search_guidance": {{
-        "new_search_terms": ["alternative", "experimental", "search", "terms"],
-        "focus_areas": ["experimental", "areas", "to", "focus", "on"],
-        "avoid_terms": ["terms", "to", "avoid"]
-    }}
-}}
+                {{
+                    "relevance_assessment": "excellent" | "good" | "fair" | "poor",
+                    "coverage_analysis": "complete" | "partial" | "insufficient",
+                    "quality_evaluation": "high" | "medium" | "low",
+                    "decision": "continue" | "search_backup" | "search_new",
+                    "confidence": 0.0-1.0,
+                    "reasoning": "Brief explanation of the decision",
+                    "missing_aspects": ["list", "of", "missing", "experimental", "aspects"],
+                    "search_guidance": {{
+                        "new_search_terms": ["alternative", "experimental", "search", "terms"],
+                        "focus_areas": ["experimental", "areas", "to", "focus", "on"],
+                        "avoid_terms": ["terms", "to", "avoid"]
+                    }}
+                }}
 
-DECISION CRITERIA FOR EXPERIMENTAL PAPERS:
-- "continue": Papers provide sufficient experimental guidance (relevance ≥7.0, good methodology coverage)
-- "search_backup": Papers are decent but could use backup (relevance 5.0-6.9, partial experimental coverage)  
-- "search_new": Papers are insufficient for experimental guidance (relevance <5.0, poor experimental methodology, or major gaps)
+                DECISION CRITERIA FOR EXPERIMENTAL PAPERS:
+                - "continue": Papers provide sufficient experimental guidance (relevance ≥7.0, good methodology coverage)
+                - "search_backup": Papers are decent but could use backup (relevance 5.0-6.9, partial experimental coverage)  
+                - "search_new": Papers are insufficient for experimental guidance (relevance <5.0, poor experimental methodology, or major gaps)
 
-If search_iteration ≥ 2, bias toward "continue" unless papers are truly inadequate for experimental guidance.
+                If search_iteration ≥ 2, bias toward "continue" unless papers are truly inadequate for experimental guidance.
 
-Return only the JSON object, no additional text.
-"""
+                Return only the JSON object, no additional text.
+            """
 
             # Call LLM for validation
             response = self.client.chat.completions.create(
@@ -5765,21 +5898,21 @@ Return only the JSON object, no additional text.
         
         # Safety check: After 3 iterations, force continue to avoid infinite loops
         if search_iteration >= 3:
-            print("� Maximum search iterations reached (3), forcing continue...")
             return "suggest_experiments"
         
         # Clean up decision string
         decision = str(decision).strip().upper()
+    
         
         # Map validation decisions to workflow routing
         if decision == "SEARCH_BACKUP":
-            print(f"� Validation decision: {decision} -> Performing backup search")
+            print(f"Validation decision: {decision} -> Performing backup search")
             return "search_experiment_papers"
         elif decision == "SEARCH_NEW":
-            print(f"� Validation decision: {decision} -> Performing new search")
+            print(f"Validation decision: {decision} -> Performing new search")
             return "generate_experiment_search_query"
         else:
-            print(f"🔄 Validation decision: {decision} -> Continuing with current papers")
+            print(f"Validation decision: {decision} -> Continuing with current papers")
             return "suggest_experiments"
 
     async def _suggest_experiments_node(self, state: ExperimentSuggestionState) -> ExperimentSuggestionState:
@@ -5798,13 +5931,17 @@ Return only the JSON object, no additional text.
             # Prepare paper context for suggestions
             paper_context = ""
             if validated_papers:
+                
                 paper_context = "\n\n**Relevant Experimental Literature:**\n"
-                for i, paper in enumerate(validated_papers[:3], 1):
+                
+                for i, paper in enumerate(validated_papers, 1):
                     title = paper.get('title', 'Unknown Title')
                     score = paper.get('experimental_relevance_score', 0)
-                    content_preview = paper.get('content', '')[:500]
+                    
+                    content_preview = paper.get('content', '')
+                    
                     paper_context += f"{i}. {title} (Relevance: {score:.1f}/10)\n"
-                    paper_context += f"   Key insights: {content_preview}...\n\n"
+                    paper_context += f"   Key insights: {content_preview}\n\n"
             
             # Extract research direction details
             selected_direction = research_direction.get("selected_direction", {})
@@ -5918,7 +6055,7 @@ Return only the JSON object, no additional text.
             
             Be specific, practical, and actionable. Each suggestion should be implementable by a researcher with the context provided. Use clear markdown formatting with headers, bullet points, and emphasis.
             """
-            
+            print(f'📝 Generated experiment suggestions prompt ({len(suggestions_prompt)} characters)')
             response = await asyncio.get_event_loop().run_in_executor(
                 None,
                 lambda: self.client.chat.completions.create(
@@ -6192,11 +6329,11 @@ class MLResearcherTool:
     
     async def suggest_models(self, prompt: str) -> Dict[str, Any]:
         """Get model suggestions for a research task."""
-        return await self.core.analyze_research_task(prompt)
+        return await self.core.analyze_research_task(prompt, [])
     
     async def plan_research(self, prompt: str) -> Dict[str, Any]:
         """Generate research plans and identify open problems.""" 
-        return await self.core.analyze_research_task(prompt)
+        return await self.core.analyze_research_task(prompt, [])
     
     async def write_paper(self, prompt: str, experimental_data: Dict[str, Any] = None, 
                           figures: List[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -6205,7 +6342,7 @@ class MLResearcherTool:
     
     async def analyze_task(self, prompt: str) -> Dict[str, Any]:
         """Analyze any research task using intelligent routing."""
-        return await self.core.analyze_research_task(prompt)
+        return await self.core.analyze_research_task(prompt, [])
 
 
 async def main():
@@ -6216,7 +6353,7 @@ async def main():
         if len(sys.argv) > 1:
             # Command line mode
             prompt = " ".join(sys.argv[1:])
-            results = await tool.analyze_research_task(prompt)
+            results = await tool.analyze_research_task(prompt, [])
             print("\n" + json.dumps(results, indent=2))
         else:
             # Interactive mode
