@@ -17,11 +17,11 @@ if errorlevel 1 (
 echo ✅ Python found
 echo.
 
-REM Check if required packages are installed
+REM Check if required packages are installed (FastAPI, Uvicorn, TreeQuest)
 echo 📦 Checking dependencies...
-python -c "import fastapi, uvicorn" >nul 2>&1
+python -c "import fastapi, uvicorn, treequest" >nul 2>&1
 if errorlevel 1 (
-    echo ❌ Required packages not found
+    echo ❌ Required packages not found (installing/updating...)
     echo Installing frontend dependencies...
     pip install -r requirements_frontend.txt
     if errorlevel 1 (

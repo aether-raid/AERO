@@ -35,8 +35,8 @@ if (-not (Test-Path "ml_researcher_langgraph.py")) {
 # Check dependencies
 Write-Host "📦 Checking dependencies..." -ForegroundColor Yellow
 try {
-    python -c "import fastapi, uvicorn" 2>$null
-    Write-Host "✅ FastAPI and Uvicorn found" -ForegroundColor Green
+    python -c "import fastapi, uvicorn, treequest" 2>$null
+    Write-Host "✅ FastAPI, Uvicorn, and TreeQuest found" -ForegroundColor Green
 } catch {
     Write-Host "❌ Required packages not found" -ForegroundColor Red
     Write-Host "📥 Installing frontend dependencies..." -ForegroundColor Yellow
@@ -53,7 +53,7 @@ try {
     } else {
         Write-Host "❌ requirements_frontend.txt not found" -ForegroundColor Red
         Write-Host "Installing basic dependencies..." -ForegroundColor Yellow
-        pip install fastapi uvicorn
+        pip install fastapi uvicorn treequest
     }
 }
 

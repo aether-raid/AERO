@@ -426,11 +426,30 @@ class MLResearcherLangGraph:
 
         # Add nodes for experiment suggestion workflow
         workflow.add_node("analyze_findings", self._analyze_experiment_findings_node)
+        workflow.add_node("decide_research_direction", self._decide_research_direction_node)
+        workflow.add_node("generate_experiment_search_query", self._generate_experiment_search_query_node)
+        workflow.add_node("search_experiment_papers", self._search_experiment_papers_node)
+        workflow.add_node("validate_experiment_papers", self._validate_experiment_papers_node)
         workflow.add_node("suggest_experiments", self._suggest_experiments_node)
 
         # Define the flow
         workflow.set_entry_point("analyze_findings")
-        workflow.add_edge("analyze_findings", "suggest_experiments")
+        workflow.add_edge("analyze_findings", "decide_research_direction")
+        workflow.add_edge("decide_research_direction", "generate_experiment_search_query")
+        workflow.add_edge("generate_experiment_search_query", "search_experiment_papers")
+        workflow.add_edge("search_experiment_papers", "validate_experiment_papers")
+        
+        # Conditional edge after validation - decide whether to continue or search again
+        workflow.add_conditional_edges(
+            "validate_experiment_papers",
+            self._should_continue_with_experiment_papers,
+            {
+                "suggest_experiments": "suggest_experiments",           # Papers are good, continue with suggestions
+                "search_experiment_papers": "search_experiment_papers", # Keep current papers, search for backup
+                "generate_experiment_search_query": "generate_experiment_search_query"  # Start fresh with new search query
+            }
+        )
+        
         workflow.add_edge("suggest_experiments", END)
 
         return workflow.compile()
@@ -4821,37 +4840,9 @@ Provide the complete refined research plan:
             print(f"❌ Failed to generate Word document: {str(e)}")
             raise e
 
-    async def analyze_and_suggest_experiment(self, prompt: str, experimental_results: Dict[str, Any] = None) -> Dict[str, Any]:
-        """Analyze experimental results and suggest follow-up experiments."""
-        
-        # Initialize experiment suggestion state
-        experiment_state: ExperimentSuggestionState = {
-            "messages": [HumanMessage(content=prompt)],
-            "original_prompt": prompt,
-            "experimental_results": experimental_results or {},
-            "findings_analysis": {},
-            "experiment_suggestions": {},
-            "current_step": "",
-            "errors": [],
-            "workflow_type": "experiment_suggestion"
-        }
-        
-        # Run the experiment suggestion workflow
-        final_state = await self.experiment_suggestion_graph.ainvoke(experiment_state)
-        
-        return {
-            "workflow_type": "experiment_suggestion",
-            "original_prompt": final_state["original_prompt"],
-            "findings_analysis": final_state.get("findings_analysis", {}),
-            "experiment_suggestions": final_state.get("experiment_suggestions", {}),
-            "errors": final_state.get("errors", []),
-            "summary": {
-                "workflow_used": "Experiment Suggestion Pipeline",
-                "findings_analyzed": bool(final_state.get("findings_analysis", {})),
-                "suggestions_generated": bool(final_state.get("experiment_suggestions", {})),
-                "total_errors": len(final_state.get("errors", []))
-            }
-        }
+
+
+
 
 
     # ==================================================================================
@@ -4876,39 +4867,64 @@ Provide the complete refined research plan:
             
             Experimental Results/Context: {experimental_results if experimental_results else "User described their current experimental situation in the prompt above"}
             
+            **CRITICAL**: If the user hasn't explicitly described their problem domain, you must infer it from:
+            - Keywords in their prompt (computer vision, NLP, object detection, classification, etc.)
+            - Data types mentioned (images, text, sensor data, time series, etc.)
+            - Models or techniques referenced (CNNs, transformers, YOLO, etc.)
+            - Applications mentioned (autonomous driving, medical imaging, etc.)
+            
             Please analyze this research context and provide a comprehensive analysis for experiment planning:
             
-            1. **Current State Assessment**:
+            1. **Domain Inference and Analysis**:
+               - Primary research domain (computer vision, NLP, reinforcement learning, robotics, etc.)
+               - Specific task type (object detection, classification, segmentation, generation, etc.)
+               - Application area (autonomous vehicles, medical imaging, robotics, etc.)
+               - Data characteristics (images, text, sensor data, time series, tabular, etc.)
+               
+            2. **Current State Assessment**:
                - What has been accomplished so far?
                - What are the key findings or results?
                - What metrics or performance indicators are being used?
+               - Current model architectures or approaches being used
                
-            2. **Research Domain Analysis**:
-               - Primary domain (computer vision, NLP, reinforcement learning, etc.)
-               - Specific task type (classification, detection, generation, etc.)
-               - Dataset characteristics and constraints
+            3. **Technical Context**:
+               - Frameworks and methodologies currently employed
+               - Datasets being used or dataset characteristics
+               - Computational constraints or requirements
+               - Evaluation benchmarks and metrics
                
-            3. **Technical Stack Analysis**:
-               - Current model architectures being used
-               - Training methodologies and frameworks
-               - Evaluation metrics and benchmarks
-               
-            4. **Gap Analysis**:
-               - What questions remain unanswered?
+            4. **Research Gaps and Opportunities**:
+               - What questions remain unanswered in this domain?
                - What aspects need deeper investigation?
-               - What are potential failure modes or limitations?
-               
-            5. **Research Opportunities**:
+               - What are common failure modes or limitations in this area?
                - Areas for improvement or optimization
-               - Novel approaches that could be explored
-               - Comparative studies that would be valuable
                
-            6. **Resource Context**:
-               - Computational constraints mentioned
-               - Timeline considerations
-               - Available datasets or tools
+            5. **Domain-Specific Considerations**:
+               - Key challenges specific to this research domain
+               - Standard experimental practices in this field
+               - Important datasets, benchmarks, or evaluation protocols
+               - Recent advances or trends in this domain
             
-            Provide a detailed JSON response with these analyses that will inform comprehensive experiment suggestions.
+            Return your analysis in JSON format with clear, domain-specific insights that will inform targeted literature search and experiment suggestions.
+            
+            Example for computer vision/object detection:
+            {{
+                "domain_analysis": {{
+                    "primary_domain": "computer vision",
+                    "task_type": "object detection",
+                    "application_area": "autonomous driving",
+                    "data_type": "images/video"
+                }},
+                "current_state": {{
+                    "findings": "Model achieving X mAP on dataset Y",
+                    "current_approach": "YOLO-based detection pipeline"
+                }},
+                "research_opportunities": [
+                    "Multi-scale detection improvements",
+                    "Real-time inference optimization",
+                    "Small object detection enhancement"
+                ]
+            }}
             """
             
             response = await asyncio.get_event_loop().run_in_executor(
@@ -4927,31 +4943,58 @@ Provide the complete refined research plan:
             # Try to extract JSON from response
             try:
                 import json
+                # Clean and extract JSON from response
+                if analysis_text.startswith("```json"):
+                    analysis_text = analysis_text[7:]
+                if analysis_text.endswith("```"):
+                    analysis_text = analysis_text[:-3]
+                analysis_text = analysis_text.strip()
+                
                 # Look for JSON in the response
                 start = analysis_text.find('{')
                 end = analysis_text.rfind('}') + 1
                 if start != -1 and end != -1:
                     analysis_json = json.loads(analysis_text[start:end])
+                    print(f"✅ Successfully parsed research analysis JSON")
                 else:
-                    # Fallback: create structured analysis
+                    # Fallback: create structured analysis from domain inference
+                    print("⚠️ No JSON found, creating structured analysis...")
+                    
+                    # Try to infer domain from original prompt
+                    prompt_lower = original_prompt.lower()
+                    domain_info = self._infer_domain_from_prompt(prompt_lower)
+                    
                     analysis_json = {
+                        "domain_analysis": domain_info,
                         "current_state": {"status": "Initial analysis", "findings": "Based on user prompt"},
-                        "domain_analysis": {"domain": "machine learning", "task_type": "experimental"},
-                        "technical_stack": {"architecture": "to be determined", "metrics": "standard ML metrics"},
-                        "gap_analysis": {"open_questions": ["Performance optimization", "Method comparison"]},
-                        "opportunities": ["Baseline comparison", "Hyperparameter optimization"],
-                        "resource_context": {"constraints": "Standard research setup"}
+                        "research_opportunities": ["Experimental validation", "Comparative studies", "Performance optimization"],
+                        "summary": "Analysis based on prompt content and domain inference"
                     }
+                    
+            except json.JSONDecodeError as e:
+                print(f"⚠️ JSON parsing failed: {e}, creating fallback analysis...")
+                # Fallback: create structured analysis
+                prompt_lower = original_prompt.lower()
+                domain_info = self._infer_domain_from_prompt(prompt_lower)
+                
+                analysis_json = {
+                    "domain_analysis": domain_info,
+                    "current_state": {"status": "Initial analysis", "findings": "Based on user prompt"},
+                    "research_opportunities": ["Experimental validation", "Comparative studies", "Performance optimization"],
+                    "summary": f"Research analysis for {domain_info.get('primary_domain', 'machine learning')} project"
+                }
+                    
             except Exception as e:
                 print(f"⚠️ JSON parsing failed: {e}, using fallback analysis")
                 # Fallback analysis with extracted key information
+                prompt_lower = original_prompt.lower()
+                domain_info = self._infer_domain_from_prompt(prompt_lower)
+                
                 analysis_json = {
+                    "domain_analysis": domain_info,
                     "current_state": {"status": "Analysis from prompt", "findings": original_prompt[:200]},
-                    "domain_analysis": {"domain": "machine learning", "task_type": "experimental research"},
-                    "technical_stack": {"architecture": "various models", "metrics": "performance metrics"},
-                    "gap_analysis": {"open_questions": ["What experiments to run next?"]},
-                    "opportunities": ["Follow-up experiments", "Comparative analysis"],
-                    "resource_context": {"constraints": "Research environment"}
+                    "research_opportunities": ["Follow-up experiments", "Comparative analysis"],
+                    "summary": f"Fallback analysis for {domain_info.get('primary_domain', 'machine learning')} research"
                 }
             
             # Store the analysis and update state
@@ -4960,7 +5003,7 @@ Provide the complete refined research plan:
                 "findings_analysis": analysis_json,
                 "research_context": {
                     "original_prompt": original_prompt,
-                    "domain": analysis_json.get("domain_analysis", {}).get("domain", "machine learning"),
+                    "domain": analysis_json.get("domain_analysis", {}).get("primary_domain", "machine learning"),
                     "analysis_timestamp": __import__('datetime').datetime.now().isoformat()
                 },
                 "analysis_completed": True,
@@ -4975,6 +5018,718 @@ Provide the complete refined research plan:
                 "analysis_completed": False,
                 "current_step": "analysis_error"
             }
+    
+    def _infer_domain_from_prompt(self, prompt_lower: str) -> dict:
+        """Infer research domain from user prompt keywords."""
+        domain_info = {
+            "primary_domain": "machine learning",
+            "task_type": "experimental",
+            "application_area": "",
+            "data_type": ""
+        }
+        
+        # Computer Vision keywords
+        if any(kw in prompt_lower for kw in ["computer vision", "cv", "image", "video", "visual", "detection", "segmentation", "yolo", "cnn", "resnet"]):
+            domain_info["primary_domain"] = "computer vision"
+            if "detection" in prompt_lower:
+                domain_info["task_type"] = "object detection"
+            elif "segmentation" in prompt_lower:
+                domain_info["task_type"] = "segmentation"
+            elif "classification" in prompt_lower and "image" in prompt_lower:
+                domain_info["task_type"] = "image classification"
+            domain_info["data_type"] = "images"
+            
+        # NLP keywords
+        elif any(kw in prompt_lower for kw in ["nlp", "text", "language", "transformer", "bert", "gpt", "sentiment", "translation"]):
+            domain_info["primary_domain"] = "NLP"
+            if "classification" in prompt_lower:
+                domain_info["task_type"] = "text classification"
+            elif "generation" in prompt_lower:
+                domain_info["task_type"] = "text generation"
+            elif "translation" in prompt_lower:
+                domain_info["task_type"] = "machine translation"
+            domain_info["data_type"] = "text"
+            
+        # Robotics keywords
+        elif any(kw in prompt_lower for kw in ["robot", "autonomous", "control", "navigation", "manipulation"]):
+            domain_info["primary_domain"] = "robotics"
+            domain_info["task_type"] = "control"
+            domain_info["data_type"] = "sensor data"
+            
+        # Time series keywords
+        elif any(kw in prompt_lower for kw in ["time series", "temporal", "forecasting", "lstm", "sequence"]):
+            domain_info["primary_domain"] = "time series analysis"
+            domain_info["task_type"] = "forecasting"
+            domain_info["data_type"] = "time series"
+            
+        # Application areas
+        if any(kw in prompt_lower for kw in ["medical", "healthcare", "clinical"]):
+            domain_info["application_area"] = "medical"
+        elif any(kw in prompt_lower for kw in ["autonomous", "driving", "vehicle"]):
+            domain_info["application_area"] = "autonomous driving"
+        elif any(kw in prompt_lower for kw in ["finance", "financial", "trading"]):
+            domain_info["application_area"] = "finance"
+            
+        return domain_info
+
+    async def _decide_research_direction_node(self, state: ExperimentSuggestionState) -> ExperimentSuggestionState:
+        """Node for deciding the research direction based on analysis findings."""
+        print("\n🎯 Research Direction: Determining optimal research path with justification...")
+        
+        try:
+            # Extract analysis context
+            original_prompt = state.get("original_prompt", "")
+            findings_analysis = state.get("findings_analysis", {})
+            experimental_results = state.get("experimental_results", {})
+            research_context = state.get("research_context", {})
+            
+            # Prepare context for direction decision
+            findings_summary = findings_analysis.get("summary", "No analysis available")
+            key_insights = findings_analysis.get("key_insights", [])
+            limitations = findings_analysis.get("limitations", [])
+            
+            # Create comprehensive prompt for direction decision
+            direction_prompt = f"""
+            You are a senior research strategist. Based on the experimental findings and analysis, determine the most promising research direction to pursue next.
+
+            ORIGINAL RESEARCH CONTEXT:
+            {original_prompt}
+
+            EXPERIMENTAL FINDINGS SUMMARY:
+            {findings_summary}
+
+            KEY INSIGHTS FROM ANALYSIS:
+            {chr(10).join(f"• {insight}" for insight in key_insights[:5])}
+
+            IDENTIFIED LIMITATIONS:
+            {chr(10).join(f"• {limitation}" for limitation in limitations[:3])}
+
+            EXPERIMENTAL DATA OVERVIEW:
+            {str(experimental_results)[:500] if experimental_results else "No experimental data provided"}
+
+            Your task is to:
+            1. Identify 2-3 potential research directions based on the findings
+            2. Select the most promising direction with clear justification
+            3. Explain why this direction is optimal given current results
+            4. Outline what specific aspects should be investigated
+
+            Return your response in this exact JSON format:
+            {{
+                "potential_directions": [
+                    {{
+                        "direction": "Brief direction description",
+                        "rationale": "Why this direction is promising",
+                        "feasibility": "Assessment of feasibility (High/Medium/Low)"
+                    }}
+                ],
+                "selected_direction": {{
+                    "direction": "Chosen research direction",
+                    "justification": "Detailed explanation of why this direction was selected",
+                    "expected_impact": "What outcomes this direction could achieve",
+                    "key_questions": ["Question 1", "Question 2", "Question 3"],
+                    "confidence_level": "High/Medium/Low"
+                }},
+                "reasoning": "Overall strategic reasoning for the decision"
+            }}
+            """
+
+            # Call LLM for direction decision
+            response = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: self.client.chat.completions.create(
+                    model=self.model,
+                    temperature=0.3,
+                    messages=[
+                        {"role": "system", "content": "You are a strategic research advisor. Provide clear, actionable research direction decisions in valid JSON format."},
+                        {"role": "user", "content": direction_prompt}
+                    ]
+                )
+            )
+
+            direction_content = response.choices[0].message.content.strip()
+            
+            # Clean and parse JSON response
+            import json
+            import re
+            
+            # Clean the response to extract JSON
+            json_match = re.search(r'\{.*\}', direction_content, re.DOTALL)
+            if json_match:
+                clean_json = json_match.group()
+                try:
+                    direction_decision = json.loads(clean_json)
+                except json.JSONDecodeError:
+                    # Fallback if JSON parsing fails
+                    direction_decision = {
+                        "selected_direction": {
+                            "direction": "Continue current research with refinements",
+                            "justification": "Based on analysis, refining current approach shows promise",
+                            "expected_impact": "Improved understanding of the research problem",
+                            "key_questions": ["How to optimize current methods?", "What are the key bottlenecks?", "What alternative approaches exist?"],
+                            "confidence_level": "Medium"
+                        },
+                        "reasoning": "Default direction based on analysis findings"
+                    }
+            else:
+                # Fallback direction
+                direction_decision = {
+                    "selected_direction": {
+                        "direction": "Investigate identified limitations and explore alternatives",
+                        "justification": "Analysis revealed limitations that need addressing",
+                        "expected_impact": "Better understanding of constraints and potential solutions",
+                        "key_questions": ["What causes the identified limitations?", "What alternative methods exist?", "How can we validate improvements?"],
+                        "confidence_level": "Medium"
+                    },
+                    "reasoning": "Focus on addressing key limitations identified in analysis"
+                }
+
+            print(f"✅ Research direction decided: {direction_decision.get('selected_direction', {}).get('direction', 'Unknown')}")
+            
+            return {
+                **state,
+                "research_direction": direction_decision,
+                "current_step": "direction_decided"
+            }
+            
+        except Exception as e:
+            print(f"❌ Error in decide_research_direction: {str(e)}")
+            # Provide fallback direction
+            fallback_direction = {
+                "selected_direction": {
+                    "direction": "Continue systematic investigation",
+                    "justification": "Maintain research momentum while addressing any identified issues",
+                    "expected_impact": "Steady progress toward research objectives",
+                    "key_questions": ["What are the next logical steps?", "How can we improve current methods?", "What additional data is needed?"],
+                    "confidence_level": "Medium"
+                },
+                "reasoning": "Fallback direction due to processing error"
+            }
+            
+            return {
+                **state,
+                "research_direction": fallback_direction,
+                "errors": state.get("errors", []) + [f"Direction decision error: {str(e)}"],
+                "current_step": "direction_error"
+            }
+
+    def _generate_experiment_search_query_node(self, state: ExperimentSuggestionState) -> ExperimentSuggestionState:
+        """Generate ArXiv search query for domain-specific experimental guidance papers."""
+        print("\n🔍 Experiment Search Query: Generating targeted search for experimental guidance...")
+        
+        try:
+            # Extract context
+            original_prompt = state.get("original_prompt", "")
+            research_direction = state.get("research_direction", {})
+            findings_analysis = state.get("findings_analysis", {})
+            
+            selected_direction = research_direction.get("selected_direction", {})
+            direction_text = selected_direction.get("direction", "")
+            key_questions = selected_direction.get("key_questions", [])
+            
+            # Extract domain information from analysis
+            domain_analysis = findings_analysis.get("domain_analysis", {})
+            primary_domain = domain_analysis.get("primary_domain", "machine learning")
+            task_type = domain_analysis.get("task_type", "")
+            application_area = domain_analysis.get("application_area", "")
+            data_type = domain_analysis.get("data_type", "")
+            
+            # Generate domain-specific search query
+            query_prompt = f"""
+            Generate a focused ArXiv search query to find papers in the same research domain that contain experimental methodologies and guidance.
+
+            RESEARCH DOMAIN: {primary_domain}
+            TASK TYPE: {task_type}
+            APPLICATION: {application_area}
+            DATA TYPE: {data_type}
+            
+            ORIGINAL RESEARCH: {original_prompt}
+            
+            RESEARCH DIRECTION: {direction_text}
+            
+            KEY QUESTIONS: {chr(10).join(f"• {q}" for q in key_questions[:3])}
+
+            Generate 4 search terms for ArXiv API, separated by forward slashes (/), that will find papers in the SAME DOMAIN with experimental guidance:
+            
+            Rules:
+            - Term 1: Primary domain-specific technique or model (e.g., "YOLO", "transformer", "CNN", "LSTM")
+            - Term 2: Specific task type (e.g., "object detection", "classification", "segmentation")  
+            - Term 3: Experimental aspect (e.g., "ablation study", "evaluation", "comparison", "benchmark")
+            - Term 4: Domain/application context (e.g., "autonomous driving", "medical imaging", "NLP")
+            
+            Examples:
+            - For computer vision: "YOLO/object detection/ablation study/autonomous driving"
+            - For NLP: "transformer/text classification/evaluation/sentiment analysis"
+            - For medical AI: "CNN/medical imaging/comparison/radiology"
+            
+            Focus on finding papers that will have similar experimental setups and methodologies, NOT generic methodology papers.
+            Return ONLY the 4-term query string (no explanation).
+            """
+
+            response = self.client.chat.completions.create(
+                model=self.model,
+                temperature=0.1,
+                messages=[
+                    {"role": "system", "content": "Generate focused domain-specific ArXiv search queries. Return only the 4-term query separated by forward slashes."},
+                    {"role": "user", "content": query_prompt}
+                ]
+            )
+
+            search_query = response.choices[0].message.content.strip()
+            
+            # Clean the query (remove quotes, extra spaces)
+            search_query = search_query.replace('"', '').replace("'", "").strip()
+            
+            # Ensure it has the right format (4 terms separated by /)
+            if search_query.count('/') != 3:
+                # Fallback: create domain-specific query from extracted info
+                term1 = task_type or primary_domain
+                term2 = "experimental" if not task_type else task_type
+                term3 = "evaluation"
+                term4 = application_area or primary_domain
+                search_query = f"{term1}/{term2}/{term3}/{term4}"
+            
+            print(f"✅ Generated domain-specific search query: {search_query}")
+            print(f"🎯 Targeting domain: {primary_domain} | Task: {task_type} | Application: {application_area}")
+            
+            return {
+                **state,
+                "experiment_search_query": search_query,
+                "experiment_search_domain": primary_domain,
+                "experiment_search_task": task_type,
+                "current_step": "search_query_generated"
+            }
+            
+        except Exception as e:
+            print(f"❌ Error generating experiment search query: {str(e)}")
+            # Fallback query - try to extract domain from original prompt
+            prompt_lower = original_prompt.lower()
+            if "object detection" in prompt_lower or "detection" in prompt_lower:
+                fallback_query = "object detection/evaluation/experimental/computer vision"
+            elif "classification" in prompt_lower:
+                fallback_query = "classification/experimental/evaluation/machine learning"
+            elif "segmentation" in prompt_lower:
+                fallback_query = "segmentation/experimental/evaluation/computer vision"
+            elif "nlp" in prompt_lower or "text" in prompt_lower:
+                fallback_query = "text classification/experimental/evaluation/NLP"
+            else:
+                fallback_query = "machine learning/experimental/evaluation/methodology"
+            
+            return {
+                **state,
+                "experiment_search_query": fallback_query,
+                "experiment_search_domain": "machine learning",
+                "errors": state.get("errors", []) + [f"Search query generation error: {str(e)}"],
+                "current_step": "search_query_error"
+            }
+
+    async def _search_experiment_papers_node(self, state: ExperimentSuggestionState) -> ExperimentSuggestionState:
+        """Search ArXiv for experimental methodology papers using optimized workflow."""
+        search_iteration = state.get("experiment_search_iteration", 0)
+        validation_results = state.get("experiment_validation_results", {})
+        is_backup_search = validation_results.get("decision") == "search_backup"
+        
+        if search_iteration == 0:
+            print("\n📚 Experiment Papers Search: Searching ArXiv for experimental guidance...")
+        elif is_backup_search:
+            print("\n🔄 Experiment Search (Backup): Searching for additional experimental papers...")
+        else:
+            print(f"\n🔄 Experiment Search (New Search {search_iteration + 1}): Searching with refined query...")
+            
+        state["current_step"] = "search_experiment_papers"
+        
+        # Import required modules for ArXiv search
+        import urllib.request as libreq
+        import xml.etree.ElementTree as ET
+        from arxiv import format_search_string
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        
+        # Initialize variables
+        papers = []
+        total_results = 0
+        formatted_query = ""
+        
+        # For backup searches, preserve existing papers
+        existing_papers = []
+        if is_backup_search and state.get("experiment_papers"):
+            existing_papers = state["experiment_papers"]
+            print(f"📚 Preserving {len(existing_papers)} papers from previous search")
+        
+        try:
+            search_query = state.get("experiment_search_query", "experimental methodology")
+            research_direction = state.get("research_direction", {})
+            original_prompt = state.get("original_prompt", "")
+            
+            # Use ArXiv processor for paper processing
+            if not self.arxiv_processor:
+                raise Exception("ArXiv processor not available")
+            
+            # Determine search parameters based on search type and iteration
+            if search_iteration == 0:
+                # Initial search: get 100 papers for ranking
+                max_results = 100
+                start_offset = 0
+                print(f"🔍 INITIAL EXPERIMENT SEARCH - ArXiv: {search_query}")
+            elif is_backup_search:
+                # Backup search: get additional papers with offset
+                existing_count = len(existing_papers) if existing_papers else 0
+                start_offset = max(50, existing_count)
+                max_results = 50
+                print(f"🔍 BACKUP EXPERIMENT SEARCH - ArXiv: {search_query} (offset: {start_offset}, additional: {max_results})")
+            else:
+                # New search with different query: get 100 fresh papers
+                max_results = 100
+                start_offset = 0
+                print(f"🔍 NEW EXPERIMENT SEARCH #{search_iteration + 1} - ArXiv: {search_query}")
+            
+            print("=" * 80)
+            
+            # Format search query and build URL
+            formatted_query = format_search_string(search_query)
+            url = f"http://export.arxiv.org/api/query?search_query={formatted_query}&start={start_offset}&max_results={max_results}"
+            
+            print(f"Formatted query: {formatted_query}")
+            print(f"🌐 Full URL: {url}")
+            print(f"📊 Search Parameters: max_results={max_results}, start_offset={start_offset}")
+            
+            # Fetch and parse ArXiv results
+            with libreq.urlopen(url) as response:
+                xml_data = response.read()
+            
+            root = ET.fromstring(xml_data)
+            ns = {
+                'atom': 'http://www.w3.org/2005/Atom',
+                'arxiv': 'http://arxiv.org/schemas/atom',
+                'opensearch': 'http://a9.com/-/spec/opensearch/1.1/'
+            }
+            
+            # Get total results
+            total_results_elem = root.find('opensearch:totalResults', ns)
+            total_results = int(total_results_elem.text) if total_results_elem is not None else 0
+            
+            print(f"Total papers found: {total_results}")
+            
+            if total_results == 0:
+                print("⚠️ No papers found for experiment search query")
+                return {
+                    **state,
+                    "experiment_papers": existing_papers,
+                    "current_step": "no_papers_found"
+                }
+            
+            # Extract paper entries
+            entries = root.findall('atom:entry', ns)
+            if len(entries) == 0:
+                entries = root.findall('.//entry')  # Fallback without namespace
+            
+            print(f"📄 Processing {len(entries)} paper entries...")
+            
+            # Stage 1: Extract basic info (title, abstract, metadata) without downloading PDFs
+            print(f"📋 Stage 1: Extracting basic info for {len(entries)} experimental papers...")
+            papers = []
+            for i, entry in enumerate(entries, 1):
+                try:
+                    paper_info = self.arxiv_processor.extract_basic_paper_info(entry, ns, i)
+                    papers.append(paper_info)
+                    print(f"✅ Basic info extracted for paper #{i}: {paper_info['title'][:50]}...")
+                except Exception as e:
+                    print(f"⚠️ Error processing paper entry {i}: {e}")
+                    continue
+            
+            # Stage 2: Rank papers by relevance using title + abstract only
+            print(f"\n🎯 Stage 2: Ranking experimental papers by relevance to research direction...")
+            
+            # Create context for ranking experimental papers
+            direction_context = research_direction.get("selected_direction", {}).get("direction", "")
+            ranking_context = f"{original_prompt}\n\nResearch Direction: {direction_context}"
+            
+            papers = await self.arxiv_processor.rank_papers_by_relevance(papers, ranking_context)
+            
+            # Stage 3: Download full content for top 5 papers only
+            top_papers = papers[:5]  # Get top 5 papers
+            
+            print(f"\n� Stage 3: Downloading full PDF content for top {len(top_papers)} experimental papers...")
+            
+            with ThreadPoolExecutor(max_workers=3) as executor:  # Limit concurrent downloads
+                # Submit download tasks for top papers only
+                future_to_paper = {
+                    executor.submit(self.arxiv_processor.download_paper_content, paper): paper 
+                    for paper in top_papers
+                }
+                
+                # Collect results as they complete
+                for future in as_completed(future_to_paper):
+                    updated_paper = future.result()
+                    # Update the paper in the original list
+                    for i, paper in enumerate(papers):
+                        if paper['id'] == updated_paper['id']:
+                            papers[i] = updated_paper
+                            break
+            
+            print(f"✅ PDF download stage completed for experimental papers.")
+            
+            # Print ranked results
+            print("\n" + "=" * 80)
+            print("📋 RANKED EXPERIMENTAL PAPERS (by relevance):")
+            print("=" * 80)
+            
+            for i, paper in enumerate(papers[:5], 1):  # Show top 5
+                relevance_score = paper.get('relevance_score', 0)
+                has_content = paper.get('pdf_downloaded', False)
+                content_status = "📄 FULL CONTENT" if has_content else "📝 TITLE+ABSTRACT"
+                
+                print(f"\n📄 EXPERIMENTAL PAPER #{i} ({content_status}) - Relevance: {relevance_score:.1f}/10.0")
+                print("-" * 60)
+                print(f"Title: {paper['title']}")
+                print(f"ID: {paper['id']}")
+                print(f"Published: {paper['published']}")
+                print(f"URL: {paper['url']}")
+                
+                if paper.get('summary'):
+                    print(f"Summary: {paper['summary'][:300]}...")
+                
+                if paper.get('content'):
+                    print(f"Full Content Preview:\n{paper['content'][:500]}...")
+                print("-" * 60)
+            
+            # Combine with existing papers if this is a backup search
+            final_papers = papers
+            if is_backup_search and existing_papers:
+                # Merge papers, avoiding duplicates
+                existing_ids = {p['id'] for p in existing_papers}
+                new_papers = [p for p in papers if p['id'] not in existing_ids]
+                final_papers = existing_papers + new_papers
+                print(f"📚 Combined {len(existing_papers)} existing + {len(new_papers)} new papers = {len(final_papers)} total")
+            
+            return {
+                **state,
+                "experiment_papers": final_papers,
+                "experiment_search_iteration": search_iteration + 1,
+                "current_step": "papers_downloaded"
+            }
+            
+        except Exception as e:
+            print(f"❌ Error in experiment papers search: {str(e)}")
+            return {
+                **state,
+                "experiment_papers": [],
+                "errors": state.get("errors", []) + [f"Experiment papers search error: {str(e)}"],
+                "current_step": "search_error"
+            }
+
+    def _validate_experiment_papers_node(self, state: ExperimentSuggestionState) -> ExperimentSuggestionState:
+        """Node to validate if retrieved experiment papers can answer the user's query and decide next steps."""
+        
+        print("\n🔍 Step 4.5: Validating experiment paper relevance and determining next steps...")
+        state["current_step"] = "validate_experiment_papers"
+        
+        try:
+            papers = state.get("experiment_papers", [])
+            user_query = state["original_prompt"]
+            search_iteration = state.get("experiment_search_iteration", 0)
+            research_direction = state.get("research_direction", {})
+            
+            # Prepare paper summaries for validation
+            papers_summary = ""
+            full_content_papers = [p for p in papers if p.get('pdf_downloaded', False)]
+            
+            # Include information about all papers (not just those with full content)
+            for i, paper in enumerate(papers[:10], 1):  # Top 10 papers
+                clean_title = self._clean_text_for_utf8(paper.get('title', 'Unknown Title'))
+                clean_abstract = self._clean_text_for_utf8(paper.get('summary', 'No abstract available'))
+                relevance_score = paper.get('relevance_score', 0)
+                has_content = paper.get('pdf_downloaded', False)
+                content_status = "FULL CONTENT" if has_content else "TITLE+ABSTRACT"
+                
+                papers_summary += f"""
+Paper {i} [{content_status}] - Relevance: {relevance_score:.1f}/10.0:
+Title: {clean_title}
+Abstract: {clean_abstract}
+---
+"""
+            
+            # Extract research direction context
+            selected_direction = research_direction.get("selected_direction", {})
+            direction_text = selected_direction.get("direction", "General experimental guidance")
+            key_questions = selected_direction.get("key_questions", [])
+            
+            # Create enhanced validation prompt with decision guidance
+            validation_prompt = f"""
+You are an expert research analyst. Evaluate the retrieved papers for experimental guidance and determine the best course of action.
+
+USER'S QUERY: {self._clean_text_for_utf8(user_query)}
+RESEARCH DIRECTION: {direction_text}
+KEY QUESTIONS: {', '.join(key_questions[:3]) if key_questions else 'General experimental guidance'}
+CURRENT SEARCH ITERATION: {search_iteration + 1}
+
+RETRIEVED PAPERS:
+{papers_summary}
+
+SEARCH STATISTICS:
+- Total papers found: {len(papers)}
+- Papers with full content: {len(full_content_papers)}
+- Average relevance score: {sum(p.get('relevance_score', 0) for p in papers) / len(papers) if papers else 0:.2f}/10.0
+
+Please provide your assessment in the following JSON format:
+
+{{
+    "relevance_assessment": "excellent" | "good" | "fair" | "poor",
+    "coverage_analysis": "complete" | "partial" | "insufficient",
+    "quality_evaluation": "high" | "medium" | "low",
+    "decision": "continue" | "search_backup" | "search_new",
+    "confidence": 0.0-1.0,
+    "reasoning": "Brief explanation of the decision",
+    "missing_aspects": ["list", "of", "missing", "experimental", "aspects"],
+    "search_guidance": {{
+        "new_search_terms": ["alternative", "experimental", "search", "terms"],
+        "focus_areas": ["experimental", "areas", "to", "focus", "on"],
+        "avoid_terms": ["terms", "to", "avoid"]
+    }}
+}}
+
+DECISION CRITERIA FOR EXPERIMENTAL PAPERS:
+- "continue": Papers provide sufficient experimental guidance (relevance ≥7.0, good methodology coverage)
+- "search_backup": Papers are decent but could use backup (relevance 5.0-6.9, partial experimental coverage)  
+- "search_new": Papers are insufficient for experimental guidance (relevance <5.0, poor experimental methodology, or major gaps)
+
+If search_iteration ≥ 2, bias toward "continue" unless papers are truly inadequate for experimental guidance.
+
+Return only the JSON object, no additional text.
+"""
+
+            # Call LLM for validation
+            response = self.client.chat.completions.create(
+                model=self.model,
+                temperature=0,
+                messages=[{"content": validation_prompt, "role": "user"}]
+            )
+            
+            validation_response = response.choices[0].message.content.strip()
+            
+            # Parse validation response
+            try:
+                # Remove any markdown formatting
+                if validation_response.startswith("```json"):
+                    validation_response = validation_response[7:]
+                if validation_response.endswith("```"):
+                    validation_response = validation_response[:-3]
+                validation_response = validation_response.strip()
+                
+                validation_data = json.loads(validation_response)
+                
+                # Store validation results in state - use unique key to avoid conflicts
+                state["experiment_validation_results"] = {
+                    "validation_successful": True,
+                    "validation_data": validation_data,
+                    "decision": validation_data.get("decision", "continue"),
+                    "reasoning": validation_data.get("reasoning", "No reasoning provided"),
+                    "missing_aspects": validation_data.get("missing_aspects", []),
+                    "search_guidance": validation_data.get("search_guidance", {}),
+                    "iteration": search_iteration + 1
+                }
+                
+                # ALSO store decision in a separate key to avoid conflicts with other workflows
+                state["experiment_paper_validation_decision"] = validation_data.get("decision", "continue")
+                
+                # Print validation results
+                print("\n" + "=" * 70)
+                print("📋 EXPERIMENT PAPER VALIDATION & DECISION RESULTS")
+                print("=" * 70)
+                print(f"🎯 Relevance Assessment: {validation_data.get('relevance_assessment', 'unknown').title()}")
+                print(f"📊 Coverage Analysis: {validation_data.get('coverage_analysis', 'unknown').title()}")
+                print(f"⭐ Quality Evaluation: {validation_data.get('quality_evaluation', 'unknown').title()}")
+                print(f"🚀 Decision: {validation_data.get('decision', 'continue').upper()}")
+                print(f"🎲 Confidence: {validation_data.get('confidence', 0):.2f}")
+                print(f"💭 Reasoning: {validation_data.get('reasoning', 'No reasoning provided')}")
+                
+                if validation_data.get('missing_aspects'):
+                    print(f"🔍 Missing Experimental Aspects: {', '.join(validation_data['missing_aspects'])}")
+                
+                if validation_data.get('decision') != 'continue':
+                    search_guidance = validation_data.get('search_guidance', {})
+                    if search_guidance.get('new_search_terms'):
+                        print(f"🔄 Suggested Search Terms: {', '.join(search_guidance['new_search_terms'])}")
+                    if search_guidance.get('focus_areas'):
+                        print(f"🎯 Focus Areas: {', '.join(search_guidance['focus_areas'])}")
+                
+                print("=" * 70)
+                
+                # Increment search iteration counter
+                state["experiment_search_iteration"] = search_iteration + 1
+                
+                # Return state after successful validation
+                return state
+                
+            except json.JSONDecodeError as e:
+                error_msg = f"Failed to parse validation JSON: {e}"
+                print(f"⚠️ {error_msg}")
+                
+                # Fallback decision based on paper quality
+                avg_score = sum(p.get('relevance_score', 0) for p in papers) / len(papers) if papers else 0
+                decision = "continue" if avg_score >= 6.0 else "search_backup"
+                
+                state["experiment_validation_results"] = {
+                    "validation_successful": False,
+                    "error": error_msg,
+                    "decision": decision,
+                    "reasoning": f"Fallback decision based on average score: {avg_score:.2f}",
+                    "iteration": search_iteration + 1
+                }
+                
+                # ALSO store decision in backup key for error cases
+                state["experiment_paper_validation_decision"] = decision
+                
+                state["experiment_search_iteration"] = search_iteration + 1
+                
+                
+        except Exception as e:
+            error_msg = f"Validation failed: {str(e)}"
+            print(f"❌ {error_msg}")
+            
+            # Default to continue on error
+            state["experiment_validation_results"] = {
+                "validation_successful": False,
+                "error": error_msg,
+                "decision": "continue",
+                "reasoning": "Error occurred, defaulting to continue",
+                "iteration": state.get("experiment_search_iteration", 0) + 1
+            }
+            
+            # ALSO store decision in backup key for error cases
+            state["experiment_paper_validation_decision"] = "continue"
+            
+            state["experiment_search_iteration"] = state.get("experiment_search_iteration", 0) + 1
+        
+        return state
+
+    def _should_continue_with_experiment_papers(self, state: ExperimentSuggestionState) -> str:
+        """Determine whether to continue with current experiment papers or search again."""
+        
+        # First try the backup decision key, then fall back to validation_results
+        decision = state.get("experiment_paper_validation_decision")
+        if decision is None:
+            validation_results = state.get("experiment_validation_results", {})
+            decision = validation_results.get("decision", "continue")
+        
+        search_iteration = state.get("experiment_search_iteration", 0)
+        
+        # Safety check: After 3 iterations, force continue to avoid infinite loops
+        if search_iteration >= 3:
+            print("� Maximum search iterations reached (3), forcing continue...")
+            return "suggest_experiments"
+        
+        # Clean up decision string
+        decision = str(decision).strip().upper()
+        
+        # Map validation decisions to workflow routing
+        if decision == "SEARCH_BACKUP":
+            print(f"� Validation decision: {decision} -> Performing backup search")
+            return "search_experiment_papers"
+        elif decision == "SEARCH_NEW":
+            print(f"� Validation decision: {decision} -> Performing new search")
+            return "generate_experiment_search_query"
+        else:
+            print(f"🔄 Validation decision: {decision} -> Continuing with current papers")
+            return "suggest_experiments"
 
     async def _suggest_experiments_node(self, state: ExperimentSuggestionState) -> ExperimentSuggestionState:
         """Node for generating comprehensive, actionable experiment suggestions."""
@@ -4986,13 +5741,37 @@ Provide the complete refined research plan:
             experimental_results = state.get("experimental_results", {})
             findings_analysis = state.get("findings_analysis", {})
             research_context = state.get("research_context", {})
+            research_direction = state.get("research_direction", {})
+            validated_papers = state.get("validated_experiment_papers", [])
+            
+            # Prepare paper context for suggestions
+            paper_context = ""
+            if validated_papers:
+                paper_context = "\n\n**Relevant Experimental Literature:**\n"
+                for i, paper in enumerate(validated_papers[:3], 1):
+                    title = paper.get('title', 'Unknown Title')
+                    score = paper.get('experimental_relevance_score', 0)
+                    content_preview = paper.get('content', '')[:500]
+                    paper_context += f"{i}. {title} (Relevance: {score:.1f}/10)\n"
+                    paper_context += f"   Key insights: {content_preview}...\n\n"
+            
+            # Extract research direction details
+            selected_direction = research_direction.get("selected_direction", {})
+            direction_text = selected_direction.get("direction", "Continue current research")
+            key_questions = selected_direction.get("key_questions", [])
+            direction_justification = selected_direction.get("justification", "")
             
             # Build comprehensive suggestions prompt
             suggestions_prompt = f"""
-            You are a senior machine learning researcher designing a comprehensive experimental roadmap. Based on the analysis below, create detailed, actionable experiment suggestions.
+            You are a senior machine learning researcher designing a comprehensive experimental roadmap. Based on the analysis and research direction below, create detailed, actionable experiment suggestions.
             
             **Research Context:**
             Original Request: "{original_prompt}"
+            
+            **Selected Research Direction:**
+            Direction: {direction_text}
+            Justification: {direction_justification}
+            Key Questions: {chr(10).join(f"• {q}" for q in key_questions[:3])}
             
             **Current Analysis:**
             {findings_analysis}
@@ -5000,130 +5779,163 @@ Provide the complete refined research plan:
             **Experimental Context:**
             {experimental_results}
             
-            Please provide a comprehensive experimental plan with the following structure:
+            {paper_context}
             
-            1. **Priority Experiments** (Top 5, ranked by impact/feasibility):
-               For each experiment:
-               - Experiment Name & Objective
-               - Hypothesis being tested
-               - Methodology (step-by-step approach)
-               - Expected outcome and success criteria
-               - Required resources (compute, time, data)
-               - Risk level (Low/Medium/High) and mitigation strategies
-               
-            2. **Ablation Studies** (3-5 key components to investigate):
-               For each study:
-               - Component to ablate/modify
-               - Why this ablation is important
-               - How to measure the impact
-               - Alternative variations to test
-               
-            3. **Hyperparameter Investigations** (Critical parameters to tune):
-               - Parameter name and current value (if known)
-               - Suggested range to explore
-               - Search strategy (grid, random, Bayesian optimization)
-               - Expected impact on performance
-               
-            4. **Architecture Experiments** (Model modifications to test):
-               - Architectural changes to investigate
-               - Rationale for each modification
-               - Implementation complexity
-               - Baseline comparison strategy
-               
-            5. **Dataset & Evaluation Experiments**:
-               - Additional datasets to test generalization
-               - Data augmentation strategies
-               - New evaluation metrics to consider
-               - Cross-validation or test set strategies
-               
-            6. **Comparative Studies** (Benchmarking against other methods):
-               - Methods/baselines to compare against
-               - Fair comparison protocols
-               - Statistical significance testing approach
-               
-            7. **Implementation Roadmap** (Recommended execution order):
-               - Phase 1 (Quick wins, 1-2 weeks)
-               - Phase 2 (Medium complexity, 1-2 months)  
-               - Phase 3 (Advanced investigations, 2-6 months)
-               
-            8. **Success Metrics & KPIs**:
-               - Primary metrics to track
-               - Secondary metrics for deeper insights
-               - Improvement thresholds that indicate success
-               
-            9. **Resource Planning**:
-               - Computational requirements (GPU hours, memory)
-               - Personnel time estimates
-               - Software/tool requirements
-               
-            10. **Risk Assessment & Contingencies**:
-                - What could go wrong with each experiment
-                - Backup plans if primary approaches fail
-                - Early stopping criteria
+            Please provide a comprehensive experimental plan in well-formatted Markdown with the following structure:
             
-            Format the response as a well-structured JSON object with detailed information for each section. Be specific, practical, and actionable. Each suggestion should be implementable by a researcher with the context provided.
+            # Experimental Roadmap
+            
+            ## 1. Priority Experiments
+            *(Top 5, ranked by impact/feasibility)*
+            
+            For each experiment, include:
+            - **Experiment Name & Objective**
+            - **Hypothesis being tested**
+            - **Methodology** (step-by-step approach)
+            - **Expected outcome and success criteria**
+            - **Required resources** (compute, time, data)
+            - **Risk level** (Low/Medium/High) and mitigation strategies
+            
+            ## 2. Ablation Studies
+            *(3-5 key components to investigate)*
+            
+            For each study:
+            - **Component to ablate/modify**
+            - **Why this ablation is important**
+            - **How to measure the impact**
+            - **Alternative variations to test**
+            
+            ## 3. Hyperparameter Investigations
+            *(Critical parameters to tune)*
+            
+            - **Parameter name and current value** (if known)
+            - **Suggested range to explore**
+            - **Search strategy** (grid, random, Bayesian optimization)
+            - **Expected impact on performance**
+            
+            ## 4. Architecture Experiments
+            *(Model modifications to test)*
+            
+            - **Architectural changes to investigate**
+            - **Rationale for each modification**
+            - **Implementation complexity**
+            - **Baseline comparison strategy**
+            
+            ## 5. Dataset & Evaluation Experiments
+            
+            - **Additional datasets** to test generalization
+            - **Data augmentation strategies**
+            - **New evaluation metrics** to consider
+            - **Cross-validation or test set strategies**
+            
+            ## 6. Comparative Studies
+            *(Benchmarking against other methods)*
+            
+            - **Methods/baselines** to compare against
+            - **Fair comparison protocols**
+            - **Statistical significance testing approach**
+            
+            ## 7. Implementation Roadmap
+            *(Recommended execution order)*
+            
+            ### Phase 1: Quick Wins (1-2 weeks)
+            - [List specific tasks]
+            
+            ### Phase 2: Medium Complexity (1-2 months)
+            - [List specific tasks]
+            
+            ### Phase 3: Advanced Investigations (2-6 months)
+            - [List specific tasks]
+            
+            ## 8. Success Metrics & KPIs
+            
+            - **Primary metrics** to track
+            - **Secondary metrics** for deeper insights
+            - **Improvement thresholds** that indicate success
+            
+            ## 9. Resource Planning
+            
+            - **Computational requirements** (GPU hours, memory)
+            - **Personnel time estimates**
+            - **Software/tool requirements**
+            
+            ## 10. Risk Assessment & Contingencies
+            
+            - **What could go wrong** with each experiment
+            - **Backup plans** if primary approaches fail
+            - **Early stopping criteria**
+            
+            Be specific, practical, and actionable. Each suggestion should be implementable by a researcher with the context provided. Use clear markdown formatting with headers, bullet points, and emphasis.
             """
             
             response = await asyncio.get_event_loop().run_in_executor(
                 None,
                 lambda: self.client.chat.completions.create(
                     model=self.model,
-                    messages=[{"role": "user", "content": suggestions_prompt}],
+                    messages=[
+                        {"role": "system", "content": "You are an expert ML researcher. Provide comprehensive experiment plans in clear, well-formatted Markdown."},
+                        {"role": "user", "content": suggestions_prompt}
+                    ],
                     temperature=0.3
                 )
             )
             
-            # Parse the suggestions
-            suggestions_text = response.choices[0].message.content.strip()
-            print(f"📝 Generated comprehensive experiment plan ({len(suggestions_text)} characters)")
-            print(suggestions_text)
+            # Get the markdown suggestions
+            suggestions_markdown = response.choices[0].message.content.strip()
+            print(f"📝 Generated comprehensive experiment plan ({len(suggestions_markdown)} characters)")
             
-            # Try to extract JSON from response
-            suggestions_json = {}
-            try:
-                import json
-                # Look for JSON in the response
-                start = suggestions_text.find('{')
-                end = suggestions_text.rfind('}') + 1
-                if start != -1 and end != -1:
-                    suggestions_json = json.loads(suggestions_text[start:end])
-                    print(f"✅ Successfully parsed {len(suggestions_json)} suggestion categories")
-                else:
-                    # Try to create a structured response from the text
-                    suggestions_json = self._create_fallback_experiment_suggestions(original_prompt, findings_analysis)
-                    print("⚠️ Using fallback structured suggestions")
-                    
-            except Exception as e:
-                print(f"⚠️ JSON parsing failed: {e}, creating structured fallback")
-                suggestions_json = self._create_fallback_experiment_suggestions(original_prompt, findings_analysis)
+            # Create a structured summary for state management while keeping the full markdown
+            experiment_summary = {
+                "format": "markdown",
+                "full_plan": suggestions_markdown,
+                "generated_at": "experiment_suggestions_complete",
+                "has_sections": {
+                    "priority_experiments": "Priority Experiments" in suggestions_markdown,
+                    "ablation_studies": "Ablation Studies" in suggestions_markdown,
+                    "hyperparameter_investigations": "Hyperparameter" in suggestions_markdown,
+                    "architecture_experiments": "Architecture Experiments" in suggestions_markdown,
+                    "evaluation_experiments": "Dataset" in suggestions_markdown or "Evaluation" in suggestions_markdown,
+                    "comparative_studies": "Comparative Studies" in suggestions_markdown,
+                    "implementation_roadmap": "Implementation Roadmap" in suggestions_markdown or "Phase" in suggestions_markdown,
+                    "success_metrics": "Success Metrics" in suggestions_markdown or "KPIs" in suggestions_markdown,
+                    "resource_planning": "Resource Planning" in suggestions_markdown,
+                    "risk_assessment": "Risk Assessment" in suggestions_markdown or "Contingencies" in suggestions_markdown
+                }
+            }
             
-            # Extract prioritized experiments for easy access
-            prioritized_experiments = suggestions_json.get("priority_experiments", [])
-            if isinstance(prioritized_experiments, dict):
-                # Convert dict to list if needed
-                prioritized_experiments = list(prioritized_experiments.values()) if prioritized_experiments else []
+            print(f"✅ Generated experimental roadmap with {sum(experiment_summary['has_sections'].values())} sections")
             
-            # Create implementation roadmap
+            # Extract some key priority experiments for quick access (simple text parsing)
+            prioritized_experiments = []
+            if "Priority Experiments" in suggestions_markdown:
+                # Simple extraction of experiment titles for state tracking
+                import re
+                experiment_matches = re.findall(r'\*\*([^*]+)\*\*', suggestions_markdown)
+                prioritized_experiments = experiment_matches[:5] if experiment_matches else []
+            
+            # Create implementation roadmap from the markdown
             implementation_roadmap = {
                 "total_experiments": len(prioritized_experiments),
-                "estimated_timeline": suggestions_json.get("implementation_roadmap", {}).get("total_timeline", "3-6 months"),
-                "phases": suggestions_json.get("implementation_roadmap", {}),
+                "estimated_timeline": "3-6 months",  # Default timeline
+                "format": "markdown",
                 "next_immediate_actions": prioritized_experiments[:2] if prioritized_experiments else []
             }
             
-            # Generate formatted summary
-            formatted_summary = self._format_experiment_suggestions_summary(suggestions_json, original_prompt)
+            # Generate formatted summary for markdown
+            formatted_summary = self._format_experiment_suggestions_summary_markdown(suggestions_markdown, original_prompt)
             
             # Store results
             return {
                 **state,
-                "experiment_suggestions": suggestions_json,
+                "experiment_suggestions": suggestions_markdown,
+                "experiment_summary": experiment_summary,
                 "prioritized_experiments": prioritized_experiments,
                 "implementation_roadmap": implementation_roadmap,
                 "final_outputs": {
                     "formatted_summary": formatted_summary,
-                    "full_suggestions": suggestions_text,
-                    "structured_plan": json.dumps(suggestions_json, indent=2)
+                    "full_plan": suggestions_markdown,
+                    "format": "markdown",
+                    "section_count": sum(experiment_summary["has_sections"].values())
                 },
                 "current_step": "experiments_suggested"
             }
@@ -5255,13 +6067,70 @@ Provide the complete refined research plan:
             
         except Exception as e:
             return f"# Experiment Suggestions Generated\n\nFull details available in structured format.\n\nError creating summary: {str(e)}"
+    
+    def _format_experiment_suggestions_summary_markdown(self, suggestions_markdown: str, original_prompt: str) -> str:
+        """Format markdown experiment suggestions into a readable summary."""
+        try:
+            summary_parts = []
+            summary_parts.append("# 🧪 COMPREHENSIVE EXPERIMENT PLAN")
+            summary_parts.append("=" * 60)
+            summary_parts.append(f"**Research Context:** {original_prompt[:100]}...")
+            summary_parts.append("")
+            
+            # Extract key sections from markdown for summary
+            lines = suggestions_markdown.split('\n')
+            current_section = None
+            priority_experiments = []
+            implementation_info = []
+            resource_info = []
+            
+            for line in lines:
+                line = line.strip()
+                if line.startswith('##') or line.startswith('#'):
+                    current_section = line.lower()
+                elif current_section and 'priority' in current_section and line.startswith('-'):
+                    priority_experiments.append(line.replace('- **', '').replace('**', ''))
+                elif current_section and ('implementation' in current_section or 'roadmap' in current_section) and line.startswith('-'):
+                    implementation_info.append(line)
+                elif current_section and 'resource' in current_section and line.startswith('-'):
+                    resource_info.append(line)
+            
+            # Priority experiments summary
+            if priority_experiments:
+                summary_parts.append("## 🎯 TOP PRIORITY EXPERIMENTS")
+                for i, exp in enumerate(priority_experiments[:5], 1):
+                    exp_clean = exp.split(':')[0] if ':' in exp else exp
+                    summary_parts.append(f"{i}. {exp_clean}")
+                summary_parts.append("")
+            
+            # Implementation roadmap summary
+            if implementation_info:
+                summary_parts.append("## 📋 IMPLEMENTATION HIGHLIGHTS")
+                for info in implementation_info[:3]:
+                    summary_parts.append(info)
+                summary_parts.append("")
+            
+            # Resource requirements summary
+            if resource_info:
+                summary_parts.append("## 💰 KEY RESOURCE REQUIREMENTS")
+                for resource in resource_info[:3]:
+                    summary_parts.append(resource)
+                summary_parts.append("")
+            
+            summary_parts.append("## 📊 SUCCESS TRACKING")
+            summary_parts.append("- Performance improvement metrics")
+            summary_parts.append("- Statistical significance validation")
+            summary_parts.append("- Computational efficiency gains")
+            summary_parts.append("")
+            
+            summary_parts.append("---")
+            summary_parts.append("💡 **Next Steps:** Start with highest priority experiment and establish baseline metrics.")
+            summary_parts.append("📖 **Full Details:** See the complete markdown plan for detailed methodologies and implementation guidance.")
+            
+            return "\n".join(summary_parts)
+            
         except Exception as e:
-            print(f"❌ Error in suggest_experiments_node: {str(e)}")
-            return {
-                **state,
-                "errors": state.get("errors", []) + [f"Suggestions error: {str(e)}"],
-                "current_step": "suggestions_error"
-            }
+            return f"# Experiment Suggestions Generated\n\nMarkdown format experiment plan available.\n\nError creating summary: {str(e)}"
     
 class MLResearcherTool:
     """🆕 Simplified wrapper for easy access to all workflows."""
@@ -5286,10 +6155,6 @@ class MLResearcherTool:
     async def analyze_task(self, prompt: str) -> Dict[str, Any]:
         """Analyze any research task using intelligent routing."""
         return await self.core.analyze_research_task(prompt)
-    
-    async def suggest_experiments(self, prompt: str, experimental_results: Dict[str, Any] = None) -> Dict[str, Any]:
-        """Analyze experimental results and suggest follow-up experiments."""
-        return await self.core.analyze_and_suggest_experiment(prompt, experimental_results)
 
 
 async def main():

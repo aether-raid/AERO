@@ -117,25 +117,25 @@ class ExperimentTreeSystem:
         
         prompt = f"""You are an expert researcher. Generate a high-level experimental strategy based on the hypothesis and relevant literature.
 
-HYPOTHESIS: {hypothesis}
+            HYPOTHESIS: {hypothesis}
 
-RESEARCH CONTEXT:
-- Goal: {self.research_context.get('research_goal', 'Not specified')}
-- Variables: {self.research_context.get('variables', 'Not specified')}
-- Additional info: {self.research_context.get('relevant_info', 'None')}
+            RESEARCH CONTEXT:
+            - Goal: {self.research_context.get('research_goal', 'Not specified')}
+            - Variables: {self.research_context.get('variables', 'Not specified')}
+            - Additional info: {self.research_context.get('relevant_info', 'None')}
 
-{literature_context}
+            {literature_context}
 
-Generate a HIGH-LEVEL STRATEGY that:
-1. Identifies 2-3 broad experimental avenues/approaches
-2. References relevant literature using numbered citations [1], [2], etc.
-3. Outlines general methodology directions
-4. Does NOT include specific implementation details
+            Generate a HIGH-LEVEL STRATEGY that:
+            1. Identifies 2-3 broad experimental avenues/approaches
+            2. References relevant literature using numbered citations [1], [2], etc.
+            3. Outlines general methodology directions
+            4. Does NOT include specific implementation details
 
-When referencing literature, use numbered citations in format: [1], [2], [3], etc. ONLY based on the literature list above.
+            When referencing literature, use numbered citations in format: [1], [2], [3], etc. ONLY based on the literature list above.
 
-Format as clear, structured text (not JSON).
-"""
+            Format as clear, structured text (not JSON).
+        """
 
         content = await get_llm_response([{"role": "user", "content": prompt}])
         citations = self.extract_citations(content)
@@ -156,24 +156,24 @@ Format as clear, structured text (not JSON).
         
         prompt = f"""You are an expert researcher. Based on the parent strategy and literature, generate a detailed methodology.
 
-HYPOTHESIS: {hypothesis}
+            HYPOTHESIS: {hypothesis}
 
-PARENT STRATEGY:
-{parent_strategy.content}
+            PARENT STRATEGY:
+            {parent_strategy.content}
 
-{literature_context}
+            {literature_context}
 
-Generate a MID-LEVEL METHODOLOGY that:
-1. Elaborates on ONE specific avenue from the parent strategy
-2. Defines experimental design, variables, and general procedures
-3. References supporting literature using numbered citations [1], [2], etc.
-4. Specifies data collection and analysis approaches
-5. Does NOT include specific implementation code or exact parameters
+            Generate a MID-LEVEL METHODOLOGY that:
+            1. Elaborates on ONE specific avenue from the parent strategy
+            2. Defines experimental design, variables, and general procedures
+            3. References supporting literature using numbered citations [1], [2], etc.
+            4. Specifies data collection and analysis approaches
+            5. Does NOT include specific implementation code or exact parameters
 
-When referencing literature, use numbered citations in format: [1], [2], [3], etc. ONLY based on the literature list above.
+            When referencing literature, use numbered citations in format: [1], [2], [3], etc. ONLY based on the literature list above.
 
-Format as structured methodology description.
-"""
+            Format as structured methodology description.
+        """
 
         content = await get_llm_response([{"role": "user", "content": prompt}])
         citations = self.extract_citations(content)
@@ -194,24 +194,24 @@ Format as structured methodology description.
         
         prompt = f"""You are an expert researcher. Based on the parent methodology and literature, generate a concrete implementation plan.
 
-HYPOTHESIS: {hypothesis}
+            HYPOTHESIS: {hypothesis}
 
-PARENT METHODOLOGY:
-{parent_methodology.content}
+            PARENT METHODOLOGY:
+            {parent_methodology.content}
 
-{literature_context}
+            {literature_context}
 
-Generate a CONCRETE IMPLEMENTATION that:
-1. Provides specific, executable experimental procedures
-2. Includes exact datasets, algorithms, and hyperparameters
-3. Specifies evaluation metrics and statistical tests
-4. References literature for technical choices using numbered citations [1], [2], etc.
-5. Must be realistically executable
+            Generate a CONCRETE IMPLEMENTATION that:
+            1. Provides specific, executable experimental procedures
+            2. Includes exact datasets, algorithms, and hyperparameters
+            3. Specifies evaluation metrics and statistical tests
+            4. References literature for technical choices using numbered citations [1], [2], etc.
+            5. Must be realistically executable
 
-When referencing literature, use numbered citations in format: [1], [2], [3], etc. ONLY based on the literature list above.
+            When referencing literature, use numbered citations in format: [1], [2], [3], etc. ONLY based on the literature list above.
 
-Format as detailed implementation plan with specific steps.
-"""
+            Format as detailed implementation plan with specific steps.
+        """
 
         content = await get_llm_response([{"role": "user", "content": prompt}])
         citations = self.extract_citations(content)
@@ -283,22 +283,22 @@ Format as detailed implementation plan with specific steps.
 
         prompt = f"""You are an expert research evaluator. Score the following {level}-level experiment design on a 0–100 scale for each criterion.
 
-        Criteria:
-        1. Clarity & Organization – Is the design clearly stated, logically structured, and well-organized? Does it define key concepts, variables, and evaluation strategy?  
-        2. Feasibility & Reproducibility – Can the experiment realistically be executed with available data, compute, and time? Are enough details provided for others to replicate it?  
-        3. Novelty & Significance – Does it explore something new or provide potential for meaningful scientific insight? How original and impactful is the approach?  
-        4. Soundness & Alignment – Is the design methodologically sound and does it directly test the stated hypothesis? Does it provide strong evidence for the research question?  
+            Criteria:
+            1. Clarity & Organization – Is the design clearly stated, logically structured, and well-organized? Does it define key concepts, variables, and evaluation strategy?  
+            2. Feasibility & Reproducibility – Can the experiment realistically be executed with available data, compute, and time? Are enough details provided for others to replicate it?  
+            3. Novelty & Significance – Does it explore something new or provide potential for meaningful scientific insight? How original and impactful is the approach?  
+            4. Soundness & Alignment – Is the design methodologically sound and does it directly test the stated hypothesis? Does it provide strong evidence for the research question?  
 
-        Instructions:
-        - Return ONLY 4 integers between 0–100, separated by commas, in this order: 
-        Clarity, Feasibility, Novelty, Soundness
-        
-        HYPOTHESIS: {hypothesis}
+            Instructions:
+            - Return ONLY 4 integers between 0–100, separated by commas, in this order: 
+            Clarity, Feasibility, Novelty, Soundness
+            
+            HYPOTHESIS: {hypothesis}
 
-        EXPERIMENT DESIGN ({level}):
-        {content}
+            EXPERIMENT DESIGN ({level}):
+            {content}
 
-        {literature_context}
+            {literature_context}
         """
 
         messages = [
