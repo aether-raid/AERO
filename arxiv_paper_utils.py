@@ -326,7 +326,7 @@ class ArxivPaperProcessor:
             print(f"❌ Error downloading PDF for {paper_info['title'][:50]}...: {e}")
             return paper_info
     
-    async def score_paper_relevance(self, paper_title: str, paper_content: str, original_query: str) -> float:
+    async def score_paper_relevance(self, paper_title: str, paper_content: str, original_query: str, custom_prompt: str = None) -> float:
         """LLM relevance score in [1.0, 10.0]. Returns a float only."""
         # Keep prompts lean; truncate huge inputs to control tokens
         MAX_CHARS = 8000
@@ -335,7 +335,16 @@ class ArxivPaperProcessor:
         #print(content)
         query = (original_query or "").strip()[:2000]
 
-        user_prompt = f"""
+        # Use custom prompt if provided, otherwise use default prompt
+        if custom_prompt:
+            user_prompt = custom_prompt.format(
+                query=query,
+                title=title,
+                content=content
+            )
+        else:
+            # Default prompt (original logic)
+            user_prompt = f"""
 You are an expert ML librarian. Score how relevant the paper is to the user's research query on a 1–10 scale.
 
 OUTPUT FORMAT (STRICT):
@@ -407,7 +416,7 @@ Paper content:
                 else:
                     return 1.0
     
-    async def rank_papers_by_relevance(self, papers: List[Dict], original_query: str) -> List[Dict]:
+    async def rank_papers_by_relevance(self, papers: List[Dict], original_query: str, custom_prompt: str = None) -> List[Dict]:
         """Score and rank papers by relevance using cosine similarity (fast, deterministic)."""
         print("\n🎯 Scoring papers for relevance using cosine similarity...")
         
@@ -415,11 +424,12 @@ Paper content:
         async def score_paper(i, paper):
             print(f"⏳ Scoring paper {i}/{len(papers)}: {paper['title'][:50]}...")
             
-            # Use the new cosine similarity scoring method
+            # Use the new cosine similarity scoring method with optional custom prompt
             relevance_score = await self.score_paper_relevance(
                 paper['title'], 
                 paper.get('summary', ''),  # Use summary instead of content for initial ranking
-                original_query
+                original_query,
+                custom_prompt  # Pass through the custom prompt
             )
             
             paper['relevance_score'] = relevance_score
@@ -546,16 +556,7 @@ Paper content:
         body, refs = self.split_body_and_references(content)
         sections = split_into_sections(body)
 
-        #print("==="*50)
-        #print("Body and References split:")
-       # print("==="*50)
-      #  print("Body:")
-     #   print(body)
-       # print("==="*20)
-        #print("References:")
-        #print(refs)
 
-        #print(content)
         all_chunks = []
         chunk_metadata = []
         for sec_idx, section in enumerate(sections):

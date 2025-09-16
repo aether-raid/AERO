@@ -401,6 +401,115 @@ class MLResearcherLangGraph:
         
         return ranking_context
     
+    def _create_custom_ranking_prompt(self, prompt_type: str = "default") -> str:
+        """Create a custom ranking prompt based on prompt type."""
+        
+        if prompt_type == "experimental":
+            return """
+                You are an expert experimental methodology researcher.  
+                Your task: Estimate how relevant this paper is to **experimental research needs** using ONLY the paper’s title and summary (abstract).  
+
+                OUTPUT FORMAT (STRICT):
+                - Return EXACTLY one floating-point number with ONE decimal (e.g., 8.7).  
+                - No words, no JSON, no units, no symbols, no explanation.  
+                - Single line only (no leading/trailing spaces or extra lines).  
+
+                SCORING CRITERIA (use inference from title/summary):  
+                - methodology_relevance (40%): Does the summary explicitly mention experimental methodology, benchmarks, protocols, or evaluation setups?  
+                - experimental_evidence (30%): Does it mention results, experiments, performance comparisons, or ablation studies?  
+                - implementation_guidance (20%): Does it provide or strongly imply practical details like datasets, code availability, reproducibility, or implementation notes?  
+                - research_alignment (10%): Does it align with the given research direction and questions?  
+
+                COMPUTE:  
+                - Let m,e,i,r ∈ [0,1], estimated from the title/summary.  
+                - score = round((0.40*m + 0.30*e + 0.20*i + 0.10*r) * 10, 1).  
+                - If the title/summary clearly lacks experimental content (all four < 0.15), output **1.0**.  
+                - Clip final result to [1.0, 10.0].  
+
+                PRIORITIZATION:  
+                - Favor papers with explicit mention of **empirical studies, benchmarks, datasets, or evaluation frameworks**.  
+                - Penalize papers that are purely theoretical, conceptual, or survey-style with no experimental grounding.  
+                Research context:
+                \"\"\"{query}\"\"\"
+
+                Paper title:
+                \"\"\"{title}\"\"\"
+
+                Paper summary:
+                \"\"\"{content}\"\"\"
+            """.strip()
+        
+        elif prompt_type == "model_suggestion":
+            return """
+                You are an expert ML model selection researcher. Score how relevant this paper is to model selection and architecture research on a 1–10 scale.
+
+                OUTPUT FORMAT (STRICT):
+                - Return EXACTLY one floating-point number with ONE decimal (e.g., 8.7).
+                - No words, no JSON, no units, no symbols, no explanation.
+                - Single line only (no leading/trailing spaces or extra lines).
+
+                MODEL FOCUS SCORING - assign four subscores in [0,1]:
+                - architecture_relevance (40%): discusses relevant model architectures, neural network designs, or ML approaches
+                - performance_evidence (30%): provides performance benchmarks, comparisons, or evaluation results
+                - implementation_details (20%): includes implementation specifics, hyperparameters, training procedures, or code
+                - task_alignment (10%): addresses similar tasks, domains, or application requirements
+
+                Compute:
+                - Let a,p,i,t ∈ [0,1].
+                - score = round((0.40*a + 0.30*p + 0.20*i + 0.10*t) * 10, 1).
+                - If clearly unrelated to models/architectures (all four < 0.15), output 1.0.
+                - Clip to [1.0, 10.0].
+                - Prioritize papers with concrete model architectures and performance data.
+
+                Research context:
+                \"\"\"{query}\"\"\"
+
+                Paper title:
+                \"\"\"{title}\"\"\"
+
+                Paper summary:
+                \"\"\"{content}\"\"\"
+            """.strip()
+                        
+        else:  # default prompt
+            return None  # Use the original prompt in arxiv_paper_utils.py
+    
+    def set_custom_ranking_prompt(self, custom_prompt: str) -> None:
+        """Set a custom ranking prompt to be used for paper relevance scoring.
+        
+        Args:
+            custom_prompt (str): Custom prompt template that must include {query}, {title}, and {content} placeholders.
+                                Example: 'Score this paper on relevance to {query}. Title: {title}. Content: {content}'
+        """
+        # Store the custom prompt for later use
+        self._user_custom_prompt = custom_prompt
+        print(f"✅ Custom ranking prompt set successfully!")
+        print(f"📝 Preview: {custom_prompt[:100]}...")
+    
+    def get_available_prompt_types(self) -> list:
+        """Get list of available built-in prompt types."""
+        return ["default", "experimental", "model_suggestion"]
+    
+    async def rank_papers_with_custom_prompt(self, papers: list, query: str, custom_prompt: str = None) -> list:
+        """Rank papers using a custom prompt.
+        
+        Args:
+            papers (list): List of paper dictionaries
+            query (str): Research query/context  
+            custom_prompt (str, optional): Custom prompt to use. If None, uses stored custom prompt or default.
+            
+        Returns:
+            list: Ranked papers with relevance scores
+        """
+        if not self.arxiv_processor:
+            print("❌ ArXiv processor not available")
+            return papers
+            
+        # Use provided custom prompt, stored prompt, or default
+        prompt_to_use = custom_prompt or getattr(self, '_user_custom_prompt', None)
+        
+        return await self.arxiv_processor.rank_papers_by_relevance(papers, query, prompt_to_use)
+    
     def _build_router_graph(self) -> StateGraph:
         """Build the router workflow to decide which main workflow to use."""
         workflow = StateGraph(RouterState)
@@ -549,23 +658,49 @@ class MLResearcherLangGraph:
 
         # Add nodes for experiment suggestion workflow
         workflow.add_node("analyze_findings", self._analyze_experiment_findings_node)
+        workflow.add_node("validate_analysis", self._validate_analysis_node)
         workflow.add_node("decide_research_direction", self._decide_research_direction_node)
+        workflow.add_node("validate_research_direction", self._validate_research_direction_node)
         workflow.add_node("generate_experiment_search_query", self._generate_experiment_search_query_node)
         workflow.add_node("search_experiment_papers", self._search_experiment_papers_node)
         workflow.add_node("validate_experiment_papers", self._validate_experiment_papers_node)
-        workflow.add_node("suggest_experiments", self._suggest_experiments_node)
+        workflow.add_node("suggest_experiments", self._suggest_experiments_tree_node)
+        workflow.add_node("suggest_experiments_iteration", self._suggest_experiments_tree_node)  # Separate node for iteration path
+        workflow.add_node("validate_experiments", self._validate_experiments_node)
 
         # Define the flow
         workflow.set_entry_point("analyze_findings")
-        workflow.add_edge("analyze_findings", "decide_research_direction")
-        workflow.add_edge("decide_research_direction", "generate_experiment_search_query")
+        workflow.add_edge("analyze_findings", "validate_analysis")
+        
+        # Conditional edge after analysis validation - use next_node field
+        workflow.add_conditional_edges(
+            "validate_analysis",
+            lambda state: state.get("next_node", "analyze_findings"),
+            {
+                "decide_research_direction": "decide_research_direction",  # Analysis is valid, continue
+                "analyze_findings": "analyze_findings"  # Analysis needs improvement, iterate
+            }
+        )
+        
+        workflow.add_edge("decide_research_direction", "validate_research_direction")
+        
+        # Conditional edge after research direction validation - use next_node field
+        workflow.add_conditional_edges(
+            "validate_research_direction",
+            lambda state: state.get("next_node", "decide_research_direction"),
+            {
+                "generate_experiment_search_query": "generate_experiment_search_query",  # Direction is valid, continue
+                "decide_research_direction": "decide_research_direction"  # Direction needs refinement, iterate
+            }
+        )
+        
         workflow.add_edge("generate_experiment_search_query", "search_experiment_papers")
         workflow.add_edge("search_experiment_papers", "validate_experiment_papers")
         
-        # Conditional edge after validation - decide whether to continue or search again
+        # Conditional edge after validation - use next_node field  
         workflow.add_conditional_edges(
             "validate_experiment_papers",
-            self._should_continue_with_experiment_papers,
+            lambda state: state.get("next_node", "suggest_experiments"),
             {
                 "suggest_experiments": "suggest_experiments",           # Papers are good, continue with suggestions
                 "search_experiment_papers": "search_experiment_papers", # Keep current papers, search for backup
@@ -573,7 +708,18 @@ class MLResearcherLangGraph:
             }
         )
         
-        workflow.add_edge("suggest_experiments", END)
+        workflow.add_edge("suggest_experiments", "validate_experiments")
+        workflow.add_edge("suggest_experiments_iteration", "validate_experiments")  # Iteration path
+        
+        # Conditional edge after experiment validation - use next_node field
+        workflow.add_conditional_edges(
+            "validate_experiments",
+            lambda state: state.get("next_node", "suggest_experiments_iteration"),
+            {
+                "END": END,  # Experiments are valid, finish workflow
+                "suggest_experiments_iteration": "suggest_experiments_iteration"  # Experiments need refinement, iterate
+            }
+        )
 
         return workflow.compile()
 
@@ -1354,7 +1500,10 @@ class MLResearcherLangGraph:
                 ranking_context = self._create_ranking_context_from_analysis(state)
                 print(f"📊 Using enhanced context for ranking: {ranking_context[:100]}...")
                 
-                papers = await self.arxiv_processor.rank_papers_by_relevance(papers, ranking_context)
+                # Create custom prompt for model suggestion ranking
+                custom_prompt = self._create_custom_ranking_prompt("model_suggestion")
+                
+                papers = await self.arxiv_processor.rank_papers_by_relevance(papers, ranking_context, custom_prompt)
                 
                 # Stage 3: Download full content for top 5 papers only
                 top_papers = papers  # Get top 5 papers
@@ -3006,10 +3155,10 @@ Specific improvements needed:
             print("🔄 Falling back to LLM-only validation...")
             try:
                 fallback_content = f"""
-Research Problem: {state['current_problem'].get('statement', '')}
-Based on your knowledge, is this problem already solved? Respond with JSON:
-{{"status": "solved|open", "confidence": 0.0-1.0, "reasoning": "brief explanation", "recommendation": "accept|reject"}}
-"""
+                    Research Problem: {state['current_problem'].get('statement', '')}
+                    Based on your knowledge, is this problem already solved? Respond with JSON:
+                    {{"status": "solved|open", "confidence": 0.0-1.0, "reasoning": "brief explanation", "recommendation": "accept|reject"}}
+                """
                 fallback_response = await asyncio.get_event_loop().run_in_executor(
                     None,
                     lambda: self.client.chat.completions.create(
@@ -3092,14 +3241,14 @@ Based on your knowledge, is this problem already solved? Respond with JSON:
             # Update feedback context with strategic insights
             current_context = state.get("feedback_context", "")
             enhanced_context = f"""
-{current_context}
+                {current_context}
 
-🎯 STRATEGIC ADAPTATION (after {total_rejections} rejections):
-Most frequent issue: {most_common_reason} (occurred {rejection_patterns.get(most_common_reason, 0)} times)
-Strategy: {strategic_guidance}
+                🎯 STRATEGIC ADAPTATION (after {total_rejections} rejections):
+                Most frequent issue: {most_common_reason} (occurred {rejection_patterns.get(most_common_reason, 0)} times)
+                Strategy: {strategic_guidance}
 
-🔄 TACTICAL ADJUSTMENTS:
-"""
+                🔄 TACTICAL ADJUSTMENTS:
+            """
             
             # Add specific tactical adjustments based on latest feedback
             latest_guidance = latest_feedback.get("specific_guidance", "")
@@ -3217,147 +3366,147 @@ Strategy: {strategic_guidance}
                 
                 refinement_context = f"""
 
-**REFINEMENT CONTEXT:**
-This is refinement iteration {state['refinement_count']}. You are improving a previous research plan based on expert critique feedback.
+                    **REFINEMENT CONTEXT:**
+                    This is refinement iteration {state['refinement_count']}. You are improving a previous research plan based on expert critique feedback.
 
-**PREVIOUS RESEARCH PLAN:**
-{previous_plan}...
+                    **PREVIOUS RESEARCH PLAN:**
+                    {previous_plan}...
 
-**CRITIQUE FEEDBACK TO ADDRESS:**
-- Overall Score: {critique.get('overall_score', 0)}/10
-- Major Issues: {critique.get('major_issues', [])}
-- Specific Suggestions: {critique.get('suggestions', [])}
-- Identified Strengths to Preserve: {critique.get('strengths', [])}
+                    **CRITIQUE FEEDBACK TO ADDRESS:**
+                    - Overall Score: {critique.get('overall_score', 0)}/10
+                    - Major Issues: {critique.get('major_issues', [])}
+                    - Specific Suggestions: {critique.get('suggestions', [])}
+                    - Identified Strengths to Preserve: {critique.get('strengths', [])}
 
-**REFINEMENT INSTRUCTIONS:**
-1. Address each major issue mentioned in the critique
-2. Implement the specific improvement suggestions
-3. Preserve and build upon the identified strengths
-4. Maintain the overall structure but enhance problematic areas
-5. Focus on making the plan more feasible, detailed, and academically rigorous
+                    **REFINEMENT INSTRUCTIONS:**
+                    1. Address each major issue mentioned in the critique
+                    2. Implement the specific improvement suggestions
+                    3. Preserve and build upon the identified strengths
+                    4. Maintain the overall structure but enhance problematic areas
+                    5. Focus on making the plan more feasible, detailed, and academically rigorous
 
-"""
-            
+              """
+
             content = f"""
-You are an expert research project manager and academic research planner. Your task is to create a comprehensive, actionable research plan based on a specifically selected research problem that has been systematically identified and verified through web search analysis.
-{refinement_context}
-**RESEARCH CONTEXT:**
+                You are an expert research project manager and academic research planner. Your task is to create a comprehensive, actionable research plan based on a specifically selected research problem that has been systematically identified and verified through web search analysis.
+                {refinement_context}
+                **RESEARCH CONTEXT:**
 
-**Research Domain/Query:** {clean_prompt}
+                **Research Domain/Query:** {clean_prompt}
 
-**SELECTED RESEARCH PROBLEM (Web-Search Validated):**
-{clean_problems[:4000]}
+                **SELECTED RESEARCH PROBLEM (Web-Search Validated):**
+                {clean_problems[:4000]}
 
-**IMPORTANT NOTE:** This problem has been user-selected from multiple validated options and has been verified using real-time web search. Pay special attention to:
-- Web search validation provides current market/research validation
-- Relevant resources and URLs have been identified for immediate follow-up
-- Current research state information is based on actual web findings
-- Use the provided URLs and existing approaches as starting points for literature review
+                **IMPORTANT NOTE:** This problem has been user-selected from multiple validated options and has been verified using real-time web search. Pay special attention to:
+                - Web search validation provides current market/research validation
+                - Relevant resources and URLs have been identified for immediate follow-up
+                - Current research state information is based on actual web findings
+                - Use the provided URLs and existing approaches as starting points for literature review
 
-**YOUR TASK:**
-Create a comprehensive research plan that leverages both the selected problem AND the web search findings. The plan should focus deeply on this specific problem, utilizing its research potential, feasibility, and the current state of research as revealed by web analysis.
+                **YOUR TASK:**
+                Create a comprehensive research plan that leverages both the selected problem AND the web search findings. The plan should focus deeply on this specific problem, utilizing its research potential, feasibility, and the current state of research as revealed by web analysis.
 
-**REQUIRED STRUCTURE:**
+                **REQUIRED STRUCTURE:**
 
-## EXECUTIVE SUMMARY
-- Brief overview of the research objectives
-- Summary of the selected web-validated research problem
-- Research prioritization strategy based on web search findings
-- Expected timeline and outcomes
+                ## EXECUTIVE SUMMARY
+                - Brief overview of the research objectives
+                - Summary of the selected web-validated research problem
+                - Research prioritization strategy based on web search findings
+                - Expected timeline and outcomes
 
-## WEB-INFORMED PROBLEM ANALYSIS
-- Detailed analysis of the selected research problem
-- Current research activity level based on web search insights
-- Assessment of research gaps and opportunities
-- Key resources and URLs identified for immediate follow-up
+                ## WEB-INFORMED PROBLEM ANALYSIS
+                - Detailed analysis of the selected research problem
+                - Current research activity level based on web search insights
+                - Assessment of research gaps and opportunities
+                - Key resources and URLs identified for immediate follow-up
 
-## PHASE 1: FOUNDATION & LITERATURE REVIEW (First ~15% of Project Timeline)
-Comprehensive literature review strategy starting with URLs found during validation.
+                ## PHASE 1: FOUNDATION & LITERATURE REVIEW (First ~15% of Project Timeline)
+                Comprehensive literature review strategy starting with URLs found during validation.
 
-- Key papers and research groups to study (use provided relevant resources).
+                - Key papers and research groups to study (use provided relevant resources).
 
-- Knowledge gap validation through the identified web resources.
+                - Knowledge gap validation through the identified web resources.
 
-- Initial research question refinement based on current state analysis.
+                - Initial research question refinement based on current state analysis.
 
-- Specific tasks and deliverables for this phase.
+                - Specific tasks and deliverables for this phase.
 
-## PHASE 2: PROBLEM FORMULATION & EXPERIMENTAL DESIGN (Next ~10% of Project Timeline)
-Formalize specific research hypotheses for priority problems.
+                ## PHASE 2: PROBLEM FORMULATION & EXPERIMENTAL DESIGN (Next ~10% of Project Timeline)
+                Formalize specific research hypotheses for priority problems.
 
-- Design initial experiments or theoretical approaches.
+                - Design initial experiments or theoretical approaches.
 
-- Identify required datasets, tools, and resources (leverage web-found resources).
+                - Identify required datasets, tools, and resources (leverage web-found resources).
 
-- Risk assessment for each chosen problem.
+                - Risk assessment for each chosen problem.
 
-- Specific tasks and deliverables for this phase.
+                - Specific tasks and deliverables for this phase.
 
-## PHASE 3: ACTIVE RESEARCH & DEVELOPMENT (Core ~50% of Project Timeline)
-Research execution plan for each chosen problem.
+                ## PHASE 3: ACTIVE RESEARCH & DEVELOPMENT (Core ~50% of Project Timeline)
+                Research execution plan for each chosen problem.
 
-- Experimental design and methodology informed by web-discovered approaches.
+                - Experimental design and methodology informed by web-discovered approaches.
 
-- Progress milestones and validation metrics.
+                - Progress milestones and validation metrics.
 
-- Collaboration strategies with research groups identified through web search.
+                - Collaboration strategies with research groups identified through web search.
 
-- Build upon existing work found through URL analysis.
+                - Build upon existing work found through URL analysis.
 
-- Expected outcomes and publications plan.
+                - Expected outcomes and publications plan.
 
-- Specific tasks and deliverables for this phase.
+                - Specific tasks and deliverables for this phase.
 
-## PHASE 4: EVALUATION, SYNTHESIS & DISSEMINATION (Final ~25% of Project Timeline)
-Results evaluation framework comparing against the current state identified via web search.
+                ## PHASE 4: EVALUATION, SYNTHESIS & DISSEMINATION (Final ~25% of Project Timeline)
+                Results evaluation framework comparing against the current state identified via web search.
 
-- Validation of research contributions against existing work found online.
+                - Validation of research contributions against existing work found online.
 
-- Publication and dissemination strategy positioning against existing literature.
+                - Publication and dissemination strategy positioning against existing literature.
 
-- Future research directions based on gaps identified through web analysis.
+                - Future research directions based on gaps identified through web analysis.
 
-- Expected impact assessment relative to the current research landscape.
+                - Expected impact assessment relative to the current research landscape.
 
-- Specific tasks and deliverables for this phase.
+                - Specific tasks and deliverables for this phase.
 
-## WEB-INFORMED RESOURCE REQUIREMENTS
-- Computational resources needed (consider approaches found in web search)
-- Datasets and tools required (prioritize those referenced in found URLs)
-- Personnel requirements with expertise in areas identified through research
-- Budget estimates informed by current research approaches
-- Infrastructure needs based on state-of-the-art identified online
+                ## WEB-INFORMED RESOURCE REQUIREMENTS
+                - Computational resources needed (consider approaches found in web search)
+                - Datasets and tools required (prioritize those referenced in found URLs)
+                - Personnel requirements with expertise in areas identified through research
+                - Budget estimates informed by current research approaches
+                - Infrastructure needs based on state-of-the-art identified online
 
-## WEB-VALIDATED RISK MITIGATION
-- Challenges identified through analysis of existing research attempts
-- Learn from failures/limitations discovered in web search results
-- Alternative approaches based on diverse methodologies found online
-- Timeline flexibility informed by realistic research durations observed
-- Contingency plans based on common obstacles identified in literature
+                ## WEB-VALIDATED RISK MITIGATION
+                - Challenges identified through analysis of existing research attempts
+                - Learn from failures/limitations discovered in web search results
+                - Alternative approaches based on diverse methodologies found online
+                - Timeline flexibility informed by realistic research durations observed
+                - Contingency plans based on common obstacles identified in literature
 
-## SUCCESS METRICS BENCHMARKED AGAINST CURRENT RESEARCH
-- Success criteria informed by achievements in existing work
-- Metrics comparing progress against state-of-the-art found through web search
-- Publication targets considering current publication landscape
-- Impact measurement relative to existing research influence
+                ## SUCCESS METRICS BENCHMARKED AGAINST CURRENT RESEARCH
+                - Success criteria informed by achievements in existing work
+                - Metrics comparing progress against state-of-the-art found through web search
+                - Publication targets considering current publication landscape
+                - Impact measurement relative to existing research influence
 
-## EXPECTED OUTCOMES & CONTRIBUTIONS
-- Contributions positioned relative to current research landscape
-- Expected papers building upon and citing discovered relevant work
-- Potential real-world applications validated through market research
-- Future research enablement informed by current research directions
-- Clear differentiation from existing approaches found through web analysis
+                ## EXPECTED OUTCOMES & CONTRIBUTIONS
+                - Contributions positioned relative to current research landscape
+                - Expected papers building upon and citing discovered relevant work
+                - Potential real-world applications validated through market research
+                - Future research enablement informed by current research directions
+                - Clear differentiation from existing approaches found through web analysis
 
-**RESEARCH FOCUS:** The selected problem shows:
-- Web search validation with {validation.get('search_results_count', 0)} relevant results found
-- {validation.get('status', 'unknown')} status indicating research opportunities
-- Key resources available for immediate literature review via discovered URLs
-- Current research gaps that can be systematically addressed
+                **RESEARCH FOCUS:** The selected problem shows:
+                - Web search validation with {validation.get('search_results_count', 0)} relevant results found
+                - {validation.get('status', 'unknown')} status indicating research opportunities
+                - Key resources available for immediate literature review via discovered URLs
+                - Current research gaps that can be systematically addressed
 
-Remember: This plan leverages real-time web search validation to ensure relevance, avoid duplication, and build upon existing work. Each phase should incorporate insights from the web search findings, and the URLs discovered should serve as immediate action items for literature review and collaboration outreach.
+                Remember: This plan leverages real-time web search validation to ensure relevance, avoid duplication, and build upon existing work. Each phase should incorporate insights from the web search findings, and the URLs discovered should serve as immediate action items for literature review and collaboration outreach.
 
-Provide a detailed, focused research plan that maximizes impact on this specific validated research problem.
-"""
+                Provide a detailed, focused research plan that maximizes impact on this specific validated research problem.
+            """
 
             response = self.client.chat.completions.create(
                 model=self.model,
@@ -5050,9 +5199,58 @@ Provide the complete refined research plan:
             original_prompt = state.get("original_prompt", "")
             experimental_results = state.get("experimental_results", {})
             
+            # Check for previous analysis iterations and validation feedback
+            analysis_iterations = state.get("analysis_iterations", [])
+            analysis_validation_results = state.get("analysis_validation_results", {})
+            current_iteration = len(analysis_iterations) + 1
+            
+            # DEBUG: Detailed iteration tracking
+            print(f"🐛 DEBUG _analyze_experiment_findings_node:")
+            print(f"  analysis_iterations length: {len(analysis_iterations)}")
+            print(f"  current_iteration calculated: {current_iteration}")
+            if analysis_iterations:
+                print(f"  last iteration in history: {analysis_iterations[-1].get('iteration', 'NO_ITERATION')}")
+            print(f"  state keys: {sorted(state.keys())}")
+            
+            # Extract validation feedback for improvement
+            validation_feedback = ""
+            if analysis_validation_results and current_iteration > 1:
+                critical_issues = analysis_validation_results.get("critical_issues", [])
+                completeness_gaps = analysis_validation_results.get("completeness_gaps", [])
+                accuracy_concerns = analysis_validation_results.get("accuracy_concerns", [])
+                improvement_recommendations = analysis_validation_results.get("improvement_recommendations", [])
+                
+                validation_feedback = f"""
+PREVIOUS VALIDATION FEEDBACK (Iteration {current_iteration - 1}):
+
+Critical Issues to Address:
+{chr(10).join(f"• {issue}" for issue in critical_issues[:3])}
+
+Completeness Gaps to Fill:
+{chr(10).join(f"• {gap}" for gap in completeness_gaps[:3])}
+
+Accuracy Concerns to Resolve:
+{chr(10).join(f"• {concern}" for concern in accuracy_concerns[:3])}
+
+Improvement Recommendations:
+{chr(10).join(f"• {rec}" for rec in improvement_recommendations[:3])}
+
+CRITICAL: Address ALL the above issues in this iteration. Provide specific, accurate, and complete analysis.
+"""
+            
+            print(f"📊 Generating analysis (iteration {current_iteration})")
+            print(f"🐛 DEBUG: About to generate iteration {current_iteration} (this should increment each time we loop back)")
+            if validation_feedback:
+                print(f"🔄 Incorporating validation feedback from previous iteration")
+            
             # Enhanced analysis prompt for experiment suggestions
+            iteration_context = f"ITERATION {current_iteration}" if current_iteration > 1 else "INITIAL ANALYSIS"
+            
             analysis_prompt = f"""
             You are an expert machine learning researcher analyzing experimental findings to suggest follow-up experiments.
+            
+            **{iteration_context}**
+            {validation_feedback}
             
             Original Research Question/Problem: "{original_prompt}"
             
@@ -5064,36 +5262,50 @@ Provide the complete refined research plan:
             - Models or techniques referenced (CNNs, transformers, YOLO, etc.)
             - Applications mentioned (autonomous driving, medical imaging, etc.)
             
+            VALIDATION REQUIREMENTS FOR ANALYSIS ACCURACY:
+            1. **Be SPECIFIC and TECHNICAL** - avoid generic observations
+            2. **Provide ACTIONABLE insights** - researchers must be able to act on your analysis
+            3. **Ground analysis in DOMAIN EXPERTISE** - demonstrate deep understanding of the field
+            4. **Include PRECISE technical details** - methods, datasets, metrics, benchmarks
+            5. **Address validation feedback** (if provided above) - fix all identified issues
+            6. **Ensure COMPLETENESS** - cover all required analysis sections thoroughly
+            
             Please analyze this research context and provide a comprehensive analysis for experiment planning:
             
-            1. **Domain Inference and Analysis**:
+            1. **Domain Inference and Analysis** (BE SPECIFIC):
                - Primary research domain (computer vision, NLP, reinforcement learning, robotics, etc.)
                - Specific task type (object detection, classification, segmentation, generation, etc.)
                - Application area (autonomous vehicles, medical imaging, robotics, etc.)
                - Data characteristics (images, text, sensor data, time series, tabular, etc.)
+               - Technical complexity level and requirements
                
-            2. **Current State Assessment**:
+            2. **Current State Assessment** (PROVIDE DETAILS):
                - What has been accomplished so far?
                - What are the key findings or results?
                - What metrics or performance indicators are being used?
                - Current model architectures or approaches being used
+               - Performance baseline and targets
                
-            3. **Technical Context**:
+            3. **Technical Context** (INCLUDE SPECIFICS):
                - Frameworks and methodologies currently employed
                - Datasets being used or dataset characteristics
                - Computational constraints or requirements
                - Evaluation benchmarks and metrics
+               - Hardware and software requirements
                
-            4. **Research Gaps and Opportunities**:
+            4. **Research Gaps and Opportunities** (BE ACTIONABLE):
                - What questions remain unanswered in this domain?
                - What aspects need deeper investigation?
                - What are common failure modes or limitations in this area?
                - Areas for improvement or optimization
+               - Specific research directions to pursue
                
-            5. **Domain-Specific Considerations**:
+            5. **Domain-Specific Considerations** (DEMONSTRATE EXPERTISE):
                - Key challenges specific to this research domain
                - Standard experimental practices in this field
                - Important datasets, benchmarks, or evaluation protocols
+               - State-of-the-art methods and their limitations
+               - Future research trends and opportunities
               
             
             Return your analysis in JSON format with clear, domain-specific insights that will inform targeted literature search and experiment suggestions.
@@ -5274,10 +5486,36 @@ Provide the complete refined research plan:
             experimental_results = state.get("experimental_results", {})
             research_context = state.get("research_context", {})
             
+            # Extract iteration history and validation feedback
+            direction_iterations = state.get("direction_iterations", [])
+            validation_results = state.get("direction_validation_results", {})
+            current_iteration = len(direction_iterations) + 1
+            
             # Prepare context for direction decision
             findings_summary = findings_analysis.get("summary", "No analysis available")
             key_insights = findings_analysis.get("key_insights", [])
             limitations = findings_analysis.get("limitations", [])
+            
+            # Create iteration history context
+            iteration_context = ""
+            validation_feedback = ""
+            
+            if current_iteration > 1:
+                iteration_context = "\n\nPREVIOUS RESEARCH DIRECTION ATTEMPTS:\n"
+                for i, iteration in enumerate(direction_iterations, 1):
+                    iteration_context += f"Attempt {iteration['iteration']}: {iteration['direction']}\n"
+                    iteration_context += f"  Issues: Failed validation\n"
+                    iteration_context += f"  Confidence: {iteration['confidence_level']}\n\n"
+                
+                if validation_results.get("critical_issues"):
+                    validation_feedback = f"\n\nCRITICAL ISSUES FROM PREVIOUS VALIDATION:\n"
+                    for issue in validation_results.get("critical_issues", [])[:3]:
+                        validation_feedback += f"• {issue}\n"
+                
+                if validation_results.get("improvement_recommendations"):
+                    validation_feedback += f"\nIMPROVEMENT RECOMMENDATIONS:\n"
+                    for rec in validation_results.get("improvement_recommendations", [])[:3]:
+                        validation_feedback += f"• {rec}\n"
             
             # Create comprehensive prompt for direction decision
             direction_prompt = f"""
@@ -5298,12 +5536,26 @@ Provide the complete refined research plan:
             EXPERIMENTAL DATA OVERVIEW:
             {str(experimental_results)[:500] if experimental_results else "No experimental data provided"}
 
-            Your task is to:
-            1. Identify 2-3 potential research directions based on the findings
-            2. Select the most promising direction with clear justification
-            3. Explain why this direction is optimal given current results
-            4. Outline what specific aspects should be investigated
+            ITERATION CONTEXT:
+            Current Iteration: {current_iteration}
+            {iteration_context}
+            {validation_feedback}
 
+            INSTRUCTIONS FOR ITERATION {current_iteration}:
+            {"INITIAL DIRECTION GENERATION:" if current_iteration == 1 else f"IMPROVED DIRECTION GENERATION (addressing previous failures):"}
+
+            Your task is to:
+
+            - Identify 2–3 novel future research directions that go beyond the current study’s scope, inspired by its findings but not repeating them.
+
+            - Select the most promising direction and provide a clear justification for this choice.
+
+            - Explain why this direction is optimal given the strengths and limitations of the current results.
+
+            - Outline the specific aspects, variables, or methodologies that should be investigated to pursue this new direction.
+            
+            {"CRITICAL FOR ITERATION " + str(current_iteration) + ": The previous direction failed validation. You MUST significantly improve by addressing validation feedback and avoiding previous issues." if current_iteration > 1 else ""}
+            
             Return your response in this exact JSON format:
             {{
                 "potential_directions": [
@@ -5402,6 +5654,898 @@ Provide the complete refined research plan:
                 "errors": state.get("errors", []) + [f"Direction decision error: {str(e)}"],
                 "current_step": "direction_error"
             }
+
+    async def _validate_research_direction_node(self, state: ExperimentSuggestionState) -> ExperimentSuggestionState:
+        """Node for validating the proposed research direction and goals with strict evaluation."""
+        print("\n🔍 Research Direction Validation: Evaluating proposed research goals and methodology...")
+        
+        try:
+            # Extract current research direction and past iterations
+            research_direction = state.get("research_direction", {})
+            selected_direction = research_direction.get("selected_direction", {})
+            original_prompt = state.get("original_prompt", "")
+            findings_analysis = state.get("findings_analysis", {})
+            
+            # Track iteration history
+            direction_iterations = state.get("direction_iterations", [])
+            current_iteration = len(direction_iterations) + 1
+            
+            # Add current direction to history
+            current_direction_record = {
+                "iteration": current_iteration,
+                "direction": selected_direction.get("direction", ""),
+                "justification": selected_direction.get("justification", ""),
+                "key_questions": selected_direction.get("key_questions", []),
+                "confidence_level": selected_direction.get("confidence_level", "Medium"),
+                "timestamp": __import__('datetime').datetime.now().isoformat()
+            }
+            direction_iterations.append(current_direction_record)
+            
+            # Create validation prompt with iteration history
+            iteration_history = ""
+            if len(direction_iterations) > 1:
+                iteration_history = "\n\nPREVIOUS ITERATION HISTORY:\n"
+                for i, iteration in enumerate(direction_iterations[:-1], 1):
+                    iteration_history += f"Iteration {iteration['iteration']}: {iteration['direction']}\n"
+                    iteration_history += f"  Confidence: {iteration['confidence_level']}\n"
+                    iteration_history += f"  Key Questions: {', '.join(iteration['key_questions'][:2])}\n\n"
+            
+            direction_text = selected_direction.get("direction", "")
+            justification = selected_direction.get("justification", "")
+            key_questions = selected_direction.get("key_questions", [])
+            confidence_level = selected_direction.get("confidence_level", "Medium")
+            
+            validation_prompt = f"""
+You are a strict research methodology validator. Your job is to rigorously evaluate the proposed research direction for both **scientific soundness** and **strategic value**. You must decide not only if the direction is valid, but also if it is a *worthwhile and meaningful path to pursue* given the research context.
+
+ORIGINAL RESEARCH REQUEST:
+{original_prompt}
+
+PROPOSED RESEARCH DIRECTION:
+Direction: {direction_text}
+Justification: {justification}
+Key Questions: {chr(10).join(f"• {q}" for q in key_questions[:5])}
+Confidence Level: {confidence_level}
+
+CURRENT ITERATION: {current_iteration}
+{iteration_history}
+
+RESEARCH CONTEXT:
+{findings_analysis}
+
+STRICT VALIDATION CRITERIA:
+1. **Alignment**: Does this direction directly address the original research request?
+2. **Scientific Rigor**: Are the research questions testable, well-formulated, and methodologically sound?
+3. **Feasibility**: Can this direction realistically be pursued with typical resources (time, compute, expertise)?
+4. **Novelty & Value**: Does this offer meaningful new insights or open promising lines of inquiry, rather than repeating well-trodden ground?
+5. **Impact Potential**: Could this direction lead to significant contributions, practical applications, or field-shaping results?
+6. **Clarity**: Are the objectives, approach, and rationale clearly and coherently defined?
+7. **Scope**: Is the scope balanced (not too broad to be vague, not too narrow to be trivial)?
+8. **Strategic Fit**: Given the research context, is this a *good direction to pursue now* compared to alternatives?
+
+ITERATION ANALYSIS:
+- If this is iteration 1: Apply standard validation
+- If iteration 2+: Ensure improvements over previous attempts, avoid repeated mistakes
+
+Return your assessment in this exact JSON format:
+{{
+    "validation_result": "PASS" | "FAIL",
+    "overall_score": 0.0-1.0,
+    "detailed_scores": {{
+        "alignment": 0.0-1.0,
+        "scientific_rigor": 0.0-1.0,
+        "feasibility": 0.0-1.0,
+        "novelty_value": 0.0-1.0,
+        "impact_potential": 0.0-1.0,
+        "clarity": 0.0-1.0,
+        "scope": 0.0-1.0,
+        "strategic_fit": 0.0-1.0
+    }},
+    "critical_issues": ["list", "of", "critical", "problems"],
+    "improvement_recommendations": ["specific", "actionable", "improvements"],
+    "decision_rationale": "Clear explanation of pass/fail decision, weighing novelty, impact, and feasibility",
+    "iteration_assessment": "Analysis of improvement from previous iterations (if applicable)",
+    "confidence_in_validation": 0.0-1.0
+}}
+
+PASSING THRESHOLD: Overall score ≥ 0.75 AND no critical issues AND all detailed scores ≥ 0.6
+BE STRICT: Only pass directions that are both **methodologically solid** and **worth pursuing** for novelty and impact.
+"""
+
+            # Call LLM for validation
+            response = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: self.client.chat.completions.create(
+                    model=self.model,
+                    temperature=0.1,  # Low temperature for consistent validation
+                    messages=[
+                        {"role": "system", "content": "You are a strict research methodology validator. Provide rigorous, objective assessments in valid JSON format. Be conservative - only pass truly solid research directions."},
+                        {"role": "user", "content": validation_prompt}
+                    ]
+                )
+            )
+
+            validation_content = response.choices[0].message.content.strip()
+            
+            # Parse validation response
+            try:
+                # Clean and extract JSON
+                json_match = re.search(r'\{.*\}', validation_content, re.DOTALL)
+                if json_match:
+                    validation_json = json.loads(json_match.group(0))
+                else:
+                    raise json.JSONDecodeError("No JSON found", validation_content, 0)
+                
+                validation_result = validation_json.get("validation_result", "FAIL").upper()
+                overall_score = validation_json.get("overall_score", 0.0)
+                critical_issues = validation_json.get("critical_issues", [])
+                improvement_recommendations = validation_json.get("improvement_recommendations", [])
+                
+                # Safety check: Enforce strict thresholds
+                if overall_score < 0.75 or len(critical_issues) > 0:
+                    validation_result = "FAIL"
+                
+                # Check iteration limit (max 3 iterations to prevent infinite loops)
+                if current_iteration >= 3 and validation_result == "FAIL":
+                    print(f"⚠️ Maximum iterations reached ({current_iteration}). Forcing continuation with current direction.")
+                    print(f"🚨 WARNING: Validation found {len(critical_issues)} critical issues.")
+                    print(f"🚨 This is a FORCED PASS to prevent infinite loops - research direction has unresolved validation issues!")
+                    validation_result = "PASS"
+                    validation_json["forced_pass"] = True
+                    validation_json["decision_rationale"] = f"Forced pass after {current_iteration} iterations to prevent infinite loop. Original validation failed due to: {len(critical_issues)} critical issues."
+                
+                print("\n" + "=" * 80)
+                print("🔍 RESEARCH DIRECTION VALIDATION RESULTS")
+                print("=" * 80)
+                print(f"📊 Iteration: {current_iteration}")
+                if validation_json.get("forced_pass"):
+                    print(f"🎯 Validation Result: {validation_result} (⚠️ FORCED PASS - VALIDATION FAILED)")
+                else:
+                    print(f"🎯 Validation Result: {validation_result}")
+                print(f"📈 Overall Score: {overall_score:.2f}/1.0")
+                print(f"🔴 Critical Issues: {len(critical_issues)}")
+                
+                if critical_issues:
+                    print("Critical Issues:")
+                    for issue in critical_issues[:3]:
+                        print(f"  • {issue}")
+                
+                if validation_result == "FAIL" and improvement_recommendations:
+                    print("🔧 Improvement Recommendations:")
+                    for rec in improvement_recommendations[:3]:
+                        print(f"  • {rec}")
+                
+                print(f"💭 Decision Rationale: {validation_json.get('decision_rationale', 'No rationale provided')}")
+                print("=" * 80)
+                
+                # CRITICAL FIX: Make the routing decision here instead of in separate function
+                # Check if this was a forced pass due to max iterations
+                forced_pass = validation_json.get("forced_pass", False)
+                
+                # Safety check: After 3 iterations, force continue to avoid infinite loops
+                if current_iteration >= 3:
+                    if forced_pass:
+                        print(f"🔄 Maximum direction iterations reached ({current_iteration}). Forced pass due to iteration limit - continuing to experiments despite validation issues.")
+                    else:
+                        print(f"🔄 Maximum direction iterations reached ({current_iteration}). Continuing to experiments.")
+                    next_node = "generate_experiment_search_query"
+                # Check validation result - but distinguish between genuine pass and forced pass
+                elif validation_result == "PASS":
+                    if forced_pass:
+                        print(f"⚠️ Research direction validation was FORCED to pass after max iterations. Continuing to experiments with unresolved issues.")
+                    else:
+                        print(f"✅ Research direction validation passed. Continuing to experiments.")
+                    next_node = "generate_experiment_search_query"
+                else:
+                    print(f"❌ Research direction validation failed. Iterating to improve direction (iteration {current_iteration + 1}).")
+                    next_node = "decide_research_direction"
+                
+                # Store validation results in state
+                return {
+                    **state,
+                    "direction_validation_results": validation_json,
+                    "direction_iterations": direction_iterations,
+                    "direction_validation_decision": validation_result,
+                    "current_iteration": current_iteration,
+                    "current_step": "research_direction_validated",
+                    "next_node": next_node
+                }
+                
+            except json.JSONDecodeError as e:
+                print(f"❌ Failed to parse validation JSON: {e}")
+                # Default to FAIL for safety
+                fallback_validation = {
+                    "validation_result": "FAIL",
+                    "overall_score": 0.4,
+                    "critical_issues": ["JSON parsing error in validation"],
+                    "improvement_recommendations": ["Regenerate research direction with clearer objectives"],
+                    "decision_rationale": "Validation failed due to parsing error",
+                    "error": str(e)
+                }
+                
+                return {
+                    **state,
+                    "direction_validation_results": fallback_validation,
+                    "direction_iterations": direction_iterations,
+                    "direction_validation_decision": "FAIL",
+                    "current_iteration": current_iteration,
+                    "current_step": "validation_error",
+                    "next_node": "decide_research_direction"  # Always retry on error
+                }
+                
+        except Exception as e:
+            print(f"❌ Error in validate_research_direction: {str(e)}")
+            # Default to PASS to avoid blocking the workflow
+            error_validation = {
+                "validation_result": "PASS",
+                "overall_score": 0.6,
+                "decision_rationale": f"Validation error occurred: {str(e)}. Defaulting to PASS to continue workflow.",
+                "error": str(e)
+            }
+            
+            return {
+                **state,
+                "direction_validation_results": error_validation,
+                "direction_iterations": direction_iterations,
+                "direction_validation_decision": "PASS",
+                "current_iteration": current_iteration,
+                "errors": state.get("errors", []) + [f"Direction validation error: {str(e)}"],
+                "current_step": "validation_error_pass",
+                "next_node": "generate_experiment_search_query"  # Continue on error with PASS
+            }
+
+    def _should_continue_with_research_direction(self, state: ExperimentSuggestionState) -> str:
+        """Determine whether to continue with current research direction or iterate."""
+        
+        validation_decision = state.get("direction_validation_decision", "FAIL")
+        validation_results = state.get("direction_validation_results", {})
+        current_iteration = state.get("current_iteration", 1)
+        
+        # Check if this was a forced pass due to max iterations
+        forced_pass = validation_results.get("forced_pass", False)
+        
+        # Safety check: After 3 iterations, force continue to avoid infinite loops
+        if current_iteration >= 3:
+            if forced_pass:
+                print(f"� Maximum iterations reached ({current_iteration}). Forced pass due to iteration limit - continuing with direction despite validation issues.")
+            else:
+                print(f"�🔄 Maximum iterations reached ({current_iteration}). Continuing with current direction.")
+            return "generate_experiment_search_query"
+        
+        # Check validation result - but distinguish between genuine pass and forced pass
+        if validation_decision == "PASS":
+            if forced_pass:
+                print(f"⚠️ Research direction validation was FORCED to pass after max iterations. Continuing to experiment search with unresolved issues.")
+            else:
+                print(f"✅ Research direction validation passed. Continuing to experiment search.")
+            return "generate_experiment_search_query"
+        else:
+            print(f"❌ Research direction validation failed. Iterating to improve direction (iteration {current_iteration + 1}).")
+            return "decide_research_direction"
+
+    async def _validate_experiments_node(self, state: ExperimentSuggestionState) -> ExperimentSuggestionState:
+        """Node for validating proposed experiments with strict evaluation criteria."""
+        print("\n🧪 Experiment Validation: Evaluating proposed experiments for accuracy, feasibility, and research grounding...")
+        
+        try:
+            # Extract current experiments and context
+            experiment_suggestions = state.get("experiment_suggestions", "")
+            experiment_summary = state.get("experiment_summary", {})
+            original_prompt = state.get("original_prompt", "")
+            findings_analysis = state.get("findings_analysis", {})
+            research_direction = state.get("research_direction", {})
+            
+            # Track experiment iteration history
+            experiment_iterations = state.get("experiment_iterations", [])
+            current_iteration = len(experiment_iterations) + 1
+            
+            # WORKAROUND: Also store simple integer counter for debugging
+            experiment_iteration_counter = state.get("experiment_iteration_counter", 0)
+            print(f"🔍 DEBUG - Alternative counter check: experiment_iteration_counter = {experiment_iteration_counter}")
+            
+            # Add current experiments to history
+            current_experiment_record = {
+                "iteration": current_iteration,
+                "experiments": experiment_suggestions[:500] if isinstance(experiment_suggestions, str) else str(experiment_suggestions)[:500],
+                "summary": experiment_summary,
+                "timestamp": __import__('datetime').datetime.now().isoformat()
+            }
+            experiment_iterations.append(current_experiment_record)
+            
+            print(f"🔍 DEBUG - Validation node updating iterations:")
+            print(f"     - Before: {len(experiment_iterations)-1} items")
+            print(f"     - Adding iteration: {current_iteration}")
+            print(f"     - After: {len(experiment_iterations)} items")
+            
+            # Create iteration history context
+            iteration_history = ""
+            if len(experiment_iterations) > 1:
+                iteration_history = "\n\nPREVIOUS EXPERIMENT ITERATIONS:\n"
+                for i, iteration in enumerate(experiment_iterations[:-1], 1):
+                    iteration_history += f"Iteration {iteration['iteration']}: {iteration['experiments'][:100]}...\n\n"
+            
+            validation_prompt = f"""
+You are a strict experimental methodology validator. Your job is to rigorously evaluate the proposed experiments for **accuracy**, **feasibility**, **lack of hallucinations**, and **grounding in real research**. You must determine if these experiments are both methodologically sound and practically executable.
+
+ORIGINAL RESEARCH REQUEST:
+{original_prompt}
+
+RESEARCH DIRECTION CONTEXT:
+{research_direction}
+
+PROPOSED EXPERIMENTS:
+{experiment_suggestions}
+
+EXPERIMENT SUMMARY:
+{experiment_summary}
+
+CURRENT ITERATION: {current_iteration}
+{iteration_history}
+
+RESEARCH CONTEXT:
+{findings_analysis}
+
+HYPER-STRICT VALIDATION CRITERIA (ALL MUST BE SATISFIED):
+1. **Accuracy**: Are the experimental designs technically correct and methodologically sound?
+2. **Feasibility**: Can these experiments realistically be executed with typical research resources?
+3. **Lack of Hallucinations**: Are ALL cited methods, datasets, and techniques REAL and accurately described?
+4. **Research Grounding**: Are the experiments based on established research practices and validated approaches?
+5. **Clarity & Completeness**: Are the experimental procedures clearly defined with sufficient detail?
+6. **Relevance**: Do the experiments directly address the research questions and objectives?
+7. **Novelty & Value**: Do the experiments offer meaningful insights beyond trivial reproductions?
+8. **Statistical Rigor**: Are appropriate controls, metrics, and statistical analyses specified?
+9. **SOURCE CITATION**: Are ALL claims, methods, datasets, and techniques properly cited with specific sources?
+10. **TECHNICAL DEPTH**: Do the experiments include specific implementation details, parameters, and configurations?
+
+MANDATORY SOURCE CITATION REQUIREMENTS:
+- Every dataset mentioned MUST include specific citation (e.g., "CIFAR-10 [Krizhevsky et al., 2009]")
+- Every model/architecture MUST include original paper citation (e.g., "ResNet-50 [He et al., 2016]")
+- Every methodology MUST reference source papers (e.g., "Adam optimizer [Kingma & Ba, 2014]")
+- Every evaluation metric MUST include definition source (e.g., "F1-score [van Rijsbergen, 1979]")
+- Every experimental procedure MUST cite methodology papers
+
+ZERO-TOLERANCE HALLUCINATION CHECK:
+- Verify ALL mentioned datasets exist and are accessible
+- Ensure ALL experimental procedures are technically feasible
+- Check that ALL cited methodologies are real and properly described
+- Validate that ALL computational requirements are realistic
+- Confirm ALL papers and sources referenced actually exist
+
+ITERATION ANALYSIS:
+- If this is iteration 1: Apply HYPER-STRICT validation
+- If iteration 2+: Ensure ALL previous issues resolved AND no new problems introduced
+
+Return your assessment in this exact JSON format:
+{{
+    "validation_result": "PASS" | "FAIL",
+    "overall_score": 0.0-1.0,
+    "detailed_scores": {{
+        "accuracy": 0.0-1.0,
+        "feasibility": 0.0-1.0,
+        "lack_of_hallucinations": 0.0-1.0,
+        "research_grounding": 0.0-1.0,
+        "clarity_completeness": 0.0-1.0,
+        "relevance": 0.0-1.0,
+        "novelty_value": 0.0-1.0,
+        "statistical_rigor": 0.0-1.0,
+        "source_citation": 0.0-1.0,
+        "technical_depth": 0.0-1.0
+    }},
+    "critical_issues": ["list", "of", "critical", "problems"],
+    "hallucination_flags": ["identified", "hallucinations", "or", "inaccuracies"],
+    "citation_violations": ["missing", "citations", "or", "citation", "errors"],
+    "improvement_recommendations": ["specific", "actionable", "improvements"],
+    "decision_rationale": "Clear explanation of pass/fail decision focusing on feasibility, accuracy, and citations",
+    "iteration_assessment": "Analysis of improvement from previous iterations (if applicable)",
+    "confidence_in_validation": 0.0-1.0
+}}
+
+HYPER-STRICT PASSING THRESHOLD: Overall score ≥ 0.85 AND no critical issues AND no hallucination flags AND no citation violations AND all detailed scores ≥ 0.75
+BE RUTHLESSLY STRICT: Only pass experiments that are **technically perfect**, **fully cited**, **practically feasible**, and **completely free from any inaccuracies**.
+"""
+
+            # Call LLM for validation
+            response = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: self.client.chat.completions.create(
+                    model=self.model,
+                    temperature=0.1,  # Low temperature for consistent validation
+                    messages=[
+                        {"role": "system", "content": "You are a strict experimental methodology validator. Provide rigorous, objective assessments in valid JSON format. Be conservative - only pass technically sound and feasible experiments."},
+                        {"role": "user", "content": validation_prompt}
+                    ]
+                )
+            )
+
+            validation_content = response.choices[0].message.content.strip()
+            
+            # Parse validation response
+            try:
+                # Clean and extract JSON
+                json_match = re.search(r'\{.*\}', validation_content, re.DOTALL)
+                if json_match:
+                    validation_json = json.loads(json_match.group(0))
+                else:
+                    raise json.JSONDecodeError("No JSON found", validation_content, 0)
+                
+                validation_result = validation_json.get("validation_result", "FAIL").upper()
+                overall_score = validation_json.get("overall_score", 0.0)
+                critical_issues = validation_json.get("critical_issues", [])
+                hallucination_flags = validation_json.get("hallucination_flags", [])
+                citation_violations = validation_json.get("citation_violations", [])
+                improvement_recommendations = validation_json.get("improvement_recommendations", [])
+                
+                # Safety check: Enforce HYPER-STRICT thresholds
+                if overall_score < 0.85 or len(critical_issues) > 0 or len(hallucination_flags) > 0 or len(citation_violations) > 0:
+                    validation_result = "FAIL"
+                
+                # Check iteration limit (max 3 iterations to prevent infinite loops)
+                if current_iteration >= 3 and validation_result == "FAIL":
+                    print(f"⚠️ Maximum experiment iterations reached ({current_iteration}). Forcing continuation with current experiments.")
+                    print(f"🚨 WARNING: Validation found {len(critical_issues)} critical issues, {len(hallucination_flags)} hallucinations, {len(citation_violations)} citation violations.")
+                    print(f"🚨 This is a FORCED PASS to prevent infinite loops - experiments have unresolved validation issues!")
+                    validation_result = "PASS"
+                    validation_json["forced_pass"] = True
+                    validation_json["decision_rationale"] = f"Forced pass after {current_iteration} iterations to prevent infinite loop. Original validation failed due to: {len(critical_issues)} critical issues, {len(hallucination_flags)} hallucinations, {len(citation_violations)} citation violations."
+                
+                print("\n" + "=" * 80)
+                print("🧪 HYPER-STRICT EXPERIMENT VALIDATION RESULTS")
+                print("=" * 80)
+                print(f"📊 Iteration: {current_iteration}")
+                if validation_json.get("forced_pass"):
+                    print(f"🎯 Validation Result: {validation_result} (⚠️ FORCED PASS - VALIDATION FAILED)")
+                else:
+                    print(f"🎯 Validation Result: {validation_result}")
+                print(f"📈 Overall Score: {overall_score:.2f}/1.0 (Required: ≥0.85)")
+                print(f"🔴 Critical Issues: {len(critical_issues)}")
+                print(f"⚠️ Hallucination Flags: {len(hallucination_flags)}")
+                print(f"📚 Citation Violations: {len(citation_violations)}")
+                
+                if critical_issues:
+                    print("Critical Issues:")
+                    for issue in critical_issues[:3]:
+                        print(f"  • {issue}")
+                
+                if hallucination_flags:
+                    print("Hallucination Flags:")
+                    for flag in hallucination_flags[:3]:
+                        print(f"  • {flag}")
+                
+                if citation_violations:
+                    print("Citation Violations:")
+                    for violation in citation_violations[:3]:
+                        print(f"  • {violation}")
+                
+                if validation_result == "FAIL" and improvement_recommendations:
+                    print("🔧 Improvement Recommendations:")
+                    for rec in improvement_recommendations[:3]:
+                        print(f"  • {rec}")
+                
+                print(f"💭 Decision Rationale: {validation_json.get('decision_rationale', 'No rationale provided')}")
+                print("=" * 80)
+                
+                # CRITICAL FIX: Make the routing decision here instead of in separate function
+                # Check if this was a forced pass due to max iterations
+                forced_pass = validation_json.get("forced_pass", False)
+                
+                # Safety check: After 3 iterations, force continue to avoid infinite loops
+                if current_iteration >= 3:
+                    if forced_pass:
+                        print(f"🔄 Maximum experiment iterations reached ({current_iteration}). Forced pass due to iteration limit - finishing workflow despite validation issues.")
+                    else:
+                        print(f"🔄 Maximum experiment iterations reached ({current_iteration}). Finishing workflow.")
+                    next_node = "END"
+                # Check validation result - but distinguish between genuine pass and forced pass
+                elif validation_result == "PASS":
+                    if forced_pass:
+                        print(f"⚠️ Experiment validation was FORCED to pass after max iterations. Finishing workflow with unresolved issues.")
+                    else:
+                        print(f"✅ Experiment validation passed. Finishing workflow.")
+                    next_node = "END"
+                else:
+                    print(f"❌ Experiment validation failed. Iterating to improve experiments (iteration {current_iteration + 1}).")
+                    next_node = "suggest_experiments_iteration"  # Route to iteration node to avoid state collision
+                
+                # Store validation results in state
+                return_state = {
+                    **state,
+                    "experiment_validation_results": validation_json,
+                    "experiment_iterations": experiment_iterations,
+                    "experiment_validation_decision": validation_result,
+                    "current_experiment_iteration": current_iteration,
+                    "experiment_iteration_counter": current_iteration,  # WORKAROUND: Simple integer counter
+                    "current_step": "experiments_validated",
+                    "next_node": next_node
+                }
+                
+                print(f"🔍 DEBUG - Validation node returning state:")
+                print(f"     - experiment_iterations: {len(return_state['experiment_iterations'])} items")
+                print(f"     - experiment_iteration_counter: {return_state['experiment_iteration_counter']}")
+                print(f"     - next_node: {return_state['next_node']}")
+                print(f"     - current_experiment_iteration: {return_state['current_experiment_iteration']}")
+                
+                return return_state
+                
+            except json.JSONDecodeError as e:
+                print(f"❌ Failed to parse experiment validation JSON: {e}")
+                # Default to FAIL for safety
+                fallback_validation = {
+                    "validation_result": "FAIL",
+                    "overall_score": 0.4,
+                    "critical_issues": ["JSON parsing error in experiment validation"],
+                    "improvement_recommendations": ["Regenerate experiments with clearer methodology"],
+                    "decision_rationale": "Experiment validation failed due to parsing error",
+                    "error": str(e)
+                }
+                
+                return {
+                    **state,
+                    "experiment_validation_results": fallback_validation,
+                    "experiment_iterations": experiment_iterations,
+                    "experiment_validation_decision": "FAIL",
+                    "current_experiment_iteration": current_iteration,
+                    "current_step": "experiment_validation_error",
+                    "next_node": "suggest_experiments"  # Always retry on error
+                }
+                
+        except Exception as e:
+            print(f"❌ Error in validate_experiments: {str(e)}")
+            # Default to PASS to avoid blocking the workflow
+            error_validation = {
+                "validation_result": "PASS",
+                "overall_score": 0.6,
+                "decision_rationale": f"Experiment validation error occurred: {str(e)}. Defaulting to PASS to continue workflow.",
+                "error": str(e)
+            }
+            
+            return {
+                **state,
+                "experiment_validation_results": error_validation,
+                "experiment_iterations": experiment_iterations,
+                "experiment_validation_decision": "PASS",
+                "current_experiment_iteration": current_iteration,
+                "errors": state.get("errors", []) + [f"Experiment validation error: {str(e)}"],
+                "current_step": "experiment_validation_error_pass",
+                "next_node": "END"  # Continue on error with PASS - finish workflow
+            }
+
+    def _should_continue_with_experiments(self, state: ExperimentSuggestionState) -> str:
+        """Determine whether to continue with current experiments or iterate."""
+        
+        validation_decision = state.get("experiment_validation_decision", "FAIL")
+        validation_results = state.get("experiment_validation_results", {})
+        current_iteration = state.get("current_experiment_iteration", 1)
+        
+        # Check if this was a forced pass due to max iterations
+        forced_pass = validation_results.get("forced_pass", False)
+        
+        # Safety check: After 3 iterations, force continue to avoid infinite loops
+        if current_iteration >= 3:
+            if forced_pass:
+                print(f"🛑 Maximum experiment iterations reached ({current_iteration}). Forced pass due to iteration limit - finishing workflow despite validation issues.")
+            else:
+                print(f"🔄 Maximum experiment iterations reached ({current_iteration}). Finishing workflow.")
+            return "END"
+        
+        # Check validation result - but distinguish between genuine pass and forced pass
+        if validation_decision == "PASS":
+            if forced_pass:
+                print(f"⚠️ Experiment validation was FORCED to pass after max iterations. Workflow complete with unresolved issues.")
+            else:
+                print(f"✅ Experiment validation passed. Workflow complete.")
+            return "END"
+        else:
+            print(f"❌ Experiment validation failed. Iterating to improve experiments (iteration {current_iteration + 1}).")
+            return "suggest_experiments"
+
+    async def _validate_analysis_node(self, state: ExperimentSuggestionState) -> ExperimentSuggestionState:
+        """Node for validating the generated data analysis with hyper-strict criteria."""
+        print("\n🔍 Analysis Validation: Evaluating generated data analysis for accuracy, completeness, and grounding...")
+        
+        try:
+            # Extract current analysis and context
+            findings_analysis = state.get("findings_analysis", {})
+            original_prompt = state.get("original_prompt", "")
+            experimental_results = state.get("experimental_results", {})
+            
+            # Track analysis iteration history
+            analysis_iterations = state.get("analysis_iterations", [])
+            current_iteration = len(analysis_iterations) + 1
+            
+            # DEBUG: Track validation iteration calculation
+            print(f"🐛 DEBUG _validate_analysis_node:")
+            print(f"  analysis_iterations length: {len(analysis_iterations)}")
+            print(f"  current_iteration calculated: {current_iteration}")
+            if analysis_iterations:
+                print(f"  last iteration in history: {analysis_iterations[-1].get('iteration', 'NO_ITERATION')}")
+            
+            # Add current analysis to history
+            current_analysis_record = {
+                "iteration": current_iteration,
+                "analysis": str(findings_analysis)[:500] if findings_analysis else "No analysis generated",
+                "timestamp": __import__('datetime').datetime.now().isoformat()
+            }
+            analysis_iterations.append(current_analysis_record)
+            
+            # Create iteration history context
+            iteration_history = ""
+            if len(analysis_iterations) > 1:
+                iteration_history = "\n\nPREVIOUS ANALYSIS ITERATIONS:\n"
+                for i, iteration in enumerate(analysis_iterations[:-1], 1):
+                    iteration_history += f"Iteration {iteration['iteration']}: {iteration['analysis'][:100]}...\n\n"
+            
+            validation_prompt = f"""
+You are a HYPER-STRICT data analysis validator. Your job is to rigorously evaluate the generated analysis for **accuracy**, **completeness**, **logical consistency**, **domain expertise**, and **actionable insights**.
+
+ORIGINAL RESEARCH REQUEST:
+{original_prompt}
+
+EXPERIMENTAL CONTEXT:
+{experimental_results}
+
+GENERATED ANALYSIS:
+{findings_analysis}
+
+CURRENT ITERATION: {current_iteration}
+{iteration_history}
+
+HYPER-STRICT VALIDATION CRITERIA (ALL MUST BE SATISFIED):
+1. **Domain Accuracy**: Is the domain identification and characterization correct and specific?
+2. **Technical Completeness**: Does the analysis include all necessary technical details (datasets, methods, metrics)?
+3. **Logical Consistency**: Are all conclusions logically supported by the provided context?
+4. **Insight Quality**: Does the analysis provide actionable, meaningful insights beyond obvious observations?
+5. **Contextual Grounding**: Is the analysis properly grounded in the user's specific research context?
+6. **Gap Identification**: Are research gaps and opportunities clearly and accurately identified?
+7. **Technical Depth**: Does the analysis demonstrate appropriate domain expertise and technical understanding?
+8. **Actionability**: Can researchers actually use this analysis to make informed decisions?
+9. **Specificity**: Are recommendations specific enough to be implementable rather than vague?
+10. **Accuracy Verification**: Are all technical claims and domain assertions verifiable and correct?
+
+ZERO-TOLERANCE REQUIREMENTS:
+- No generic or template-like responses
+- No vague or aspirational language without specifics
+- No technical inaccuracies or domain mischaracterizations
+- No missing critical analysis components
+- No unsupported claims or assumptions
+
+ITERATION ANALYSIS:
+- If this is iteration 1: Apply HYPER-STRICT validation
+- If iteration 2+: Ensure ALL previous issues resolved AND significant improvement demonstrated
+
+Return your assessment in this exact JSON format:
+{{
+    "validation_result": "PASS" | "FAIL",
+    "overall_score": 0.0-1.0,
+    "detailed_scores": {{
+        "domain_accuracy": 0.0-1.0,
+        "technical_completeness": 0.0-1.0,
+        "logical_consistency": 0.0-1.0,
+        "insight_quality": 0.0-1.0,
+        "contextual_grounding": 0.0-1.0,
+        "gap_identification": 0.0-1.0,
+        "technical_depth": 0.0-1.0,
+        "actionability": 0.0-1.0,
+        "specificity": 0.0-1.0,
+        "accuracy_verification": 0.0-1.0
+    }},
+    "critical_issues": ["list", "of", "critical", "problems"],
+    "completeness_gaps": ["missing", "analysis", "components"],
+    "accuracy_concerns": ["technical", "inaccuracies", "or", "concerns"],
+    "improvement_recommendations": ["specific", "actionable", "improvements"],
+    "decision_rationale": "Clear explanation of pass/fail decision focusing on accuracy and completeness",
+    "iteration_assessment": "Analysis of improvement from previous iterations (if applicable)",
+    "confidence_in_validation": 0.0-1.0
+}}
+
+RUTHLESS PASSING THRESHOLD: Overall score ≥ 0.90 AND no critical issues AND no completeness gaps AND no accuracy concerns AND all detailed scores ≥ 0.85
+BE ABSOLUTELY STRICT: Only pass analyses that are **technically perfect**, **completely accurate**, **deeply insightful**, and **fully actionable**.
+"""
+
+            # Call LLM for validation
+            response = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: self.client.chat.completions.create(
+                    model=self.model,
+                    temperature=0.1,  # Low temperature for consistent validation
+                    messages=[
+                        {"role": "system", "content": "You are a ruthlessly strict data analysis validator. Provide objective, rigorous assessments in valid JSON format. Be ultra-conservative - only pass analyses that are technically perfect and deeply insightful."},
+                        {"role": "user", "content": validation_prompt}
+                    ]
+                )
+            )
+
+            validation_content = response.choices[0].message.content.strip()
+            
+            # Parse validation response
+            try:
+                # Clean and extract JSON
+                json_match = re.search(r'\{.*\}', validation_content, re.DOTALL)
+                if json_match:
+                    validation_json = json.loads(json_match.group(0))
+                else:
+                    raise json.JSONDecodeError("No JSON found", validation_content, 0)
+                
+                validation_result = validation_json.get("validation_result", "FAIL").upper()
+                overall_score = validation_json.get("overall_score", 0.0)
+                critical_issues = validation_json.get("critical_issues", [])
+                completeness_gaps = validation_json.get("completeness_gaps", [])
+                accuracy_concerns = validation_json.get("accuracy_concerns", [])
+                improvement_recommendations = validation_json.get("improvement_recommendations", [])
+                
+                # Safety check: Enforce RUTHLESS thresholds
+                if overall_score < 0.90 or len(critical_issues) > 0 or len(completeness_gaps) > 0 or len(accuracy_concerns) > 0:
+                    validation_result = "FAIL"
+                
+                # Check iteration limit (max 3 iterations to prevent infinite loops)
+                if current_iteration >= 3 and validation_result == "FAIL":
+                    print(f"⚠️ Maximum analysis iterations reached ({current_iteration}). Forcing continuation with current analysis.")
+                    print(f"🚨 WARNING: Validation found {len(critical_issues)} critical issues, {len(completeness_gaps)} completeness gaps, {len(accuracy_concerns)} accuracy concerns.")
+                    print(f"🚨 This is a FORCED PASS to prevent infinite loops - analysis has unresolved validation issues!")
+                    validation_result = "PASS"
+                    validation_json["forced_pass"] = True
+                    validation_json["decision_rationale"] = f"Forced pass after {current_iteration} iterations to prevent infinite loop. Original validation failed due to: {len(critical_issues)} critical issues, {len(completeness_gaps)} completeness gaps, {len(accuracy_concerns)} accuracy concerns."
+                
+                print("\n" + "=" * 80)
+                print("🔍 HYPER-STRICT ANALYSIS VALIDATION RESULTS")
+                print("=" * 80)
+                print(f"📊 Iteration: {current_iteration}")
+                if validation_json.get("forced_pass"):
+                    print(f"🎯 Validation Result: {validation_result} (⚠️ FORCED PASS - VALIDATION FAILED)")
+                else:
+                    print(f"🎯 Validation Result: {validation_result}")
+                print(f"📈 Overall Score: {overall_score:.2f}/1.0 (Required: ≥0.90)")
+                print(f"🔴 Critical Issues: {len(critical_issues)}")
+                print(f"📋 Completeness Gaps: {len(completeness_gaps)}")
+                print(f"⚠️ Accuracy Concerns: {len(accuracy_concerns)}")
+                
+                if critical_issues:
+                    print("Critical Issues:")
+                    for issue in critical_issues[:3]:
+                        print(f"  • {issue}")
+                
+                if completeness_gaps:
+                    print("Completeness Gaps:")
+                    for gap in completeness_gaps[:3]:
+                        print(f"  • {gap}")
+                
+                if accuracy_concerns:
+                    print("Accuracy Concerns:")
+                    for concern in accuracy_concerns[:3]:
+                        print(f"  • {concern}")
+                
+                if validation_result == "FAIL" and improvement_recommendations:
+                    print("🔧 Improvement Recommendations:")
+                    for rec in improvement_recommendations[:3]:
+                        print(f"  • {rec}")
+                
+                print(f"💭 Decision Rationale: {validation_json.get('decision_rationale', 'No rationale provided')}")
+                print("=" * 80)
+                
+                # DEBUG: Show what we're returning
+                print(f"🐛 DEBUG validation node returning:")
+                print(f"  validation_result: {validation_result}")
+                print(f"  analysis_validation_decision: {validation_result}")
+                print(f"  analysis_iterations length: {len(analysis_iterations)}")
+                
+                # Store validation results in state
+                updated_state = {
+                    **state,
+                    "analysis_validation_results": validation_json,
+                    "analysis_iterations": analysis_iterations,
+                    "analysis_validation_decision": validation_result,
+                    "current_analysis_iteration": current_iteration,
+                    "current_step": "analysis_validated"
+                }
+                
+                # DEBUG: Verify the state we're returning
+                print(f"🐛 DEBUG state being returned has keys: {list(updated_state.keys())}")
+                print(f"🐛 DEBUG state['analysis_validation_decision'] = {updated_state.get('analysis_validation_decision')}")
+                
+                # CRITICAL FIX: Make the routing decision here instead of in separate function
+                # Check if this was a forced pass due to max iterations
+                forced_pass = validation_json.get("forced_pass", False)
+                
+                # Safety check: After 3 iterations, force continue to avoid infinite loops
+                if current_iteration >= 3:
+                    if forced_pass:
+                        print(f"🔄 Maximum analysis iterations reached ({current_iteration}). Forced pass due to iteration limit - continuing to research direction despite validation issues.")
+                    else:
+                        print(f"🔄 Maximum analysis iterations reached ({current_iteration}). Continuing to research direction.")
+                    updated_state["next_node"] = "decide_research_direction"
+                # Check validation result - but distinguish between genuine pass and forced pass
+                elif validation_result == "PASS":
+                    if forced_pass:
+                        print(f"⚠️ Analysis validation was FORCED to pass after max iterations. Continuing to research direction with unresolved issues.")
+                    else:
+                        print(f"✅ Analysis validation passed. Continuing to research direction.")
+                    updated_state["next_node"] = "decide_research_direction"
+                else:
+                    print(f"❌ Analysis validation failed. Iterating to improve analysis (iteration {current_iteration + 1}).")
+                    updated_state["next_node"] = "analyze_findings"
+                
+                return updated_state
+                
+            except json.JSONDecodeError as e:
+                print(f"❌ Failed to parse analysis validation JSON: {e}")
+                # Default to FAIL for safety
+                fallback_validation = {
+                    "validation_result": "FAIL",
+                    "overall_score": 0.4,
+                    "critical_issues": ["JSON parsing error in analysis validation"],
+                    "improvement_recommendations": ["Regenerate analysis with clearer structure"],
+                    "decision_rationale": "Analysis validation failed due to parsing error",
+                    "error": str(e)
+                }
+                
+                return {
+                    **state,
+                    "analysis_validation_results": fallback_validation,
+                    "analysis_iterations": analysis_iterations,
+                    "analysis_validation_decision": "FAIL",
+                    "current_analysis_iteration": current_iteration,
+                    "current_step": "analysis_validation_error",
+                    "next_node": "analyze_findings"  # Always retry on error
+                }
+                
+        except Exception as e:
+            print(f"❌ Error in validate_analysis: {str(e)}")
+            # Default to PASS to avoid blocking the workflow
+            error_validation = {
+                "validation_result": "PASS",
+                "overall_score": 0.6,
+                "decision_rationale": f"Analysis validation error occurred: {str(e)}. Defaulting to PASS to continue workflow.",
+                "error": str(e)
+            }
+            
+            return {
+                **state,
+                "analysis_validation_results": error_validation,
+                "analysis_iterations": analysis_iterations,
+                "analysis_validation_decision": "FAIL",
+                "current_analysis_iteration": current_iteration,
+                "errors": state.get("errors", []) + [f"Analysis validation error: {str(e)}"],
+                "current_step": "analysis_validation_error_pass",
+                "next_node": "analyze_findings"  # Always retry on error
+            }
+
+    async def _should_continue_with_analysis(self, state: ExperimentSuggestionState) -> str:
+        """Determine whether to continue with current analysis or iterate."""
+        
+        validation_decision = state.get("analysis_validation_decision", "FAIL")
+        validation_results = state.get("analysis_validation_results", {})
+        current_iteration = state.get("current_analysis_iteration", 1)
+        
+        # DEBUG: Print exact state values to trace the bug
+        print(f"\n🐛 DEBUG _should_continue_with_analysis:")
+        print(f"  State keys: {list(state.keys())}")
+        print(f"  analysis_validation_decision: {repr(validation_decision)}")
+        print(f"  validation_results type: {type(validation_results)}")
+        if validation_results:
+            print(f"  validation_results.validation_result: {validation_results.get('validation_result', 'NOT_FOUND')}")
+        print(f"  current_iteration: {current_iteration}")
+        print(f"  🚨 MISMATCH CHECK: validation_results says '{validation_results.get('validation_result', 'NOT_FOUND')}' but decision is '{validation_decision}'")
+        
+        # Check if this was a forced pass due to max iterations
+        forced_pass = validation_results.get("forced_pass", False)
+        
+        # Safety check: After 3 iterations, force continue to avoid infinite loops
+        if current_iteration >= 3:
+            if forced_pass:
+                print(f"� Maximum analysis iterations reached ({current_iteration}). Forced pass due to iteration limit - continuing to research direction despite validation issues.")
+            else:
+                print(f"�🔄 Maximum analysis iterations reached ({current_iteration}). Continuing to research direction.")
+            return "decide_research_direction"
+        
+        # Check validation result - but distinguish between genuine pass and forced pass
+        if validation_decision == "PASS":
+            if forced_pass:
+                print(f"⚠️ Analysis validation was FORCED to pass after max iterations. Continuing to research direction with unresolved issues.")
+            else:
+                print(f"✅ Analysis validation passed. Continuing to research direction.")
+            return "decide_research_direction"
+        else:
+            print(f"❌ Analysis validation failed. Iterating to improve analysis (iteration {current_iteration + 1}).")
+            return "analyze_findings"
 
     def _generate_experiment_search_query_node(self, state: ExperimentSuggestionState) -> ExperimentSuggestionState:
         """Generate ArXiv search query for domain-specific experimental guidance papers."""
@@ -5562,8 +6706,8 @@ Provide the complete refined research plan:
             elif is_backup_search:
                 # Backup search: get additional papers with offset
                 existing_count = len(existing_papers) if existing_papers else 0
-                start_offset = max(50, existing_count)
-                max_results = 50
+                start_offset = max(100, existing_count)
+                max_results = 100
             else:
                 # New search with different query: get 100 fresh papers
                 max_results = 100
@@ -5629,7 +6773,10 @@ Provide the complete refined research plan:
             ranking_context = self._create_experiment_ranking_context_from_analysis(state)
             print(f"📊 Using enhanced context for ranking: {ranking_context[:100]}...")
             
-            papers = await self.arxiv_processor.rank_papers_by_relevance(papers, ranking_context)
+            # Create custom prompt for experimental ranking
+            custom_prompt = self._create_custom_ranking_prompt("experimental")
+            
+            papers = await self.arxiv_processor.rank_papers_by_relevance(papers, ranking_context, custom_prompt)
             
             # Stage 3: Download full content for top 5 papers only
             top_papers = papers[:5]  # Get top 5 papers
@@ -5712,22 +6859,49 @@ Provide the complete refined research plan:
             search_iteration = state.get("experiment_search_iteration", 0)
             research_direction = state.get("research_direction", {})
             
-            # Prepare paper summaries for validation
+            # Prepare paper summaries for validation with methodology checks
             papers_summary = ""
             full_content_papers = [p for p in papers if p.get('pdf_downloaded', False)]
             
-            # Include information about all papers (not just those with full content)
+            # Include information about all papers with enhanced methodology analysis
+            methodology_count = 0
+            experiment_count = 0
+            
             for i, paper in enumerate(papers[:10], 1):  # Top 10 papers
                 clean_title = self._clean_text_for_utf8(paper.get('title', 'Unknown Title'))
                 clean_abstract = self._clean_text_for_utf8(paper.get('summary', 'No abstract available'))
+                full_content = self._clean_text_for_utf8(paper.get('content', ''))
                 relevance_score = paper.get('relevance_score', 0)
                 has_content = paper.get('pdf_downloaded', False)
                 content_status = "FULL CONTENT" if has_content else "TITLE+ABSTRACT"
+                
+                # Check for methodology and experiments sections
+                has_methodology = False
+                has_experiments = False
+                
+                if has_content and full_content:
+                    content_lower = full_content.lower()
+                    # Look for methodology indicators
+                    methodology_keywords = ['methodology', 'method', 'approach', 'algorithm', 'procedure', 'framework', 'implementation']
+                    has_methodology = any(keyword in content_lower for keyword in methodology_keywords)
+                    
+                    # Look for experiment indicators
+                    experiment_keywords = ['experiment', 'evaluation', 'result', 'performance', 'benchmark', 'dataset', 'accuracy', 'precision', 'recall']
+                    has_experiments = any(keyword in content_lower for keyword in experiment_keywords)
+                    
+                    if has_methodology:
+                        methodology_count += 1
+                    if has_experiments:
+                        experiment_count += 1
+                
+                methodology_status = "✅ METHODOLOGY" if has_methodology else "❌ NO METHODOLOGY"
+                experiment_status = "✅ EXPERIMENTS" if has_experiments else "❌ NO EXPERIMENTS"
                 
                 papers_summary += f"""
                     Paper {i} [{content_status}] - Relevance: {relevance_score:.1f}/10.0:
                     Title: {clean_title}
                     Abstract: {clean_abstract}
+                    Content Analysis: {methodology_status} | {experiment_status}
                     ---
                 """
             
@@ -5736,9 +6910,9 @@ Provide the complete refined research plan:
             direction_text = selected_direction.get("direction", "General experimental guidance")
             key_questions = selected_direction.get("key_questions", [])
             
-            # Create enhanced validation prompt with decision guidance
+            # Create enhanced validation prompt with HYPER-STRICT requirements and clear JSON format
             validation_prompt = f"""
-                You are an expert research analyst. Evaluate the retrieved papers for experimental guidance and determine the best course of action.
+                You are a HYPER-STRICT research analyst. Only papers with DETAILED METHODOLOGY and CONCRETE EXPERIMENTS should pass validation.
 
                 USER'S QUERY: {self._clean_text_for_utf8(user_query)}
                 RESEARCH DIRECTION: {direction_text}
@@ -5751,33 +6925,45 @@ Provide the complete refined research plan:
                 SEARCH STATISTICS:
                 - Total papers found: {len(papers)}
                 - Papers with full content: {len(full_content_papers)}
+                - Papers with methodology sections: {methodology_count}
+                - Papers with experiment sections: {experiment_count}
                 - Average relevance score: {sum(p.get('relevance_score', 0) for p in papers) / len(papers) if papers else 0:.2f}/10.0
 
-                Please provide your assessment in the following JSON format:
+                HYPER-STRICT REQUIREMENTS FOR EXPERIMENTAL GUIDANCE PAPERS:
+                1. **METHODOLOGY REQUIREMENT**: Papers MUST contain detailed experimental methodologies, algorithms, or implementation details
+                2. **EXPERIMENTS REQUIREMENT**: Papers MUST contain actual experimental results, evaluations, or empirical validation
+                3. **RELEVANCE REQUIREMENT**: Papers MUST be directly relevant to the research direction (≥8.0/10.0 for "continue")
+                4. **COMPLETENESS REQUIREMENT**: Papers MUST provide actionable experimental guidance, not just theoretical discussions
+                5. **TECHNICAL DEPTH REQUIREMENT**: Papers MUST include specific experimental procedures, datasets, metrics, or protocols
 
+                STRICT DECISION CRITERIA:
+                - "continue": ≥5 papers with BOTH methodology AND experiments, avg relevance ≥8.0, comprehensive experimental coverage
+                - "search_backup": 3-4 papers with methodology/experiments, avg relevance ≥7.0, partial experimental coverage
+                - "search_new": <3 papers with methodology/experiments, avg relevance <7.0, insufficient experimental guidance
+
+                WARNING: Be EXTREMELY STRICT. Only "continue" if papers provide CONCRETE, ACTIONABLE experimental methodologies.
+
+                REQUIRED JSON FORMAT (return ONLY this JSON, no other text):
                 {{
                     "relevance_assessment": "excellent" | "good" | "fair" | "poor",
-                    "coverage_analysis": "complete" | "partial" | "insufficient",
-                    "quality_evaluation": "high" | "medium" | "low",
+                    "methodology_coverage": "comprehensive" | "partial" | "insufficient",
+                    "experiment_coverage": "comprehensive" | "partial" | "insufficient", 
+                    "actionable_guidance": "high" | "medium" | "low",
+                    "technical_depth": "detailed" | "moderate" | "superficial",
                     "decision": "continue" | "search_backup" | "search_new",
-                    "confidence": 0.0-1.0,
-                    "reasoning": "Brief explanation of the decision",
-                    "missing_aspects": ["list", "of", "missing", "experimental", "aspects"],
+                    "confidence": 0.95,
+                    "reasoning": "Brief explanation focusing on methodology and experimental content quality",
+                    "missing_aspects": ["aspect1", "aspect2", "aspect3"],
+                    "methodology_gaps": ["gap1", "gap2", "gap3"],
                     "search_guidance": {{
-                        "new_search_terms": ["alternative", "experimental", "search", "terms"],
-                        "focus_areas": ["experimental", "areas", "to", "focus", "on"],
-                        "avoid_terms": ["terms", "to", "avoid"]
+                        "new_search_terms": ["term1", "term2", "term3"],
+                        "focus_areas": ["area1", "area2", "area3"],
+                        "avoid_terms": ["avoid1", "avoid2"]
                     }}
                 }}
 
-                DECISION CRITERIA FOR EXPERIMENTAL PAPERS:
-                - "continue": Papers provide sufficient experimental guidance (relevance ≥7.0, good methodology coverage)
-                - "search_backup": Papers are decent but could use backup (relevance 5.0-6.9, partial experimental coverage)  
-                - "search_new": Papers are insufficient for experimental guidance (relevance <5.0, poor experimental methodology, or major gaps)
-
-                If search_iteration ≥ 2, bias toward "continue" unless papers are truly inadequate for experimental guidance.
-
-                Return only the JSON object, no additional text.
+                BE RUTHLESS: If papers lack concrete experimental methodologies or detailed experimental procedures, choose "search_new".
+                Return only valid JSON with all required fields.
             """
 
             # Call LLM for validation
@@ -5814,31 +7000,82 @@ Provide the complete refined research plan:
                 # ALSO store decision in a separate key to avoid conflicts with other workflows
                 state["experiment_paper_validation_decision"] = validation_data.get("decision", "continue")
                 
-                # Print validation results
+                # Print validation results with robust formatting
                 print("\n" + "=" * 70)
                 print("📋 EXPERIMENT PAPER VALIDATION & DECISION RESULTS")
                 print("=" * 70)
-                print(f"🎯 Relevance Assessment: {validation_data.get('relevance_assessment', 'unknown').title()}")
-                print(f"📊 Coverage Analysis: {validation_data.get('coverage_analysis', 'unknown').title()}")
-                print(f"⭐ Quality Evaluation: {validation_data.get('quality_evaluation', 'unknown').title()}")
-                print(f"🚀 Decision: {validation_data.get('decision', 'continue').upper()}")
-                print(f"🎲 Confidence: {validation_data.get('confidence', 0):.2f}")
-                print(f"💭 Reasoning: {validation_data.get('reasoning', 'No reasoning provided')}")
                 
-                if validation_data.get('missing_aspects'):
-                    print(f"🔍 Missing Experimental Aspects: {', '.join(validation_data['missing_aspects'])}")
+                # Safe extraction with defaults and formatting
+                relevance = str(validation_data.get('relevance_assessment', 'Unknown')).title()
+                methodology_coverage = str(validation_data.get('methodology_coverage', 'Unknown')).title()
+                experiment_coverage = str(validation_data.get('experiment_coverage', 'Unknown')).title()
+                actionable_guidance = str(validation_data.get('actionable_guidance', 'Unknown')).title()
+                technical_depth = str(validation_data.get('technical_depth', 'Unknown')).title()
+                decision = str(validation_data.get('decision', 'continue')).upper()
+                confidence = float(validation_data.get('confidence', 0))
+                reasoning = str(validation_data.get('reasoning', 'No reasoning provided'))
                 
-                if validation_data.get('decision') != 'continue':
+                print(f"🎯 Relevance Assessment: {relevance}")
+                print(f"🔬 Methodology Coverage: {methodology_coverage}")
+                print(f"🧪 Experiment Coverage: {experiment_coverage}")
+                print(f"📋 Actionable Guidance: {actionable_guidance}")
+                print(f"⚙️ Technical Depth: {technical_depth}")
+                print(f"🚀 Decision: {decision}")
+                print(f"🎲 Confidence: {confidence:.2f}")
+                print(f"💭 Reasoning: {reasoning}")
+                
+                # Handle missing aspects with proper formatting
+                missing_aspects = validation_data.get('missing_aspects', [])
+                if missing_aspects and isinstance(missing_aspects, list):
+                    print(f"🔍 Missing Experimental Aspects:")
+                    for i, aspect in enumerate(missing_aspects[:5], 1):  # Limit to 5 items
+                        print(f"   {i}. {str(aspect)}")
+                
+                # Handle methodology gaps
+                methodology_gaps = validation_data.get('methodology_gaps', [])
+                if methodology_gaps and isinstance(methodology_gaps, list):
+                    print(f"🔧 Methodology Gaps:")
+                    for i, gap in enumerate(methodology_gaps[:3], 1):  # Limit to 3 items
+                        print(f"   {i}. {str(gap)}")
+                
+                # Handle search guidance for non-continue decisions
+                if decision != 'CONTINUE':
                     search_guidance = validation_data.get('search_guidance', {})
-                    if search_guidance.get('new_search_terms'):
-                        print(f"🔄 Suggested Search Terms: {', '.join(search_guidance['new_search_terms'])}")
-                    if search_guidance.get('focus_areas'):
-                        print(f"🎯 Focus Areas: {', '.join(search_guidance['focus_areas'])}")
+                    if isinstance(search_guidance, dict):
+                        new_search_terms = search_guidance.get('new_search_terms', [])
+                        focus_areas = search_guidance.get('focus_areas', [])
+                        avoid_terms = search_guidance.get('avoid_terms', [])
+                        
+                        if new_search_terms and isinstance(new_search_terms, list):
+                            print(f"🔄 Suggested Search Terms: {', '.join(str(term) for term in new_search_terms[:7])}")
+                        if focus_areas and isinstance(focus_areas, list):
+                            print(f"🎯 Focus Areas: {', '.join(str(area) for area in focus_areas[:5])}")
+                        if avoid_terms and isinstance(avoid_terms, list):
+                            print(f"❌ Avoid Terms: {', '.join(str(term) for term in avoid_terms[:5])}")
                 
                 print("=" * 70)
                 
+                # CRITICAL FIX: Make the routing decision here instead of in separate function
+                validation_decision = validation_data.get("decision", "continue").upper()
+                
+                # Map validation decision to next node
+                if validation_decision == "CONTINUE":
+                    next_node = "suggest_experiments"
+                    print(f"✅ Experiment papers are adequate. Continuing to experiment suggestions.")
+                elif validation_decision == "SEARCH_BACKUP":
+                    next_node = "search_experiment_papers"
+                    print(f"🔄 Papers need backup. Searching for additional papers.")
+                elif validation_decision == "SEARCH_NEW":
+                    next_node = "generate_experiment_search_query"
+                    print(f"🔄 Papers inadequate. Generating new search query.")
+                else:
+                    # Default fallback
+                    next_node = "suggest_experiments"
+                    print(f"⚠️ Unknown validation decision '{validation_decision}'. Defaulting to continue.")
+                
                 # Increment search iteration counter
                 state["experiment_search_iteration"] = search_iteration + 1
+                state["next_node"] = next_node
                 
                 # Return state after successful validation
                 return state
@@ -5862,6 +7099,12 @@ Provide the complete refined research plan:
                 # ALSO store decision in backup key for error cases
                 state["experiment_paper_validation_decision"] = decision
                 
+                # Add routing for error case
+                if decision == "continue":
+                    state["next_node"] = "suggest_experiments"
+                else:
+                    state["next_node"] = "search_experiment_papers"
+                
                 state["experiment_search_iteration"] = search_iteration + 1
                 
                 
@@ -5880,6 +7123,9 @@ Provide the complete refined research plan:
             
             # ALSO store decision in backup key for error cases
             state["experiment_paper_validation_decision"] = "continue"
+            
+            # Add routing for error case  
+            state["next_node"] = "suggest_experiments"
             
             state["experiment_search_iteration"] = state.get("experiment_search_iteration", 0) + 1
         
@@ -6135,6 +7381,542 @@ Provide the complete refined research plan:
                 "errors": state.get("errors", []) + [f"Experiment suggestion error: {str(e)}"],
                 "current_step": "suggestion_error"
             }
+
+    async def _suggest_experiments_tree_node(self, state: ExperimentSuggestionState) -> ExperimentSuggestionState:
+        """Node for generating validated experiments using the experiment tree approach."""
+        print("\n🌳 Experiment Tree: Generating validated experiments using tree search approach...")
+        
+        try:
+            # DEBUG: Check iteration state at node entry
+            experiment_iterations = state.get("experiment_iterations", [])
+            current_iteration = len(experiment_iterations) + 1
+            print(f"🔍 DEBUG - Experiment suggestion node received state:")
+            print(f"     - experiment_iterations: {len(experiment_iterations)} items")
+            print(f"     - calculated current_iteration: {current_iteration}")
+            if experiment_iterations:
+                print(f"     - last iteration: {experiment_iterations[-1].get('iteration', 'unknown')}")
+            
+            # Detect if this is the iteration path vs fresh path
+            experiment_validation_results = state.get("experiment_validation_results", {})
+            if experiment_validation_results:
+                print(f"🔄 ITERATION PATH: This is an experiment refinement iteration")
+            else:
+                print(f"🆕 FRESH PATH: This is the initial experiment generation")
+            
+            # Store current environment variables
+            import os
+            original_api_key = os.environ.get("OPENAI_API_KEY")
+            original_base_url = os.environ.get("BASE_URL")
+            
+            # Set environment variables for the tree modules to use our client configuration
+            if hasattr(self, 'api_key') and self.api_key:
+                os.environ["OPENAI_API_KEY"] = self.api_key
+            if hasattr(self, 'base_url') and self.base_url:
+                os.environ["BASE_URL"] = self.base_url
+            elif hasattr(self, 'client') and hasattr(self.client, 'base_url'):
+                os.environ["BASE_URL"] = str(self.client.base_url)
+            
+            # Import only the research component extraction (no tree search)
+            import sys
+            design_experiment_path = os.path.join(os.path.dirname(__file__), 'design_experiment')
+            if design_experiment_path not in sys.path:
+                sys.path.insert(0, design_experiment_path)
+            
+            try:
+                from init_utils import extract_research_components
+                research_components_available = True
+            except ImportError as e:
+                print(f"⚠️ Could not import research components: {e}")
+                research_components_available = False
+            
+            # Extract context from state
+            original_prompt = state.get("original_prompt", "")
+            experimental_results = state.get("experimental_results", {})
+            findings_analysis = state.get("findings_analysis", {})
+            research_context = state.get("research_context", {})
+            research_direction = state.get("research_direction", {})
+            validated_papers = state.get("experiment_papers", [])
+            
+            # Check for previous experiment iterations and validation feedback
+            experiment_iterations = state.get("experiment_iterations", [])
+            experiment_validation_results = state.get("experiment_validation_results", {})
+            current_iteration = len(experiment_iterations) + 1
+            
+            # WORKAROUND: Also check simple integer counter for debugging
+            experiment_iteration_counter = state.get("experiment_iteration_counter", 0)
+            print(f"🔍 DEBUG - Alternative counter check in suggestion node: experiment_iteration_counter = {experiment_iteration_counter}")
+            
+            # Extract validation feedback for improvement
+            validation_feedback = ""
+            if experiment_validation_results and current_iteration > 1:
+                critical_issues = experiment_validation_results.get("critical_issues", [])
+                improvement_recommendations = experiment_validation_results.get("improvement_recommendations", [])
+                hallucination_flags = experiment_validation_results.get("hallucination_flags", [])
+                
+                validation_feedback = f"""
+PREVIOUS VALIDATION FEEDBACK (Iteration {current_iteration - 1}):
+
+Critical Issues to Address:
+{chr(10).join(f"• {issue}" for issue in critical_issues[:3])}
+
+Improvement Recommendations:
+{chr(10).join(f"• {rec}" for rec in improvement_recommendations[:3])}
+
+Hallucination Flags (AVOID THESE):
+{chr(10).join(f"• {flag}" for flag in hallucination_flags[:3])}
+
+IMPORTANT: Address ALL the above issues in this iteration. Use only verified methods, datasets, and tools.
+"""
+            
+            print(f"📚 Using {len(validated_papers)} existing papers from workflow (iteration {current_iteration})")
+            if validation_feedback:
+                print(f"🔄 Incorporating validation feedback from previous iteration")
+            
+            # Instead of calling the full experiment tree (which does its own ArXiv search),
+            # create a simplified literature-grounded experiment generation
+            if validated_papers:
+                # Extract research direction for context
+                selected_direction = research_direction.get("selected_direction", {})
+                direction_text = selected_direction.get("direction", "Continue current research")
+                key_questions = selected_direction.get("key_questions", [])
+                
+                # Create literature context from existing papers
+                literature_context = ""
+                for i, paper in enumerate(validated_papers[:5], 1):
+                    title = paper.get('title', 'Unknown Title')
+                    content = paper.get('content', paper.get('abstract', ''))[:300]
+                    literature_context += f"[{i}] {title}\nContent: {content}...\n\n"
+                
+                # Generate experiments using existing literature without redundant search
+                experiment_plan = await self._generate_literature_grounded_experiments(
+                    original_prompt,
+                    direction_text, 
+                    key_questions,
+                    literature_context,
+                    validated_papers,
+                    validation_feedback,
+                    current_iteration
+                )
+                
+                experiment_summary = {
+                    "format": "literature_grounded",
+                    "methodology": "existing_papers_analysis",
+                    "papers_used": len(validated_papers),
+                    "research_direction": direction_text,
+                    "generated_at": "literature_grounded_complete"
+                }
+                
+                print(f"✅ Generated literature-grounded experiments using {len(validated_papers)} existing papers")
+                
+                return {
+                    **state,
+                    "experiment_suggestions": experiment_plan,
+                    "experiment_summary": experiment_summary,
+                    "final_outputs": {
+                        "formatted_summary": experiment_plan,
+                        "full_plan": experiment_plan,
+                        "format": "literature_grounded",
+                        "methodology": "Existing Papers Analysis (No Redundant Search)"
+                    },
+                    "current_step": "literature_grounded_experiments_suggested"
+                }
+            else:
+                print("⚠️ No existing papers found, falling back to basic experiment framework")
+                fallback_plan = self._create_fallback_tree_experiment(original_prompt)
+                
+                return {
+                    **state,
+                    "experiment_suggestions": fallback_plan,
+                    "experiment_summary": {"format": "fallback", "methodology": "basic_framework"},
+                    "final_outputs": {"formatted_summary": fallback_plan, "format": "fallback"},
+                    "current_step": "fallback_experiments_suggested"
+                }
+            
+            # Get hypotheses to test
+            hypotheses = research_components.get('hypotheses', [research_input])
+            research_goal = research_components.get('research_goal', original_prompt)
+            
+            print(f"🎯 Identified {len(hypotheses)} hypotheses to test")
+            for i, hyp in enumerate(hypotheses[:3], 1):
+                print(f"   {i}. {hyp[:80]}...")
+            
+            # Run experiment tree search for each hypothesis
+            all_experiment_results = []
+            
+            for i, hypothesis in enumerate(hypotheses[:2], 1):  # Limit to 2 hypotheses for efficiency
+                print(f"\n🌳 Running tree search for hypothesis {i}/{min(len(hypotheses), 2)}")
+                print(f"Hypothesis: {hypothesis[:100]}...")
+                
+                # Create combined input with research context
+                combined_input = f"""
+                Research Goal: {research_goal}
+                Research Context: {findings_analysis}
+                Current Results: {experimental_results}
+                
+                Hypothesis to test: {hypothesis}
+                """
+                
+                try:
+                    # Run tree search with limited iterations for efficiency
+                    best_experiment = await run_experiment_tree_search(
+                        combined_input, 
+                        num_iterations=5  # Reduced from 10 for faster execution
+                    )
+                    
+                    all_experiment_results.append({
+                        'hypothesis': hypothesis,
+                        'experiment_design': best_experiment,
+                        'tree_search_completed': True
+                    })
+                    
+                    print(f"✅ Completed tree search for hypothesis {i}")
+                    
+                except Exception as e:
+                    print(f"⚠️ Tree search failed for hypothesis {i}: {str(e)}")
+                    all_experiment_results.append({
+                        'hypothesis': hypothesis,
+                        'experiment_design': self._create_fallback_tree_experiment(hypothesis),
+                        'tree_search_completed': False,
+                        'error': str(e)
+                    })
+            
+            # Format results into comprehensive experiment plan
+            tree_experiment_plan = self._format_tree_experiment_results(
+                all_experiment_results, 
+                research_goal, 
+                original_prompt
+            )
+            
+            # Create structured summary for state management
+            experiment_summary = {
+                "format": "tree_validated",
+                "methodology": "experiment_tree_search",
+                "hypotheses_tested": len(all_experiment_results),
+                "successful_searches": sum(1 for r in all_experiment_results if r.get('tree_search_completed', False)),
+                "research_goal": research_goal,
+                "generated_at": "experiment_tree_complete"
+            }
+            
+            print(f"✅ Generated tree-validated experiment plan for {len(all_experiment_results)} hypotheses")
+            print(f"🔬 {experiment_summary['successful_searches']}/{experiment_summary['hypotheses_tested']} tree searches completed successfully")
+            
+            # Extract priority experiments from tree results
+            prioritized_experiments = []
+            for result in all_experiment_results:
+                if result.get('experiment_design'):
+                    exp_design = result['experiment_design']
+                    if isinstance(exp_design, dict) and 'content' in exp_design:
+                        # Extract experiment name from content
+                        content = exp_design['content']
+                        lines = content.split('\n')
+                        for line in lines:
+                            if 'Experiment' in line or 'Study' in line:
+                                prioritized_experiments.append(line.strip())
+                                break
+            
+            # Create implementation roadmap
+            implementation_roadmap = {
+                "total_experiments": len(all_experiment_results),
+                "methodology": "tree_search_validated",
+                "estimated_timeline": f"{len(all_experiment_results) * 2}-{len(all_experiment_results) * 4} weeks",
+                "tree_validated": True,
+                "next_immediate_actions": prioritized_experiments[:2] if prioritized_experiments else []
+            }
+            
+            return {
+                **state,
+                "experiment_suggestions": tree_experiment_plan,
+                "experiment_summary": experiment_summary,
+                "tree_experiment_results": all_experiment_results,
+                "prioritized_experiments": prioritized_experiments,
+                "implementation_roadmap": implementation_roadmap,
+                "final_outputs": {
+                    "formatted_summary": tree_experiment_plan,
+                    "full_plan": tree_experiment_plan,
+                    "format": "tree_validated",
+                    "methodology": "experiment_tree_search"
+                },
+                "current_step": "tree_experiments_suggested"
+            }
+            
+        except Exception as e:
+            print(f"❌ Error in suggest_experiments_tree_node: {str(e)}")
+            # Fallback to create basic experiment suggestions
+            fallback_suggestions = self._create_fallback_tree_experiment(state.get("original_prompt", ""))
+            
+            return {
+                **state,
+                "experiment_suggestions": fallback_suggestions,
+                "experiment_summary": {
+                    "format": "fallback",
+                    "methodology": "fallback_due_to_error",
+                    "error": str(e)
+                },
+                "errors": state.get("errors", []) + [f"Experiment tree error: {str(e)}"],
+                "current_step": "tree_suggestion_error"
+            }
+        
+        finally:
+            # Restore original environment variables
+            try:
+                if 'original_api_key' in locals():
+                    if original_api_key is not None:
+                        os.environ["OPENAI_API_KEY"] = original_api_key
+                    elif "OPENAI_API_KEY" in os.environ:
+                        del os.environ["OPENAI_API_KEY"]
+                        
+                if 'original_base_url' in locals():        
+                    if original_base_url is not None:
+                        os.environ["BASE_URL"] = original_base_url
+                    elif "BASE_URL" in os.environ:
+                        del os.environ["BASE_URL"]
+            except:
+                pass  # Ignore cleanup errors
+    
+    def _prepare_research_input_for_tree(self, original_prompt: str, experimental_results: dict, 
+                                       findings_analysis: dict, research_direction: dict) -> str:
+        """Prepare comprehensive research input for the experiment tree system."""
+        
+        # Extract research direction details
+        selected_direction = research_direction.get("selected_direction", {})
+        direction_text = selected_direction.get("direction", "")
+        key_questions = selected_direction.get("key_questions", [])
+        
+        research_input = f"""
+        Original Research Request: {original_prompt}
+        
+        Current Research Direction: {direction_text}
+        
+        Key Research Questions:
+        {chr(10).join(f"- {q}" for q in key_questions[:3])}
+        
+        Current Findings Analysis:
+        {findings_analysis}
+        
+        Experimental Context:
+        {experimental_results}
+        
+        Research Focus: Design and validate experiments to advance this research direction with concrete, implementable methodologies.
+        """
+        
+        return research_input.strip()
+    
+    async def _generate_literature_grounded_experiments(self, original_prompt: str, direction_text: str, 
+                                                      key_questions: list, literature_context: str, 
+                                                      validated_papers: list, validation_feedback: str = "",
+                                                      current_iteration: int = 1) -> str:
+        """Generate experiments grounded in existing literature without redundant ArXiv search."""
+        
+        iteration_context = f"ITERATION {current_iteration}" if current_iteration > 1 else "INITIAL GENERATION"
+        
+        experiment_prompt = f"""
+        You are an expert machine learning researcher. Based on the existing literature analysis and research direction, 
+        generate a comprehensive experimental roadmap that builds on the papers already reviewed.
+
+        **{iteration_context}**
+        {validation_feedback}
+
+        **Research Request:** {original_prompt}
+
+        **Research Direction:** {direction_text}
+
+        **Key Questions to Address:**
+        {chr(10).join(f"• {q}" for q in key_questions[:3])}
+
+        **Available Literature Context:**
+        {literature_context}
+
+        **Analysis:** {len(validated_papers)} relevant papers have been identified and reviewed for experimental guidance.
+
+        MANDATORY CITATION REQUIREMENTS (ZERO TOLERANCE FOR VIOLATIONS):
+        1. **EVERY dataset mentioned** MUST include specific citation: "CIFAR-10 [Krizhevsky et al., 2009]"
+        2. **EVERY model/architecture** MUST include original paper: "ResNet-50 [He et al., 2016]"  
+        3. **EVERY optimization method** MUST cite source: "Adam optimizer [Kingma & Ba, 2014]"
+        4. **EVERY evaluation metric** MUST include definition source: "F1-score [van Rijsbergen, 1979]"
+        5. **EVERY experimental procedure** MUST reference methodology papers
+        6. **EVERY claim** MUST be backed by specific literature references
+        7. **NO vague references** - use exact paper titles and years when possible
+
+        CRITICAL TECHNICAL REQUIREMENTS:
+        1. **Use ONLY verified, real datasets** - no hypothetical or made-up data sources
+        2. **Specify EXACT model architectures** - layers, parameters, configurations
+        3. **Include precise resource estimates** - GPU hours, memory requirements, storage
+        4. **Provide step-by-step procedures** - reproducible implementation details
+        5. **Address ALL validation feedback** - fix every identified issue completely
+        6. **Ground ALL claims in literature** - every statement needs a citation
+
+        Generate a comprehensive experimental plan in markdown format with the following sections:
+
+        # 🔬 Literature-Grounded Experimental Roadmap
+
+        ## 1. Literature-Informed Priority Experiments
+        *(Based on insights from the {len(validated_papers)} reviewed papers)*
+
+        For each experiment (3-5 experiments):
+        - **Experiment Name & Objective**
+        - **Literature Support** (reference specific papers: [Smith et al., 2023], [Paper Title, Year])
+        - **Hypothesis being tested** (with supporting citations)
+        - **Methodology** (cite EVERY technique: "We use dropout [Srivastava et al., 2014]")
+        - **Datasets** (with EXACT citations: "MNIST [LeCun et al., 1998]")
+        - **Models** (with architecture papers: "Vision Transformer [Dosovitskiy et al., 2020]")
+        - **Evaluation metrics** (with definition sources)
+        - **Expected outcomes and success criteria**
+        - **Resources required** (specific compute, time, storage)
+
+        ## 2. Literature-Guided Methodology Improvements
+        *(Key insights from existing research)*
+
+        - **Best practices identified** (cite supporting papers)
+        - **Common pitfalls to avoid** (reference failure analysis papers)
+        - **Validated approaches** (cite successful implementation papers)
+        - **Novel combinations** (reference foundational work for each component)
+
+        ## 3. Comparative Evaluation Framework
+        *(Benchmarking against literature)*
+
+        - **Baseline methods** (cite original papers for each baseline)
+        - **Evaluation metrics** (cite metric definition papers)
+        - **Statistical validation** (cite statistical method papers)
+        - **Reproducibility considerations** (reference reproducibility guidelines)
+
+        ## 4. Implementation Strategy
+        *(Prioritized based on literature evidence)*
+
+        - **Baseline methods** from literature to compare against
+        - **Evaluation metrics** used in similar studies
+        - **Statistical validation** approaches from reviewed papers
+        - **Reproducibility considerations**
+
+        ## 4. Implementation Strategy
+        *(Prioritized based on literature evidence)*
+
+        ### Phase 1: Literature-Validated Quick Wins (1-2 weeks)
+        - Experiments with strong literature support
+        - Well-established methodologies
+
+        ### Phase 2: Literature-Informed Innovations (1-2 months)  
+        - Novel combinations of validated approaches
+        - Improvements on existing methods
+
+        ### Phase 3: Literature-Guided Explorations (2-4 months)
+        - Address gaps identified in literature
+        - Test hypotheses suggested by reviewed papers
+
+        ## 5. Literature References Integration
+        
+        Based on the {len(validated_papers)} papers reviewed, this roadmap leverages:
+        - Proven experimental methodologies
+        - Validated evaluation frameworks  
+        - Known challenges and solutions
+        - Research gaps and opportunities
+
+        **Methodology:** This plan is grounded in existing literature analysis, avoiding redundant research and building on established knowledge.
+
+        Be specific and actionable. Reference the literature context where relevant using numbered citations [1], [2], etc.
+        """
+
+        response = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": "You are an expert ML researcher who generates literature-grounded experimental plans. Use markdown formatting and cite literature appropriately."},
+                    {"role": "user", "content": experiment_prompt}
+                ],
+                temperature=0.3
+            )
+        )
+
+        return response.choices[0].message.content.strip()
+    
+    def _format_tree_experiment_results(self, experiment_results: list, research_goal: str, original_prompt: str) -> str:
+        """Format tree experiment results into a comprehensive markdown plan."""
+        
+        plan_parts = []
+        plan_parts.append("# 🌳 Tree-Validated Experimental Roadmap")
+        plan_parts.append("=" * 60)
+        plan_parts.append(f"**Research Goal:** {research_goal}")
+        plan_parts.append(f"**Original Request:** {original_prompt[:150]}...")
+        plan_parts.append(f"**Methodology:** Experiment Tree Search with Literature Validation")
+        plan_parts.append(f"**Hypotheses Tested:** {len(experiment_results)}")
+        plan_parts.append("")
+        
+        # Add each experiment result
+        for i, result in enumerate(experiment_results, 1):
+            plan_parts.append(f"## Experiment {i}: {result['hypothesis'][:100]}...")
+            plan_parts.append("")
+            
+            if result.get('tree_search_completed', False):
+                plan_parts.append("**Status:** ✅ Tree Search Completed")
+                
+                experiment_design = result.get('experiment_design', {})
+                if isinstance(experiment_design, dict):
+                    # Extract experiment details
+                    content = experiment_design.get('content', 'No content available')
+                    score = experiment_design.get('score', 'N/A')
+                    citations = experiment_design.get('citations', [])
+                    
+                    plan_parts.append(f"**Confidence Score:** {score}")
+                    plan_parts.append("")
+                    plan_parts.append("**Experiment Design:**")
+                    plan_parts.append(content)
+                    plan_parts.append("")
+                    
+                    if citations:
+                        plan_parts.append("**Literature References:**")
+                        for citation in citations[:3]:  # Limit to top 3 citations
+                            plan_parts.append(f"- {citation}")
+                        plan_parts.append("")
+                        
+                else:
+                    plan_parts.append("**Experiment Design:**")
+                    plan_parts.append(str(experiment_design))
+                    plan_parts.append("")
+                    
+            else:
+                plan_parts.append("**Status:** ⚠️ Tree Search Failed")
+                plan_parts.append(f"**Error:** {result.get('error', 'Unknown error')}")
+                plan_parts.append("")
+                plan_parts.append("**Fallback Experiment Design:**")
+                fallback = result.get('experiment_design', 'No fallback available')
+                plan_parts.append(str(fallback))
+                plan_parts.append("")
+            
+            plan_parts.append("---")
+            plan_parts.append("")
+        
+        # Add implementation notes
+        plan_parts.append("## Implementation Notes")
+        plan_parts.append("")
+        plan_parts.append("- **Tree Search Methodology:** Each hypothesis was evaluated using Monte Carlo Tree Search with literature validation")
+        plan_parts.append("- **Literature Integration:** Experiments are grounded in existing research literature")
+        plan_parts.append("- **Scoring System:** Multi-criteria evaluation including feasibility, novelty, and scientific soundness")
+        plan_parts.append("- **Validation:** Each experiment design is iteratively refined based on literature evidence")
+        plan_parts.append("")
+        
+        return "\n".join(plan_parts)
+    
+    def _create_fallback_tree_experiment(self, hypothesis: str) -> str:
+        """Create a fallback experiment when tree search fails."""
+        return f"""
+        ## Fallback Experiment Design
+        
+        **Hypothesis:** {hypothesis}
+        
+        **Approach:** Basic experimental framework
+        
+        **Methodology:**
+        1. Define baseline measurements
+        2. Implement controlled testing conditions
+        3. Collect and analyze data
+        4. Statistical validation of results
+        
+        **Expected Outcome:** Preliminary validation of hypothesis with structured approach
+        
+        **Next Steps:** Refine methodology based on initial results
+        
+        *Note: This is a fallback design. Consider using the full tree search approach for more comprehensive experiment validation.*
+        """
     
     def _create_fallback_experiment_suggestions(self, original_prompt: str, findings_analysis: dict) -> dict:
         """Create structured fallback experiment suggestions when JSON parsing fails."""
