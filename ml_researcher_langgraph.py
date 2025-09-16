@@ -239,6 +239,10 @@ class RouterState(TypedDict):
 class MLResearcherLangGraph:
     """LangGraph-based ML Research Tool with Multi-Workflow Architecture."""
     
+    # ==================================================================================
+    # INITIALIZATION & CONFIGURATION
+    # ==================================================================================
+    
     def __init__(self):
         """Initialize the tool with LiteLLM configuration."""
         # Load configuration from env.example file
@@ -298,6 +302,8 @@ class MLResearcherLangGraph:
         except Exception:
             pass
         return None
+    
+    # --- CONFIGURATION & SETUP HELPERS ---
     
     def _combine_query_and_data(self, user_query: str, uploaded_data: List[str]) -> str:
         """Combine user query with uploaded data for LLM prompts when needed."""
@@ -522,6 +528,10 @@ class MLResearcherLangGraph:
         
         return await self.arxiv_processor.rank_papers_by_relevance(papers, query, prompt_to_use)
     
+    # ==================================================================================
+    # WORKFLOW GRAPH BUILDERS
+    # ==================================================================================
+    
     def _build_router_graph(self) -> StateGraph:
         """Build the router workflow to decide which main workflow to use."""
         workflow = StateGraph(RouterState)
@@ -735,6 +745,10 @@ class MLResearcherLangGraph:
 
         return workflow.compile()
 
+    # ==================================================================================
+    # ROUTER WORKFLOW NODES
+    # ==================================================================================
+
     async def _route_request_node(self, state: RouterState) -> RouterState:
         """Router node to decide which workflow to use based on user prompt."""
         print("\n🤖 Router: Analyzing user request to determine workflow...")
@@ -870,6 +884,12 @@ class MLResearcherLangGraph:
             print(f"❌ {error_msg}, using default routing")
         
         return state
+    
+    # ==================================================================================
+    # MODEL SUGGESTION WORKFLOW NODES
+    # ==================================================================================
+    
+    # --- PHASE 1: TASK ANALYSIS & DECOMPOSITION ---
     
     async def _analyze_properties_and_task_node(self, state: ModelSuggestionState) -> ModelSuggestionState:
         """Combined node for extracting properties and decomposing task concurrently."""
@@ -1252,6 +1272,8 @@ class MLResearcherLangGraph:
             print(f"❌ {error_msg}")
         
         return state
+    
+    # --- PHASE 2: ARXIV SEARCH & PAPER RETRIEVAL ---
     
     def _generate_search_query_node(self, state: ModelSuggestionState) -> ModelSuggestionState:
         """Node for generating arXiv search query with optional guidance from validation."""
@@ -1829,6 +1851,8 @@ class MLResearcherLangGraph:
         
         return text
 
+    # --- PHASE 3: PAPER VALIDATION & QUALITY CONTROL ---
+
     def _validate_papers_node(self, state: ModelSuggestionState) -> ModelSuggestionState:
         """Node to validate if retrieved papers can answer the user's query and decide next steps."""
         
@@ -2006,6 +2030,8 @@ Return only the JSON object, no additional text.
         
         return state
 
+    # --- MODEL SUGGESTION WORKFLOW CONTROL ---
+
     def _should_continue_with_papers(self, state: ModelSuggestionState) -> str:
         """Determine whether to continue with current papers or search again."""
         
@@ -2036,6 +2062,7 @@ Return only the JSON object, no additional text.
             print(f"🔄 Validation decision: {decision} -> Continuing with current papers")
             return "continue"
 
+    # --- PHASE 4: MODEL SUGGESTION & RECOMMENDATIONS ---
 
     def _suggest_models_node(self, state: ModelSuggestionState) -> ModelSuggestionState:
         """Node for suggesting suitable models based on analysis."""
@@ -2306,6 +2333,8 @@ Return only the JSON object, no additional text.
             print(f"❌ {error_msg}")
         
         return state
+    
+    # --- PHASE 5: CRITIQUE & QUALITY ASSURANCE ---
     
     def _critique_response_node(self, state: ModelSuggestionState) -> ModelSuggestionState:
         """Node for verifying and potentially improving the model suggestions."""
@@ -2710,7 +2739,11 @@ Return only the JSON object, no additional text.
             return "finalize"
 
 
-
+    # ==================================================================================
+    # RESEARCH PLANNING WORKFLOW NODES  
+    # ==================================================================================
+    
+    # --- PHASE 1: PROBLEM GENERATION & VALIDATION ---
 
     async def _generate_problem_node(self, state: ResearchPlanningState) -> ResearchPlanningState:
         """🆕 SMART GENERATION: Node for generating research problems with rejection feedback learning."""
@@ -3356,6 +3389,8 @@ Specific improvements needed:
             
         return state
 
+    # --- PHASE 2: RESEARCH PLAN CREATION & STRUCTURING ---
+
     def _create_research_plan_node(self, state: ResearchPlanningState) -> ResearchPlanningState:
         """Node for creating comprehensive research plan based on the selected problem."""
         selected_problem = state.get("selected_problem", {})
@@ -3423,7 +3458,8 @@ Specific improvements needed:
                 # Include search queries used for transparency
                 search_queries = validation.get('search_queries', [])
                 if search_queries:
-                    problems_text += f"- **Search Strategies Used:** {', '.join([f'"{q}"' for q in search_queries])}\n"
+                    query_list = ', '.join([f"'{q}'" for q in search_queries])
+                    problems_text += f"- **Search Strategies Used:** {query_list}\n"
                 
                 # Include key findings from web search
                 web_findings = validation.get('web_findings', '')
@@ -3580,27 +3616,45 @@ Use the following web-discovered sources as starting points for literature revie
                 - Publication targets considering current publication landscape
                 - Impact measurement relative to existing research influence
 
-## EXPECTED OUTCOMES & CONTRIBUTIONS
-- Contributions positioned relative to current research landscape
-- Expected papers building upon and citing discovered relevant work
-- Potential real-world applications validated through market research
-- Future research enablement informed by current research directions
-- Clear differentiation from existing approaches found through web analysis
+                ## EXPECTED OUTCOMES & CONTRIBUTIONS
+                - Contributions positioned relative to current research landscape
+                - Expected papers building upon and citing discovered relevant work
+                - Potential real-world applications validated through market research
+                - Future research enablement informed by current research directions
+                - Clear differentiation from existing approaches found through web analysis
 
-## REFERENCES & SOURCES
-**Primary Sources Identified During Web Validation:**
-{f"The following sources were identified during web search validation and should be prioritized in literature review:{chr(10)}{chr(10).join(validation.get('formatted_sources', []))}" if validation.get('formatted_sources') else f"Sources found (URLs only):{chr(10)}{chr(10).join([f'[{i}] {url}' for i, url in enumerate(validation.get('relevant_urls', [])[:10], 1)])}" if validation.get('relevant_urls') else "No specific sources identified during validation. Standard literature search recommended."}
+            ## REFERENCES & SOURCES
+            **Primary Sources Identified During Web Validation:**"""
+            
+            if validation.get('formatted_sources'):
+                sources_text = "The following sources were identified during web search validation and should be prioritized in literature review:\n" + "\n".join(validation.get('formatted_sources', []))
+            elif validation.get('relevant_urls'):
+                url_list = [f"[{i}] {url}" for i, url in enumerate(validation.get('relevant_urls', [])[:10], 1)]
+                sources_text = "Sources found (URLs only):\n" + "\n".join(url_list)
+            else:
+                sources_text = "No specific sources identified during validation. Standard literature search recommended."
+                
+            content += f"""
+            {sources_text}
 
-**Search Queries Used for Source Discovery:**
-{f"Search strategies that identified these sources: {', '.join([f'\\"{q}\\"' for q in validation.get('search_queries', [])])}" if validation.get('search_queries') else "No search queries recorded."}
+            **Search Queries Used for Source Discovery:**"""
+            
+            if validation.get('search_queries'):
+                query_list = ', '.join([f'"{q}"' for q in validation.get('search_queries', [])])
+                search_queries_text = f"Search strategies that identified these sources: {query_list}"
+            else:
+                search_queries_text = "No search queries recorded."
+                
+            content += f"""
+            {search_queries_text}
 
-**Source Utilization Instructions:**
-- Use the numbered references [1], [2], [3], etc. throughout your research plan
-- Prioritize these sources in your initial literature review
-- Follow citation networks from these foundational sources
-- Contact authors/institutions identified in these sources for potential collaboration
+            **Source Utilization Instructions:**
+            - Use the numbered references [1], [2], [3], etc. throughout your research plan
+            - Prioritize these sources in your initial literature review
+            - Follow citation networks from these foundational sources
+            - Contact authors/institutions identified in these sources for potential collaboration
 
-**Note:** These sources represent the current state of research as discovered through web validation. They provide immediate starting points for literature review and should be supplemented with systematic database searches.
+                **Note:** These sources represent the current state of research as discovered through web validation. They provide immediate starting points for literature review and should be supplemented with systematic database searches.
 
                 **RESEARCH FOCUS:** The selected problem shows:
                 - Web search validation with {validation.get('search_results_count', 0)} relevant results found
@@ -3608,13 +3662,13 @@ Use the following web-discovered sources as starting points for literature revie
                 - Key resources available for immediate literature review via discovered URLs
                 - Current research gaps that can be systematically addressed
 
-Remember: This plan leverages real-time web search validation to ensure relevance, avoid duplication, and build upon existing work. Each phase should incorporate insights from the web search findings, and the URLs discovered should serve as immediate action items for literature review and collaboration outreach.
+                Remember: This plan leverages real-time web search validation to ensure relevance, avoid duplication, and build upon existing work. Each phase should incorporate insights from the web search findings, and the URLs discovered should serve as immediate action items for literature review and collaboration outreach.
 
-**CITATION STRATEGY:** 
-- Reference discovered sources using standard academic format
-- Track additional sources found through citation networks
-- Maintain proper attribution to foundational work identified during validation
-- Use source numbering [1], [2], etc. for easy reference throughout the plan
+                **CITATION STRATEGY:** 
+                - Reference discovered sources using standard academic format
+                - Track additional sources found through citation networks
+                - Maintain proper attribution to foundational work identified during validation
+                - Use source numbering [1], [2], etc. for easy reference throughout the plan
 
                 Provide a detailed, focused research plan that maximizes impact on this specific validated research problem.
             """
@@ -3674,6 +3728,8 @@ Remember: This plan leverages real-time web search validation to ensure relevanc
             print(f"❌ {error_msg}")
         
         return state
+
+    # --- PHASE 3: PLAN CRITIQUE & ITERATIVE REFINEMENT ---
 
     def _critique_plan_node(self, state: ResearchPlanningState) -> ResearchPlanningState:
         """Node for critiquing the generated research plan."""
@@ -4596,7 +4652,12 @@ Provide the complete refined research plan:
         
         return results
 
-    # Conditional edge functions for research planning workflow
+    # ==================================================================================
+    # WORKFLOW CONTROL & ROUTING FUNCTIONS
+    # ==================================================================================
+    
+    # --- RESEARCH PLANNING WORKFLOW CONTROL ---
+
     def _should_continue_generating(self, state: ResearchPlanningState) -> str:
         """Determine if we should continue generating problems or move to problem selection."""
         iteration_count = state.get("iteration_count", 0)
@@ -5106,6 +5167,12 @@ Provide the complete refined research plan:
             except Exception as e:
                 print(f"❌ An error occurred: {str(e)}")
 
+    # ==================================================================================
+    # UTILITY & HELPER FUNCTIONS
+    # ==================================================================================
+    
+    # --- DOCUMENT GENERATION HELPERS ---
+
     def _generate_research_plan_word_document(self, state: ResearchPlanningState) -> str:
         """Generate and save a comprehensive Word document for the research plan."""
         try:
@@ -5558,6 +5625,8 @@ CRITICAL: Address ALL the above issues in this iteration. Provide specific, accu
                 "analysis_completed": False,
                 "current_step": "analysis_error"
             }
+    
+    # --- TEXT PROCESSING & DOMAIN ANALYSIS HELPERS ---
     
     def _infer_domain_from_prompt(self, prompt_lower: str) -> dict:
         """Infer research domain from user prompt keywords."""
@@ -6031,6 +6100,8 @@ BE STRICT: Only pass directions that are both **methodologically solid** and **w
                 "next_node": "generate_experiment_search_query"  # Continue on error with PASS
             }
 
+    # --- EXPERIMENT SUGGESTION WORKFLOW CONTROL ---
+
     def _should_continue_with_research_direction(self, state: ExperimentSuggestionState) -> str:
         """Determine whether to continue with current research direction or iterate."""
         
@@ -6076,9 +6147,6 @@ BE STRICT: Only pass directions that are both **methodologically solid** and **w
             experiment_iterations = state.get("experiment_iterations", [])
             current_iteration = len(experiment_iterations) + 1
             
-            # WORKAROUND: Also store simple integer counter for debugging
-            experiment_iteration_counter = state.get("experiment_iteration_counter", 0)
-            print(f"🔍 DEBUG - Alternative counter check: experiment_iteration_counter = {experiment_iteration_counter}")
             
             # Add current experiments to history
             current_experiment_record = {
@@ -6088,11 +6156,6 @@ BE STRICT: Only pass directions that are both **methodologically solid** and **w
                 "timestamp": __import__('datetime').datetime.now().isoformat()
             }
             experiment_iterations.append(current_experiment_record)
-            
-            print(f"🔍 DEBUG - Validation node updating iterations:")
-            print(f"     - Before: {len(experiment_iterations)-1} items")
-            print(f"     - Adding iteration: {current_iteration}")
-            print(f"     - After: {len(experiment_iterations)} items")
             
             # Create iteration history context
             iteration_history = ""
@@ -6284,24 +6347,15 @@ BE RUTHLESSLY STRICT: Only pass experiments that are **technically perfect**, **
                     next_node = "suggest_experiments_iteration"  # Route to iteration node to avoid state collision
                 
                 # Store validation results in state
-                return_state = {
+                return {
                     **state,
                     "experiment_validation_results": validation_json,
                     "experiment_iterations": experiment_iterations,
                     "experiment_validation_decision": validation_result,
                     "current_experiment_iteration": current_iteration,
-                    "experiment_iteration_counter": current_iteration,  # WORKAROUND: Simple integer counter
                     "current_step": "experiments_validated",
                     "next_node": next_node
                 }
-                
-                print(f"🔍 DEBUG - Validation node returning state:")
-                print(f"     - experiment_iterations: {len(return_state['experiment_iterations'])} items")
-                print(f"     - experiment_iteration_counter: {return_state['experiment_iteration_counter']}")
-                print(f"     - next_node: {return_state['next_node']}")
-                print(f"     - current_experiment_iteration: {return_state['current_experiment_iteration']}")
-                
-                return return_state
                 
             except json.JSONDecodeError as e:
                 print(f"❌ Failed to parse experiment validation JSON: {e}")
@@ -7524,22 +7578,6 @@ BE ABSOLUTELY STRICT: Only pass analyses that are **technically perfect**, **com
         print("\n🌳 Experiment Tree: Generating validated experiments using tree search approach...")
         
         try:
-            # DEBUG: Check iteration state at node entry
-            experiment_iterations = state.get("experiment_iterations", [])
-            current_iteration = len(experiment_iterations) + 1
-            print(f"🔍 DEBUG - Experiment suggestion node received state:")
-            print(f"     - experiment_iterations: {len(experiment_iterations)} items")
-            print(f"     - calculated current_iteration: {current_iteration}")
-            if experiment_iterations:
-                print(f"     - last iteration: {experiment_iterations[-1].get('iteration', 'unknown')}")
-            
-            # Detect if this is the iteration path vs fresh path
-            experiment_validation_results = state.get("experiment_validation_results", {})
-            if experiment_validation_results:
-                print(f"🔄 ITERATION PATH: This is an experiment refinement iteration")
-            else:
-                print(f"🆕 FRESH PATH: This is the initial experiment generation")
-            
             # Store current environment variables
             import os
             original_api_key = os.environ.get("OPENAI_API_KEY")
@@ -7578,10 +7616,6 @@ BE ABSOLUTELY STRICT: Only pass analyses that are **technically perfect**, **com
             experiment_iterations = state.get("experiment_iterations", [])
             experiment_validation_results = state.get("experiment_validation_results", {})
             current_iteration = len(experiment_iterations) + 1
-            
-            # WORKAROUND: Also check simple integer counter for debugging
-            experiment_iteration_counter = state.get("experiment_iteration_counter", 0)
-            print(f"🔍 DEBUG - Alternative counter check in suggestion node: experiment_iteration_counter = {experiment_iteration_counter}")
             
             # Extract validation feedback for improvement
             validation_feedback = ""
@@ -7965,6 +7999,8 @@ IMPORTANT: Address ALL the above issues in this iteration. Use only verified met
         )
 
         return response.choices[0].message.content.strip()
+    
+    # --- EXPERIMENT TREE & FORMATTING HELPERS ---
     
     def _format_tree_experiment_results(self, experiment_results: list, research_goal: str, original_prompt: str) -> str:
         """Format tree experiment results into a comprehensive markdown plan."""
