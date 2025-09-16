@@ -54,7 +54,7 @@ from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
 import openai
 
 # Web search imports
-from modular_search.engines import GoogleSearchEngine
+from tavily import TavilyClient
 
 # Local imports
 from Report_to_txt import extract_pdf_text
@@ -247,6 +247,9 @@ class MLResearcherLangGraph:
         self.model = self._load_from_env_file("DEFAULT_MODEL") or "gemini/gemini-2.5-flash"
         self.model_cheap = "gemini/gemini-2.5-flash-lite"
         
+        # Load Tavily API key (using the key from the example file)
+        self.tavily_api_key = "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"
+        
         if not self.api_key:
             raise ValueError("API key not found. Check env.example file or set OPENAI_API_KEY environment variable.")
         
@@ -255,6 +258,15 @@ class MLResearcherLangGraph:
             api_key=self.api_key,
             base_url=self.base_url
         )
+        
+        # Initialize Tavily client for web search
+        try:
+            self.tavily_client = TavilyClient(api_key=self.tavily_api_key)
+            print("Tavily web search client initialized successfully.")
+        except Exception as e:
+            self.tavily_client = None
+            print(f"Tavily client initialization failed: {e}")
+        
         try:
             # Initialize ArXiv paper processor
             self.arxiv_processor = ArxivPaperProcessor(self.client, self.model_cheap)
@@ -2632,6 +2644,7 @@ Return only the JSON object, no additional text.
                 4. **IMPACTFUL**: Would advance the field if solved
                 5. **MEASURABLE**: Success can be quantified or evaluated
                 6. **AVOID REPETITION**: Must be different from all previously generated problems
+                7. **ENSURE IT IS WITHIN 400 CHARACTERS**
 
                 Generate ONE specific research problem statement that:
                 - Addresses a concrete gap or limitation in the field
@@ -2746,8 +2759,9 @@ Return only the JSON object, no additional text.
             # Step 1: Perform web searches to find existing solutions
             print("🌐 Performing web searches for existing solutions...")
             
-            # Create search engine
-            search_engine = GoogleSearchEngine(num_results=10)
+            # Check if Tavily client is available
+            if not self.tavily_client:
+                raise Exception("Tavily client not initialized. Web search unavailable.")
             
             # Construct search queries to find existing solutions
             search_queries = [
@@ -2762,19 +2776,23 @@ Return only the JSON object, no additional text.
             all_search_results = []
             search_summaries = []
             
-            # Perform searches
+            # Perform searches using Tavily
             for query in search_queries[:3]:  # Limit to 3 queries to avoid rate limits
                 try:
                     print(f"🔍 Searching: {query[:50]}...")
-                    results = await asyncio.get_event_loop().run_in_executor(
+                    
+                    # Use Tavily search
+                    search_response = await asyncio.get_event_loop().run_in_executor(
                         None, 
-                        lambda q=query: search_engine(q)
+                        lambda q=query: self.tavily_client.search(q, max_results=10)
                     )
                     
-                    if results:
-                        all_search_results.extend(results)
-                        search_summaries.append(f"Query: '{query}' - Found {len(results)} results")
-                        print(f"  ✅ Found {len(results)} results")
+                    if search_response and "results" in search_response:
+                        # Extract URLs from Tavily response
+                        urls = [result["url"] for result in search_response["results"]]
+                        all_search_results.extend(urls)
+                        search_summaries.append(f"Query: '{query}' - Found {len(urls)} results")
+                        print(f"  ✅ Found {len(urls)} results")
                     else:
                         search_summaries.append(f"Query: '{query}' - No results")
                         print(f"  ❌ No results found")
@@ -2888,6 +2906,32 @@ Return only the JSON object, no additional text.
                 validation_response = validation_response.strip()
                 
                 validation_data = json.loads(validation_response)
+                
+                # Check if current problem statement exceeds character limit
+                current_statement = state["current_problem"].get("statement", "")
+                if len(current_statement) > 400:
+                    print(f"⚠️  Problem statement too long ({len(current_statement)} chars), forcing rejection...")
+                    # Override validation to reject for length
+                    validation_data["recommendation"] = "reject"
+                    validation_data["status"] = "too_long"
+                    validation_data["confidence"] = 0.9  # High confidence in length-based rejection
+                    
+                    # Add or update rejection feedback for length
+                    if "rejection_feedback" not in validation_data:
+                        validation_data["rejection_feedback"] = {}
+                    
+                    validation_data["rejection_feedback"].update({
+                        "primary_reason": "too_long",
+                        "specific_issues": [f"Problem statement is {len(current_statement)} characters, exceeds 400 character limit"],
+                        "improvement_suggestions": [
+                            "Reduce statement length to under 400 characters",
+                            "Use more concise language while maintaining specificity",
+                            "Remove unnecessary phrases or words",
+                            "Focus on the core research question"
+                        ],
+                        "scope_guidance": "Maintain the same scope but express it more concisely",
+                        "specific_guidance": f"Current statement has {len(current_statement)} characters. Reduce by at least {len(current_statement) - 400} characters while keeping the core meaning."
+                    })
                 
                 # Store comprehensive validation results including search info
                 validation_data["web_search_performed"] = True
