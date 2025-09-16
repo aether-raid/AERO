@@ -20,8 +20,6 @@ from dotenv import load_dotenv
 # --- Load environment variables ---
 load_dotenv()
 
-
-
 # Initialize clients and ArXiv processor
 primary_client = AsyncOpenAI(
     api_key=os.getenv("OPENAI_API_KEY"),
@@ -50,7 +48,7 @@ async def get_llm_response(messages, temperature=0.2, max_tokens=None):
         return content.strip()
                                     
     except Exception as e:
-        return "Error: API call failed"
+        return f"Error: API call failed (e: {e})"
 
 
 # --- Research Plan Understanding ---
@@ -62,9 +60,22 @@ async def extract_research_components(user_input):
     - hypotheses: List of testable hypotheses (as strings)
     - variables: Key independent and dependent variables
     - relevant_info: Supporting information, constraints
-    
-    Return only JSON format.
-    
+    - experiment ideas: Dictionary of potential experiment ideas with brief descriptions/methods
+
+    Returned output should ONLY contain information which have been **EXTRACTED** from the research plan. Return only JSON format.
+
+    Example output format:
+    {{
+    "research_goal": "...",
+    "hypotheses": ["..."],
+    "variables": "...",
+    "relevant_info": "...",
+    "experiment_ideas": [
+        {{"name": "...", "details": "..."}},
+        {{"name": "...", "details": "..."}}
+    ]
+    }}
+        
     Research Plan: {user_input}
     """
     
@@ -94,3 +105,21 @@ def clean_json_string(text):
     text = re.sub(r"^```(?:json)?|```$", "", text, flags=re.MULTILINE).strip()
     text = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '', text)
     return text
+
+if __name__ == "__main__":
+    import asyncio
+
+    print("Paste your research plan (end with an empty line):")
+    user_input = ""
+    while True:
+        line = input()
+        if line.strip() == "":
+            break
+        user_input += line + "\n"
+
+    async def test_extract():
+        result = await extract_research_components(user_input)
+        print("\n--- Extracted Research Components ---")
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+
+    asyncio.run(test_extract())
