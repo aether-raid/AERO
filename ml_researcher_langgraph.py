@@ -2788,9 +2788,23 @@ Return only the JSON object, no additional text.
                     )
                     
                     if search_response and "results" in search_response:
-                        # Extract URLs from Tavily response
-                        urls = [result["url"] for result in search_response["results"]]
+                        # Extract URLs and titles from Tavily response for better citations
+                        results_info = []
+                        for result in search_response["results"]:
+                            results_info.append({
+                                "url": result.get("url", ""),
+                                "title": result.get("title", ""),
+                                "query_used": query
+                            })
+                        
+                        urls = [info["url"] for info in results_info]
                         all_search_results.extend(urls)
+                        
+                        # Store detailed results info for better citations
+                        if "detailed_results" not in state:
+                            state["detailed_results"] = []
+                        state["detailed_results"].extend(results_info)
+                        
                         search_summaries.append(f"Query: '{query}' - Found {len(urls)} results")
                         print(f"  ✅ Found {len(urls)} results")
                     else:
@@ -2939,8 +2953,20 @@ Return only the JSON object, no additional text.
                 validation_data["search_results_count"] = len(all_search_results)
                 validation_data["total_urls_found"] = len(all_search_results)
                 
-                # Store relevant URLs for the research plan
+                # Store relevant URLs for the research plan with titles
                 validation_data["relevant_urls"] = all_search_results[:10]  # Store top 10 URLs
+                
+                # Store detailed source information for better citations
+                detailed_sources = state.get("detailed_results", [])
+                if detailed_sources:
+                    validation_data["detailed_sources"] = detailed_sources[:10]  # Store detailed info for top 10 sources
+                    # Create formatted source list for display
+                    formatted_sources = []
+                    for i, source in enumerate(detailed_sources[:8], 1):
+                        title = source.get("title", "No title available")[:100]  # Truncate long titles
+                        url = source.get("url", "")
+                        formatted_sources.append(f"[{i}] {title} - {url}")
+                    validation_data["formatted_sources"] = formatted_sources
                 
                 # Create a summary of web findings for the research plan
                 web_findings_summary = f"Web search found {len(all_search_results)} results. "
@@ -3227,27 +3253,40 @@ Strategy: {strategic_guidance}
             
             # Include web search findings if available
             if validation.get('web_search_performed', False):
-                problems_text += f"- **Web Search Performed:** Yes\n"
+                problems_text += f"- **Validation Method:** Web Search Analysis\n"
                 problems_text += f"- **Search Results Found:** {validation.get('search_results_count', 0)}\n"
                 
-                # Include relevant URLs found during validation
+                # Include relevant URLs found during validation with better formatting
                 relevant_urls = validation.get('relevant_urls', [])
-                if relevant_urls:
-                    problems_text += f"- **Relevant Resources Found:**\n"
-                    for j, url in enumerate(relevant_urls[:5], 1):  # Limit to top 5 URLs
-                        problems_text += f"  {j}. {url}\n"
+                detailed_sources = validation.get('detailed_sources', [])
+                formatted_sources = validation.get('formatted_sources', [])
+                
+                if formatted_sources:
+                    problems_text += f"- **Identified Sources for Literature Review:**\n"
+                    for source in formatted_sources:
+                        problems_text += f"  {source}\n"
+                elif relevant_urls:
+                    # Fallback to URLs only if detailed sources not available
+                    problems_text += f"- **Identified Sources for Literature Review:**\n"
+                    for j, url in enumerate(relevant_urls[:8], 1):
+                        problems_text += f"  [{j}] {url}\n"
+                
+                # Include search queries used for transparency
+                search_queries = validation.get('search_queries', [])
+                if search_queries:
+                    problems_text += f"- **Search Strategies Used:** {', '.join([f'"{q}"' for q in search_queries])}\n"
                 
                 # Include key findings from web search
                 web_findings = validation.get('web_findings', '')
                 if web_findings:
-                    problems_text += f"- **Current Research State:** {web_findings[:200]}...\n"
+                    problems_text += f"- **Current Research State:** {web_findings}\n"
                         
-                    # Include existing solutions found
-                    existing_solutions = validation.get('existing_solutions', [])
-                    if existing_solutions:
-                        problems_text += f"- **Existing Approaches:** {', '.join(existing_solutions[:3])}\n"
-                else:
-                    problems_text += f"- **Web Search Performed:** No (fallback to LLM validation)\n"
+                # Include existing solutions found
+                existing_solutions = validation.get('existing_solutions', [])
+                if existing_solutions:
+                    problems_text += f"- **Existing Approaches to Build Upon:** {', '.join(existing_solutions[:5])}\n"
+            else:
+                problems_text += f"- **Validation Method:** LLM-based (fallback, no web search)\n"
                 
                 problems_text += "\n"
             
@@ -3301,6 +3340,13 @@ You are an expert research project manager and academic research planner. Your t
 **YOUR TASK:**
 Create a comprehensive research plan that leverages both the selected problem AND the web search findings. The plan should focus deeply on this specific problem, utilizing its research potential, feasibility, and the current state of research as revealed by web analysis.
 
+**CITATION AND SOURCE INTEGRATION REQUIREMENTS:**
+- Reference the discovered URLs throughout the plan using [1], [2], [3] format
+- Include specific sources in each phase where relevant
+- Use the identified sources as immediate starting points for literature review
+- Build research methodology based on approaches found in these sources
+- Ensure proper attribution and citation planning for final publications
+
 **REQUIRED STRUCTURE:**
 
 ## EXECUTIVE SUMMARY
@@ -3312,58 +3358,58 @@ Create a comprehensive research plan that leverages both the selected problem AN
 ## WEB-INFORMED PROBLEM ANALYSIS
 - Detailed analysis of the selected research problem
 - Current research activity level based on web search insights
-- Assessment of research gaps and opportunities
-- Key resources and URLs identified for immediate follow-up
+- Assessment of research gaps and opportunities identified through source analysis
+- Key resources and URLs identified for immediate follow-up (reference specific sources [1], [2], etc.)
+- Analysis of existing approaches found in discovered sources
+- Identification of potential collaboration opportunities from source authors/institutions
+- Competitive landscape analysis based on web-discovered research
 
 ## PHASE 1: FOUNDATION & LITERATURE REVIEW (First ~15% of Project Timeline)
-Comprehensive literature review strategy starting with URLs found during validation.
+Comprehensive literature review strategy starting with sources identified during web validation.
 
-- Key papers and research groups to study (use provided relevant resources).
+**IMMEDIATE LITERATURE REVIEW SOURCES:**
+Use the following web-discovered sources as starting points for literature review:
+{f"Sources to prioritize:{chr(10)}{chr(10).join(validation.get('formatted_sources', []))}" if validation.get('formatted_sources') else f"URL-only sources:{chr(10)}{chr(10).join([f'[{i}] {url}' for i, url in enumerate(validation.get('relevant_urls', [])[:8], 1)])}" if validation.get('relevant_urls') else "No specific sources identified - use general literature search"}
 
-- Knowledge gap validation through the identified web resources.
-
-- Initial research question refinement based on current state analysis.
-
-- Specific tasks and deliverables for this phase.
+**Phase 1 Tasks:**
+- Systematic review of identified sources above (Priority 1)
+- Follow citation networks from discovered papers (Priority 2)  
+- Key papers and research groups to study (expand from web-found sources)
+- Knowledge gap validation through the identified web resources
+- Initial research question refinement based on current state analysis
+- Specific tasks and deliverables for this phase
 
 ## PHASE 2: PROBLEM FORMULATION & EXPERIMENTAL DESIGN (Next ~10% of Project Timeline)
 Formalize specific research hypotheses for priority problems.
 
-- Design initial experiments or theoretical approaches.
-
-- Identify required datasets, tools, and resources (leverage web-found resources).
-
-- Risk assessment for each chosen problem.
-
-- Specific tasks and deliverables for this phase.
+**Building on Web-Discovered Research:**
+- Analyze methodologies found in identified sources: {f"[{', '.join([str(i) for i in range(1, min(len(validation.get('formatted_sources', validation.get('relevant_urls', []))), 8) + 1)])}]" if validation.get('formatted_sources') or validation.get('relevant_urls') else "N/A"}
+- Design initial experiments or theoretical approaches
+- Identify required datasets, tools, and resources (leverage web-found resources)
+- Risk assessment for each chosen problem based on challenges identified in literature
+- Specific tasks and deliverables for this phase
 
 ## PHASE 3: ACTIVE RESEARCH & DEVELOPMENT (Core ~50% of Project Timeline)
 Research execution plan for each chosen problem.
 
-- Experimental design and methodology informed by web-discovered approaches.
-
-- Progress milestones and validation metrics.
-
-- Collaboration strategies with research groups identified through web search.
-
-- Build upon existing work found through URL analysis.
-
-- Expected outcomes and publications plan.
-
-- Specific tasks and deliverables for this phase.
+**Research Strategy Informed by Current Literature:**
+- Experimental design and methodology informed by approaches in sources {f"[{', '.join([str(i) for i in range(1, min(len(validation.get('formatted_sources', validation.get('relevant_urls', []))), 6) + 1)])}]" if validation.get('formatted_sources') or validation.get('relevant_urls') else "N/A"}
+- Progress milestones and validation metrics benchmarked against existing work
+- Collaboration strategies with research groups identified through web search
+- Build upon existing work found through URL analysis
+- Expected outcomes and publications plan
+- Specific tasks and deliverables for this phase
 
 ## PHASE 4: EVALUATION, SYNTHESIS & DISSEMINATION (Final ~25% of Project Timeline)
 Results evaluation framework comparing against the current state identified via web search.
 
-- Validation of research contributions against existing work found online.
-
-- Publication and dissemination strategy positioning against existing literature.
-
-- Future research directions based on gaps identified through web analysis.
-
-- Expected impact assessment relative to the current research landscape.
-
-- Specific tasks and deliverables for this phase.
+**Publication Strategy with Proper Attribution:**
+- Validation of research contributions against existing work: {f"compare with sources [{', '.join([str(i) for i in range(1, min(len(validation.get('formatted_sources', validation.get('relevant_urls', []))), 6) + 1)])}]" if validation.get('formatted_sources') or validation.get('relevant_urls') else "general comparison"}
+- Publication and dissemination strategy positioning against existing literature
+- Proper citation and attribution of foundational work discovered during validation
+- Future research directions based on gaps identified through web analysis
+- Expected impact assessment relative to the current research landscape
+- Specific tasks and deliverables for this phase
 
 ## WEB-INFORMED RESOURCE REQUIREMENTS
 - Computational resources needed (consider approaches found in web search)
@@ -3392,6 +3438,21 @@ Results evaluation framework comparing against the current state identified via 
 - Future research enablement informed by current research directions
 - Clear differentiation from existing approaches found through web analysis
 
+## REFERENCES & SOURCES
+**Primary Sources Identified During Web Validation:**
+{f"The following sources were identified during web search validation and should be prioritized in literature review:{chr(10)}{chr(10).join(validation.get('formatted_sources', []))}" if validation.get('formatted_sources') else f"Sources found (URLs only):{chr(10)}{chr(10).join([f'[{i}] {url}' for i, url in enumerate(validation.get('relevant_urls', [])[:10], 1)])}" if validation.get('relevant_urls') else "No specific sources identified during validation. Standard literature search recommended."}
+
+**Search Queries Used for Source Discovery:**
+{f"Search strategies that identified these sources: {', '.join([f'\\"{q}\\"' for q in validation.get('search_queries', [])])}" if validation.get('search_queries') else "No search queries recorded."}
+
+**Source Utilization Instructions:**
+- Use the numbered references [1], [2], [3], etc. throughout your research plan
+- Prioritize these sources in your initial literature review
+- Follow citation networks from these foundational sources
+- Contact authors/institutions identified in these sources for potential collaboration
+
+**Note:** These sources represent the current state of research as discovered through web validation. They provide immediate starting points for literature review and should be supplemented with systematic database searches.
+
 **RESEARCH FOCUS:** The selected problem shows:
 - Web search validation with {validation.get('search_results_count', 0)} relevant results found
 - {validation.get('status', 'unknown')} status indicating research opportunities
@@ -3399,6 +3460,12 @@ Results evaluation framework comparing against the current state identified via 
 - Current research gaps that can be systematically addressed
 
 Remember: This plan leverages real-time web search validation to ensure relevance, avoid duplication, and build upon existing work. Each phase should incorporate insights from the web search findings, and the URLs discovered should serve as immediate action items for literature review and collaboration outreach.
+
+**CITATION STRATEGY:** 
+- Reference discovered sources using standard academic format
+- Track additional sources found through citation networks
+- Maintain proper attribution to foundational work identified during validation
+- Use source numbering [1], [2], etc. for easy reference throughout the plan
 
 Provide a detailed, focused research plan that maximizes impact on this specific validated research problem.
 """
@@ -4180,8 +4247,11 @@ Provide the complete refined research plan:
                 "workflow_type": "model_suggestion"
             }
             
-            # Run the model suggestion workflow
-            final_model_state = await self.model_suggestion_graph.ainvoke(model_state)
+            # Run the model suggestion workflow with increased recursion limit
+            final_model_state = await self.model_suggestion_graph.ainvoke(
+                model_state,
+                config={"recursion_limit": 30}
+            )
             
             # Compile results
             results = {
@@ -4234,8 +4304,11 @@ Provide the complete refined research plan:
                 "workflow_type": "research_planning"
             }
             
-            # Run the research planning workflow
-            final_research_state = await self.research_planning_graph.ainvoke(research_state)
+            # Run the research planning workflow with increased recursion limit
+            final_research_state = await self.research_planning_graph.ainvoke(
+                research_state, 
+                config={"recursion_limit": 50}
+            )
             
             # Compile results
             results = {
@@ -4381,6 +4454,7 @@ Provide the complete refined research plan:
         validated_problems = state.get("validated_problems", [])
         max_iterations = 10  # Maximum iterations to prevent infinite loops
         target_problems = 3  # Target number of validated problems
+        min_problems = 1    # Minimum problems needed to proceed
         
         print(f"🔄 Checking continuation: {len(validated_problems)} problems, iteration {iteration_count}")
         
@@ -4390,7 +4464,13 @@ Provide the complete refined research plan:
             return "select_problem"
         elif iteration_count >= max_iterations:
             print(f"⏹️  Max iterations reached: {iteration_count}/{max_iterations}")
-            return "select_problem"
+            if len(validated_problems) >= min_problems:
+                print(f"✅ Proceeding with {len(validated_problems)} problem(s) (minimum met)")
+                return "select_problem"
+            else:
+                print(f"❌ Insufficient problems ({len(validated_problems)}) after max iterations")
+                # Force selection anyway to avoid infinite loops
+                return "select_problem"
         else:
             print(f"🔄 Continue generating: {len(validated_problems)}/{target_problems} problems, iteration {iteration_count}/{max_iterations}")
             return "generate_problem"
@@ -4399,8 +4479,21 @@ Provide the complete refined research plan:
         """🆕 SMART DECISION: Determine next step after problem validation with intelligent routing."""
         validation_results = state.get("validation_results", {})
         recommendation = validation_results.get("recommendation", "reject")
+        iteration_count = state.get("iteration_count", 0)
+        validated_problems = state.get("validated_problems", [])
+        max_iterations = 10  # Safety limit to prevent infinite loops
         
-        print(f"🧠 Smart validation decision: {recommendation}")
+        print(f"🧠 Smart validation decision: {recommendation} (iteration {iteration_count}/{max_iterations})")
+        
+        # Safety check: If we've hit max iterations, force selection even with limited problems
+        if iteration_count >= max_iterations:
+            print(f"⏹️  Max iterations reached ({iteration_count}/{max_iterations}). Forcing selection with {len(validated_problems)} problems.")
+            if len(validated_problems) > 0:
+                return "collect_problem"  # Collect the current problem if possible and move to selection
+            else:
+                # No validated problems at all - this shouldn't happen but handle gracefully
+                print("❌ No validated problems found after max iterations. This indicates a serious issue.")
+                return "collect_problem"  # Force collection anyway to break the loop
         
         # Check if validation passed
         if recommendation == "accept":
