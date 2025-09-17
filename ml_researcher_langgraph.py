@@ -198,7 +198,7 @@ class PaperWritingState(BaseState):
     quality_score: float                      # Overall quality rating
     
     # Output
-    final_outputs: Dict[str, str]             # Multiple format versions
+    final_outputs: Dict[str, str]             # Multiple format versionsc
     
     
 class ExperimentSuggestionState(BaseState):
@@ -5425,25 +5425,24 @@ Provide the complete refined research plan:
                 improvement_recommendations = analysis_validation_results.get("improvement_recommendations", [])
                 
                 validation_feedback = f"""
-PREVIOUS VALIDATION FEEDBACK (Iteration {current_iteration - 1}):
+                    PREVIOUS VALIDATION FEEDBACK (Iteration {current_iteration - 1}):
 
-Critical Issues to Address:
-{chr(10).join(f"• {issue}" for issue in critical_issues[:3])}
+                    Critical Issues to Address:
+                    {chr(10).join(f"• {issue}" for issue in critical_issues[:3])}
 
-Completeness Gaps to Fill:
-{chr(10).join(f"• {gap}" for gap in completeness_gaps[:3])}
+                    Completeness Gaps to Fill:
+                    {chr(10).join(f"• {gap}" for gap in completeness_gaps[:3])}
 
-Accuracy Concerns to Resolve:
-{chr(10).join(f"• {concern}" for concern in accuracy_concerns[:3])}
+                    Accuracy Concerns to Resolve:
+                    {chr(10).join(f"• {concern}" for concern in accuracy_concerns[:3])}
 
-Improvement Recommendations:
-{chr(10).join(f"• {rec}" for rec in improvement_recommendations[:3])}
+                    Improvement Recommendations:
+                    {chr(10).join(f"• {rec}" for rec in improvement_recommendations[:3])}
 
-CRITICAL: Address ALL the above issues in this iteration. Provide specific, accurate, and complete analysis.
-"""
+                    CRITICAL: Address ALL the above issues in this iteration. Provide specific, accurate, and complete analysis.
+                """
             
             print(f"📊 Generating analysis (iteration {current_iteration})")
-            print(f"🐛 DEBUG: About to generate iteration {current_iteration} (this should increment each time we loop back)")
             if validation_feedback:
                 print(f"🔄 Incorporating validation feedback from previous iteration")
             
@@ -6165,84 +6164,84 @@ BE STRICT: Only pass directions that are both **methodologically solid** and **w
                     iteration_history += f"Iteration {iteration['iteration']}: {iteration['experiments'][:100]}...\n\n"
             
             validation_prompt = f"""
-You are a strict experimental methodology validator. Your job is to rigorously evaluate the proposed experiments for **accuracy**, **feasibility**, **lack of hallucinations**, and **grounding in real research**. You must determine if these experiments are both methodologically sound and practically executable.
+                You are a strict experimental methodology validator. Your job is to rigorously evaluate the proposed experiments for **accuracy**, **feasibility**, **lack of hallucinations**, and **grounding in real research**. You must determine if these experiments are both methodologically sound and practically executable.
 
-ORIGINAL RESEARCH REQUEST:
-{original_prompt}
+                ORIGINAL RESEARCH REQUEST:
+                {original_prompt}
 
-RESEARCH DIRECTION CONTEXT:
-{research_direction}
+                RESEARCH DIRECTION CONTEXT:
+                {research_direction}
 
-PROPOSED EXPERIMENTS:
-{experiment_suggestions}
+                PROPOSED EXPERIMENTS:
+                {experiment_suggestions}
 
-EXPERIMENT SUMMARY:
-{experiment_summary}
+                EXPERIMENT SUMMARY:
+                {experiment_summary}
 
-CURRENT ITERATION: {current_iteration}
-{iteration_history}
+                CURRENT ITERATION: {current_iteration}
+                {iteration_history}
 
-RESEARCH CONTEXT:
-{findings_analysis}
+                RESEARCH CONTEXT:
+                {findings_analysis}
 
-HYPER-STRICT VALIDATION CRITERIA (ALL MUST BE SATISFIED):
-1. **Accuracy**: Are the experimental designs technically correct and methodologically sound?
-2. **Feasibility**: Can these experiments realistically be executed with typical research resources?
-3. **Lack of Hallucinations**: Are ALL cited methods, datasets, and techniques REAL and accurately described?
-4. **Research Grounding**: Are the experiments based on established research practices and validated approaches?
-5. **Clarity & Completeness**: Are the experimental procedures clearly defined with sufficient detail?
-6. **Relevance**: Do the experiments directly address the research questions and objectives?
-7. **Novelty & Value**: Do the experiments offer meaningful insights beyond trivial reproductions?
-8. **Statistical Rigor**: Are appropriate controls, metrics, and statistical analyses specified?
-9. **SOURCE CITATION**: Are ALL claims, methods, datasets, and techniques properly cited with specific sources?
-10. **TECHNICAL DEPTH**: Do the experiments include specific implementation details, parameters, and configurations?
+                HYPER-STRICT VALIDATION CRITERIA (ALL MUST BE SATISFIED):
+                1. **Accuracy**: Are the experimental designs technically correct and methodologically sound?
+                2. **Feasibility**: Can these experiments realistically be executed with typical research resources?
+                3. **Lack of Hallucinations**: Are ALL cited methods, datasets, and techniques REAL and accurately described?
+                4. **Research Grounding**: Are the experiments based on established research practices and validated approaches?
+                5. **Clarity & Completeness**: Are the experimental procedures clearly defined with sufficient detail?
+                6. **Relevance**: Do the experiments directly address the research questions and objectives?
+                7. **Novelty & Value**: Do the experiments offer meaningful insights beyond trivial reproductions?
+                8. **Statistical Rigor**: Are appropriate controls, metrics, and statistical analyses specified?
+                9. **SOURCE CITATION**: Are ALL claims, methods, datasets, and techniques properly cited with specific sources?
+                10. **TECHNICAL DEPTH**: Do the experiments include specific implementation details, parameters, and configurations?
 
-MANDATORY SOURCE CITATION REQUIREMENTS:
-- Every dataset mentioned MUST include specific citation (e.g., "CIFAR-10 [Krizhevsky et al., 2009]")
-- Every model/architecture MUST include original paper citation (e.g., "ResNet-50 [He et al., 2016]")
-- Every methodology MUST reference source papers (e.g., "Adam optimizer [Kingma & Ba, 2014]")
-- Every evaluation metric MUST include definition source (e.g., "F1-score [van Rijsbergen, 1979]")
-- Every experimental procedure MUST cite methodology papers
+                MANDATORY SOURCE CITATION REQUIREMENTS:
+                - Every dataset mentioned MUST include specific citation (e.g., "CIFAR-10 [Krizhevsky et al., 2009]")
+                - Every model/architecture MUST include original paper citation (e.g., "ResNet-50 [He et al., 2016]")
+                - Every methodology MUST reference source papers (e.g., "Adam optimizer [Kingma & Ba, 2014]")
+                - Every evaluation metric MUST include definition source (e.g., "F1-score [van Rijsbergen, 1979]")
+                - Every experimental procedure MUST cite methodology papers
 
-ZERO-TOLERANCE HALLUCINATION CHECK:
-- Verify ALL mentioned datasets exist and are accessible
-- Ensure ALL experimental procedures are technically feasible
-- Check that ALL cited methodologies are real and properly described
-- Validate that ALL computational requirements are realistic
-- Confirm ALL papers and sources referenced actually exist
+                ZERO-TOLERANCE HALLUCINATION CHECK:
+                - Verify ALL mentioned datasets exist and are accessible
+                - Ensure ALL experimental procedures are technically feasible
+                - Check that ALL cited methodologies are real and properly described
+                - Validate that ALL computational requirements are realistic
+                - Confirm ALL papers and sources referenced actually exist
 
-ITERATION ANALYSIS:
-- If this is iteration 1: Apply HYPER-STRICT validation
-- If iteration 2+: Ensure ALL previous issues resolved AND no new problems introduced
+                ITERATION ANALYSIS:
+                - If this is iteration 1: Apply HYPER-STRICT validation
+                - If iteration 2+: Ensure ALL previous issues resolved AND no new problems introduced
 
-Return your assessment in this exact JSON format:
-{{
-    "validation_result": "PASS" | "FAIL",
-    "overall_score": 0.0-1.0,
-    "detailed_scores": {{
-        "accuracy": 0.0-1.0,
-        "feasibility": 0.0-1.0,
-        "lack_of_hallucinations": 0.0-1.0,
-        "research_grounding": 0.0-1.0,
-        "clarity_completeness": 0.0-1.0,
-        "relevance": 0.0-1.0,
-        "novelty_value": 0.0-1.0,
-        "statistical_rigor": 0.0-1.0,
-        "source_citation": 0.0-1.0,
-        "technical_depth": 0.0-1.0
-    }},
-    "critical_issues": ["list", "of", "critical", "problems"],
-    "hallucination_flags": ["identified", "hallucinations", "or", "inaccuracies"],
-    "citation_violations": ["missing", "citations", "or", "citation", "errors"],
-    "improvement_recommendations": ["specific", "actionable", "improvements"],
-    "decision_rationale": "Clear explanation of pass/fail decision focusing on feasibility, accuracy, and citations",
-    "iteration_assessment": "Analysis of improvement from previous iterations (if applicable)",
-    "confidence_in_validation": 0.0-1.0
-}}
+                Return your assessment in this exact JSON format:
+                {{
+                    "validation_result": "PASS" | "FAIL",
+                    "overall_score": 0.0-1.0,
+                    "detailed_scores": {{
+                        "accuracy": 0.0-1.0,
+                        "feasibility": 0.0-1.0,
+                        "lack_of_hallucinations": 0.0-1.0,
+                        "research_grounding": 0.0-1.0,
+                        "clarity_completeness": 0.0-1.0,
+                        "relevance": 0.0-1.0,
+                        "novelty_value": 0.0-1.0,
+                        "statistical_rigor": 0.0-1.0,
+                        "source_citation": 0.0-1.0,
+                        "technical_depth": 0.0-1.0
+                    }},
+                    "critical_issues": ["list", "of", "critical", "problems"],
+                    "hallucination_flags": ["identified", "hallucinations", "or", "inaccuracies"],
+                    "citation_violations": ["missing", "citations", "or", "citation", "errors"],
+                    "improvement_recommendations": ["specific", "actionable", "improvements"],
+                    "decision_rationale": "Clear explanation of pass/fail decision focusing on feasibility, accuracy, and citations",
+                    "iteration_assessment": "Analysis of improvement from previous iterations (if applicable)",
+                    "confidence_in_validation": 0.0-1.0
+                }}
 
-HYPER-STRICT PASSING THRESHOLD: Overall score ≥ 0.85 AND no critical issues AND no hallucination flags AND no citation violations AND all detailed scores ≥ 0.75
-BE RUTHLESSLY STRICT: Only pass experiments that are **technically perfect**, **fully cited**, **practically feasible**, and **completely free from any inaccuracies**.
-"""
+                HYPER-STRICT PASSING THRESHOLD: Overall score ≥ 0.85 AND no critical issues AND no hallucination flags AND no citation violations AND all detailed scores ≥ 0.75
+                BE RUTHLESSLY STRICT: Only pass experiments that are **technically perfect**, **fully cited**, **practically feasible**, and **completely free from any inaccuracies**.
+            """
 
             # Call LLM for validation
             response = await asyncio.get_event_loop().run_in_executor(
@@ -6466,71 +6465,71 @@ BE RUTHLESSLY STRICT: Only pass experiments that are **technically perfect**, **
                     iteration_history += f"Iteration {iteration['iteration']}: {iteration['analysis'][:100]}...\n\n"
             
             validation_prompt = f"""
-You are a HYPER-STRICT data analysis validator. Your job is to rigorously evaluate the generated analysis for **accuracy**, **completeness**, **logical consistency**, **domain expertise**, and **actionable insights**.
+                You are a HYPER-STRICT data analysis validator. Your job is to rigorously evaluate the generated analysis for **accuracy**, **completeness**, **logical consistency**, **domain expertise**, and **actionable insights**.
 
-ORIGINAL RESEARCH REQUEST:
-{original_prompt}
+                ORIGINAL RESEARCH REQUEST:
+                {original_prompt}
 
-EXPERIMENTAL CONTEXT:
-{experimental_results}
+                EXPERIMENTAL CONTEXT:
+                {experimental_results}
 
-GENERATED ANALYSIS:
-{findings_analysis}
+                GENERATED ANALYSIS:
+                {findings_analysis}
 
-CURRENT ITERATION: {current_iteration}
-{iteration_history}
+                CURRENT ITERATION: {current_iteration}
+                {iteration_history}
 
-HYPER-STRICT VALIDATION CRITERIA (ALL MUST BE SATISFIED):
-1. **Domain Accuracy**: Is the domain identification and characterization correct and specific?
-2. **Technical Completeness**: Does the analysis include all necessary technical details (datasets, methods, metrics)?
-3. **Logical Consistency**: Are all conclusions logically supported by the provided context?
-4. **Insight Quality**: Does the analysis provide actionable, meaningful insights beyond obvious observations?
-5. **Contextual Grounding**: Is the analysis properly grounded in the user's specific research context?
-6. **Gap Identification**: Are research gaps and opportunities clearly and accurately identified?
-7. **Technical Depth**: Does the analysis demonstrate appropriate domain expertise and technical understanding?
-8. **Actionability**: Can researchers actually use this analysis to make informed decisions?
-9. **Specificity**: Are recommendations specific enough to be implementable rather than vague?
-10. **Accuracy Verification**: Are all technical claims and domain assertions verifiable and correct?
+                HYPER-STRICT VALIDATION CRITERIA (ALL MUST BE SATISFIED):
+                1. **Domain Accuracy**: Is the domain identification and characterization correct and specific?
+                2. **Technical Completeness**: Does the analysis include all necessary technical details (datasets, methods, metrics)?
+                3. **Logical Consistency**: Are all conclusions logically supported by the provided context?
+                4. **Insight Quality**: Does the analysis provide actionable, meaningful insights beyond obvious observations?
+                5. **Contextual Grounding**: Is the analysis properly grounded in the user's specific research context?
+                6. **Gap Identification**: Are research gaps and opportunities clearly and accurately identified?
+                7. **Technical Depth**: Does the analysis demonstrate appropriate domain expertise and technical understanding?
+                8. **Actionability**: Can researchers actually use this analysis to make informed decisions?
+                9. **Specificity**: Are recommendations specific enough to be implementable rather than vague?
+                10. **Accuracy Verification**: Are all technical claims and domain assertions verifiable and correct?
 
-ZERO-TOLERANCE REQUIREMENTS:
-- No generic or template-like responses
-- No vague or aspirational language without specifics
-- No technical inaccuracies or domain mischaracterizations
-- No missing critical analysis components
-- No unsupported claims or assumptions
+                ZERO-TOLERANCE REQUIREMENTS:
+                - No generic or template-like responses
+                - No vague or aspirational language without specifics
+                - No technical inaccuracies or domain mischaracterizations
+                - No missing critical analysis components
+                - No unsupported claims or assumptions
 
-ITERATION ANALYSIS:
-- If this is iteration 1: Apply HYPER-STRICT validation
-- If iteration 2+: Ensure ALL previous issues resolved AND significant improvement demonstrated
+                ITERATION ANALYSIS:
+                - If this is iteration 1: Apply HYPER-STRICT validation
+                - If iteration 2+: Ensure ALL previous issues resolved AND significant improvement demonstrated
 
-Return your assessment in this exact JSON format:
-{{
-    "validation_result": "PASS" | "FAIL",
-    "overall_score": 0.0-1.0,
-    "detailed_scores": {{
-        "domain_accuracy": 0.0-1.0,
-        "technical_completeness": 0.0-1.0,
-        "logical_consistency": 0.0-1.0,
-        "insight_quality": 0.0-1.0,
-        "contextual_grounding": 0.0-1.0,
-        "gap_identification": 0.0-1.0,
-        "technical_depth": 0.0-1.0,
-        "actionability": 0.0-1.0,
-        "specificity": 0.0-1.0,
-        "accuracy_verification": 0.0-1.0
-    }},
-    "critical_issues": ["list", "of", "critical", "problems"],
-    "completeness_gaps": ["missing", "analysis", "components"],
-    "accuracy_concerns": ["technical", "inaccuracies", "or", "concerns"],
-    "improvement_recommendations": ["specific", "actionable", "improvements"],
-    "decision_rationale": "Clear explanation of pass/fail decision focusing on accuracy and completeness",
-    "iteration_assessment": "Analysis of improvement from previous iterations (if applicable)",
-    "confidence_in_validation": 0.0-1.0
-}}
+                Return your assessment in this exact JSON format:
+                {{
+                    "validation_result": "PASS" | "FAIL",
+                    "overall_score": 0.0-1.0,
+                    "detailed_scores": {{
+                        "domain_accuracy": 0.0-1.0,
+                        "technical_completeness": 0.0-1.0,
+                        "logical_consistency": 0.0-1.0,
+                        "insight_quality": 0.0-1.0,
+                        "contextual_grounding": 0.0-1.0,
+                        "gap_identification": 0.0-1.0,
+                        "technical_depth": 0.0-1.0,
+                        "actionability": 0.0-1.0,
+                        "specificity": 0.0-1.0,
+                        "accuracy_verification": 0.0-1.0
+                    }},
+                    "critical_issues": ["list", "of", "critical", "problems"],
+                    "completeness_gaps": ["missing", "analysis", "components"],
+                    "accuracy_concerns": ["technical", "inaccuracies", "or", "concerns"],
+                    "improvement_recommendations": ["specific", "actionable", "improvements"],
+                    "decision_rationale": "Clear explanation of pass/fail decision focusing on accuracy and completeness",
+                    "iteration_assessment": "Analysis of improvement from previous iterations (if applicable)",
+                    "confidence_in_validation": 0.0-1.0
+                }}
 
-RUTHLESS PASSING THRESHOLD: Overall score ≥ 0.90 AND no critical issues AND no completeness gaps AND no accuracy concerns AND all detailed scores ≥ 0.85
-BE ABSOLUTELY STRICT: Only pass analyses that are **technically perfect**, **completely accurate**, **deeply insightful**, and **fully actionable**.
-"""
+                RUTHLESS PASSING THRESHOLD: Overall score ≥ 0.90 AND no critical issues AND no completeness gaps AND no accuracy concerns AND all detailed scores ≥ 0.85
+                BE ABSOLUTELY STRICT: Only pass analyses that are **technically perfect**, **completely accurate**, **deeply insightful**, and **fully actionable**.
+            """
 
             # Call LLM for validation
             response = await asyncio.get_event_loop().run_in_executor(
@@ -7702,113 +7701,7 @@ IMPORTANT: Address ALL the above issues in this iteration. Use only verified met
                     "final_outputs": {"formatted_summary": fallback_plan, "format": "fallback"},
                     "current_step": "fallback_experiments_suggested"
                 }
-            
-            # Get hypotheses to test
-            hypotheses = research_components.get('hypotheses', [research_input])
-            research_goal = research_components.get('research_goal', original_prompt)
-            
-            print(f"🎯 Identified {len(hypotheses)} hypotheses to test")
-            for i, hyp in enumerate(hypotheses[:3], 1):
-                print(f"   {i}. {hyp[:80]}...")
-            
-            # Run experiment tree search for each hypothesis
-            all_experiment_results = []
-            
-            for i, hypothesis in enumerate(hypotheses[:2], 1):  # Limit to 2 hypotheses for efficiency
-                print(f"\n🌳 Running tree search for hypothesis {i}/{min(len(hypotheses), 2)}")
-                print(f"Hypothesis: {hypothesis[:100]}...")
-                
-                # Create combined input with research context
-                combined_input = f"""
-                Research Goal: {research_goal}
-                Research Context: {findings_analysis}
-                Current Results: {experimental_results}
-                
-                Hypothesis to test: {hypothesis}
-                """
-                
-                try:
-                    # Run tree search with limited iterations for efficiency
-                    best_experiment = await run_experiment_tree_search(
-                        combined_input, 
-                        num_iterations=5  # Reduced from 10 for faster execution
-                    )
-                    
-                    all_experiment_results.append({
-                        'hypothesis': hypothesis,
-                        'experiment_design': best_experiment,
-                        'tree_search_completed': True
-                    })
-                    
-                    print(f"✅ Completed tree search for hypothesis {i}")
-                    
-                except Exception as e:
-                    print(f"⚠️ Tree search failed for hypothesis {i}: {str(e)}")
-                    all_experiment_results.append({
-                        'hypothesis': hypothesis,
-                        'experiment_design': self._create_fallback_tree_experiment(hypothesis),
-                        'tree_search_completed': False,
-                        'error': str(e)
-                    })
-            
-            # Format results into comprehensive experiment plan
-            tree_experiment_plan = self._format_tree_experiment_results(
-                all_experiment_results, 
-                research_goal, 
-                original_prompt
-            )
-            
-            # Create structured summary for state management
-            experiment_summary = {
-                "format": "tree_validated",
-                "methodology": "experiment_tree_search",
-                "hypotheses_tested": len(all_experiment_results),
-                "successful_searches": sum(1 for r in all_experiment_results if r.get('tree_search_completed', False)),
-                "research_goal": research_goal,
-                "generated_at": "experiment_tree_complete"
-            }
-            
-            print(f"✅ Generated tree-validated experiment plan for {len(all_experiment_results)} hypotheses")
-            print(f"🔬 {experiment_summary['successful_searches']}/{experiment_summary['hypotheses_tested']} tree searches completed successfully")
-            
-            # Extract priority experiments from tree results
-            prioritized_experiments = []
-            for result in all_experiment_results:
-                if result.get('experiment_design'):
-                    exp_design = result['experiment_design']
-                    if isinstance(exp_design, dict) and 'content' in exp_design:
-                        # Extract experiment name from content
-                        content = exp_design['content']
-                        lines = content.split('\n')
-                        for line in lines:
-                            if 'Experiment' in line or 'Study' in line:
-                                prioritized_experiments.append(line.strip())
-                                break
-            
-            # Create implementation roadmap
-            implementation_roadmap = {
-                "total_experiments": len(all_experiment_results),
-                "methodology": "tree_search_validated",
-                "estimated_timeline": f"{len(all_experiment_results) * 2}-{len(all_experiment_results) * 4} weeks",
-                "tree_validated": True,
-                "next_immediate_actions": prioritized_experiments[:2] if prioritized_experiments else []
-            }
-            
-            return {
-                **state,
-                "experiment_suggestions": tree_experiment_plan,
-                "experiment_summary": experiment_summary,
-                "tree_experiment_results": all_experiment_results,
-                "prioritized_experiments": prioritized_experiments,
-                "implementation_roadmap": implementation_roadmap,
-                "final_outputs": {
-                    "formatted_summary": tree_experiment_plan,
-                    "full_plan": tree_experiment_plan,
-                    "format": "tree_validated",
-                    "methodology": "experiment_tree_search"
-                },
-                "current_step": "tree_experiments_suggested"
-            }
+        
             
         except Exception as e:
             print(f"❌ Error in suggest_experiments_tree_node: {str(e)}")
