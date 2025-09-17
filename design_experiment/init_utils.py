@@ -18,7 +18,11 @@ from openai import AsyncOpenAI
 from dotenv import load_dotenv
 
 # --- Load environment variables ---
-load_dotenv()
+try:
+    load_dotenv('env.example')  # Load from env.example first
+    load_dotenv()  # This will override with .env if present
+except:
+    pass  # dotenv not available, will rely on system environment variables
 
 # Initialize clients and ArXiv processor
 primary_client = AsyncOpenAI(
