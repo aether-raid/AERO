@@ -24,8 +24,9 @@ from concurrent.futures import ThreadPoolExecutor
 import sys
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from arxiv_paper_utils import ArxivPaperProcessor
-from init_utils import get_llm_response
+from design_experiment.init_utils import get_llm_response
 from langgraph.graph import StateGraph, END
+import asyncio
 
 # --- Initialize clients and ArXiv processor ---
 load_dotenv()
@@ -38,6 +39,73 @@ primary_client = AsyncOpenAI(
 PRIMARY_MODEL = os.getenv("DEFAULT_MODEL", "gemini/gemini-2.5-flash")
 arxiv_processor = None
 
+from sentence_transformers import SentenceTransformer
+embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+import requests
+import os
+from dotenv import load_dotenv
+
+
+# --- Dataset Links Searcher ---
+# List of known dataset repository domains
+KNOWN_DATASET_DOMAINS = [
+    "openneuro.org",
+    "physionet.org",
+    "kaggle.com",
+    "zenodo.org",
+    "figshare.com",
+    "datadryad.org",
+    "osf.io",
+    "data.gov",
+    "datahub.io",
+    "uci.edu",
+    "archive.ics.uci.edu",
+    "bbci.de"  
+]
+
+def is_dataset_link(url: str) -> bool:
+    return any(domain in url for domain in KNOWN_DATASET_DOMAINS)
+
+def search_dataset_online(dataset_name: str, num_results: int = 5):
+    """
+    Search for dataset source/download links using Google Custom Search API.
+    Only returns links from known dataset repositories.
+    """
+    load_dotenv()
+    api_key = os.getenv("GOOGLE_API_KEY")
+    cx = os.getenv("CX")
+    if not api_key or not cx:
+        raise Exception("GOOGLE_API_KEY and CX must be set in the .env file.")
+
+    # Focus the query on dataset repositories and download pages
+    query = f'"{dataset_name}" dataset site:(' + " OR ".join(KNOWN_DATASET_DOMAINS) + ')'
+    url = "https://www.googleapis.com/customsearch/v1"
+    
+    params = {
+        "q": query,
+        "key": api_key,
+        "cx": cx,
+        "num": min(num_results * 2, 10)  # Get more results to filter
+    }
+    
+    response = requests.get(url, params=params)
+    if response.status_code != 200:
+        raise Exception(f"Google API error: {response.status_code}, {response.text}")
+    
+    data = response.json()
+    results = []
+    for item in data.get("items", []):
+        link = item.get("link", "")
+        if is_dataset_link(link):
+            results.append({
+                "title": item.get("title"),
+                "link": link,
+                "snippet": item.get("snippet")
+            })
+        if len(results) >= num_results:
+            break
+    
+    return results
 
 # --- ArXiv Processor Initialization ---
 def initialize_arxiv_processor():
@@ -65,7 +133,7 @@ async def extract_keywords_from_hypothesis(hypothesis):
     ], temperature=0.1)
     
     keywords = [kw.strip() for kw in response.replace('*', '').split(',') if kw.strip()]
-    return keywords[:4]
+    return keywords[:5]
 
 # --- Vectorization Helper Functions ---
 async def vectorize(text):
@@ -74,7 +142,7 @@ async def vectorize(text):
     if not arxiv_processor:
         arxiv_processor = initialize_arxiv_processor()
     
-    model = arxiv_processor._get_embedding_model()
+    model = embedding_model
     if model is None:
         return None
 
@@ -273,14 +341,12 @@ async def download_and_extract_experiments(papers, hypothesis):
     """Download papers and extract experiment designs using LLM"""
     if not papers:
         return []
-    
     global arxiv_processor
     if not arxiv_processor:
         arxiv_processor = initialize_arxiv_processor()
-    
     print(f"📥 Downloading {len(papers)} papers and extracting experiments...")
-    
-    # Download paper contents
+
+    # Download paper contents (keep as is)
     downloaded_papers = []
     with ThreadPoolExecutor(max_workers=2) as executor:
         future_to_paper = {executor.submit(arxiv_processor.download_paper_content, paper): paper for paper in papers}
@@ -288,14 +354,11 @@ async def download_and_extract_experiments(papers, hypothesis):
             paper = future.result()
             if paper.get('content'):
                 downloaded_papers.append(paper)
-         
 
-    # Extract experiments using LLM
-    all_experiments = []
-    for paper in downloaded_papers:
-        experiments = await extract_experiments_from_paper(paper, hypothesis)
-        all_experiments.extend(experiments)
-    
+    # Parallelize experiment extraction
+    tasks = [extract_experiments_from_paper(paper, hypothesis) for paper in downloaded_papers]
+    all_experiments_nested = await asyncio.gather(*tasks)
+    all_experiments = [exp for sublist in all_experiments_nested for exp in sublist]
     print(f"🧪 Extracted {len(all_experiments)} experiments from {len(downloaded_papers)} papers")
     return all_experiments
 
@@ -467,17 +530,7 @@ async def store_experiments_in_faiss(experiments, faiss_db_path='./Faiss/experim
         print(f"❌ Failed to store experiments in FAISS: {e}")
         return False
 
-# --- Node Functions for LangGraph ---
-
-# Node 1: Extract keywords
-async def node_extract_keywords(state):
-    hypothesis = state['hypothesis']
-    keywords = await extract_keywords_from_hypothesis(hypothesis)
-    state['keywords'] = keywords
-    print(f"🔑 Extracted keywords: {keywords}")
-    return state
-
-# Node 2: Search FAISS for relevant experiment chunks
+# --- Node: Retrieve from FAISS ---
 async def node_faiss_retrieve(state):
     hypothesis = state['hypothesis']
     chunks = await cosine_similarity_search_experiments(hypothesis, min_similarity=0.7)
@@ -485,84 +538,72 @@ async def node_faiss_retrieve(state):
     print(f"📚 Retrieved {len(chunks)} chunks from FAISS")
     return state
 
-# Node 3: LLM validation of experiment chunks
-async def node_llm_validate(state):
+# --- Node: Extract keywords (for ArXiv search) ---
+async def node_extract_keywords(state):
     hypothesis = state['hypothesis']
-    chunks = state['retrieved_chunks']
-    validated = []
-    print(f"🤖 Validating {len(chunks)} chunks...")
-    for chunk in chunks:
-        is_relevant = await llm_experiment_relevance_validation(chunk, hypothesis)
-        if is_relevant:
-            validated.append(chunk)
-    state['validated_chunks'] = validated
+    keywords = await extract_keywords_from_hypothesis(hypothesis)
+    state['keywords'] = keywords
+    print(f"🔑 Extracted keywords: {keywords}")
     return state
 
-# Node 4: Search ArXiv based on abstracts if insufficient chunks
+# --- Node: Search ArXiv and add experiments to chunks ---
 async def node_search_arxiv(state):
     keywords = state['keywords']
     hypothesis = state['hypothesis']
     papers = await search_arxiv_by_abstracts(keywords, hypothesis)
     state['arxiv_papers'] = papers
-    
+
     if papers:
-        # Download and extract experiments
         experiments = await download_and_extract_experiments(papers, hypothesis)
         state['extracted_experiments'] = experiments
-        
-        # Store in FAISS
+        # Add to retrieved_chunks for validation
+        state['retrieved_chunks'] = state.get('retrieved_chunks', []) + experiments
+        # Optionally store in FAISS
         if experiments:
             await store_experiments_in_faiss(experiments)
     else:
         state['extracted_experiments'] = []
-    
     return state
 
-# Node 5: Aggregate all results
+# --- Node: LLM validation of all chunks ---
+async def node_llm_validate(state):
+    hypothesis = state['hypothesis']
+    chunks = state.get('retrieved_chunks', [])
+    print(f"🤖 Validating {len(chunks)} chunks...")
+    tasks = [llm_experiment_relevance_validation(chunk, hypothesis) for chunk in chunks]
+    results = await asyncio.gather(*tasks)
+    validated = [chunk for chunk, is_relevant in zip(chunks, results) if is_relevant]
+    state['validated_chunks'] = validated
+    return state
+
+# --- Node: Aggregate ---
 async def node_aggregate(state):
-    validated_chunks = state.get('validated_chunks', [])
-    extracted_experiments = state.get('extracted_experiments', [])
-    
-    # Combine existing validated chunks with newly extracted experiments
-    all_results = validated_chunks + extracted_experiments
-    state['results'] = all_results
+    state['results'] = state.get('validated_chunks', [])
     return state
 
 # --- Build LangGraph workflow ---
 async def build_experiment_search_workflow():
     g = StateGraph(dict)
-    g.add_node('extract_keywords', node_extract_keywords)
     g.add_node('faiss_retrieve', node_faiss_retrieve)
-    g.add_node('llm_validate', node_llm_validate)
+    g.add_node('extract_keywords', node_extract_keywords)
     g.add_node('search_arxiv', node_search_arxiv)
+    g.add_node('llm_validate', node_llm_validate)
     g.add_node('aggregate', node_aggregate)
 
-    # Flow: extract keywords -> search FAISS -> validate
-    g.add_edge('extract_keywords', 'faiss_retrieve')
-    g.add_edge('faiss_retrieve', 'llm_validate')
-
-    # Decision: if enough validated chunks, aggregate; else search ArXiv
-    async def check_sufficient_chunks(state):
-        validated = state.get('validated_chunks', [])
-        if len(validated) >= 5:  # Sufficient experiments found
-            return 'aggregate'
+    # Start: faiss_retrieve
+    # If enough chunks, skip arxiv; else, extract keywords and search arxiv
+    async def check_faiss_chunks(state):
+        chunks = state.get('retrieved_chunks', [])
+        if len(chunks) >= 3:
+            return 'llm_validate'
         else:
-            return 'search_arxiv'
-    
-    g.add_conditional_edges('llm_validate', check_sufficient_chunks)
+            return 'extract_keywords'
 
-    # ArXiv path: search -> aggregate
-    g.add_edge('search_arxiv', 'aggregate')
-
-    # End
+    g.add_conditional_edges('faiss_retrieve', check_faiss_chunks)
+    g.add_edge('extract_keywords', 'search_arxiv')
+    g.add_edge('search_arxiv', 'llm_validate')
+    g.add_edge('llm_validate', 'aggregate')
     g.add_edge('aggregate', END)
 
-    g.set_entry_point('extract_keywords')
+    g.set_entry_point('faiss_retrieve')
     return g
-
-if __name__ == "__main__":
-    hypothesis = input("Enter your research hypothesis: ").strip()
-    workflow = build_experiment_search_workflow()
-    state = {'hypothesis': hypothesis}
-    app = workflow.compile()
-    results = app.invoke(state)

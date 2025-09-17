@@ -34,6 +34,9 @@ logging.getLogger('tensorflow').setLevel(logging.ERROR)
 # Suppress httpx verbose logging
 logging.getLogger('httpx').setLevel(logging.WARNING)
 
+import logging
+logging.getLogger("openai._base_client").setLevel(logging.WARNING)
+
 import sys
 import json
 import re
@@ -250,6 +253,10 @@ class MLResearcherLangGraph:
         self.base_url = self._load_from_env_file("BASE_URL") or "https://agents.aetherraid.dev"
         self.model = self._load_from_env_file("DEFAULT_MODEL") or "gemini/gemini-2.5-flash"
         self.model_cheap = "gemini/gemini-2.5-flash-lite"
+
+        # Load and compile the experiment design graph from design_experiment module
+        from design_experiment.main import design_experiment_workflow
+        self.experiment_design_graph = design_experiment_workflow().compile()
         
         # Load Tavily API key (using the key from the example file)
         self.tavily_api_key = "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"
@@ -673,6 +680,7 @@ class MLResearcherLangGraph:
         workflow.add_edge("finalize_paper", END)
         
         return workflow.compile()
+        
     
     def _build_analyze_and_suggest_experiment_graph(self) -> StateGraph:
         """Analyze the results and suggest experiments based on findings."""
@@ -790,7 +798,19 @@ class MLResearcherLangGraph:
                    - Paper generation and formatting
                    - Report compilation from data
                    
-                4. **ADDITIONAL_EXPERIMENT_SUGGESTION**: For requests asking about:
+                4. **EXPERIMENT_DESIGN**: For requests asking about:
+                    - "Can you outline a set of experiments I could run based on this plan?"
+                    - "What experiments would make sense to test the main hypotheses here?"
+                    - "How can I design experiments to check if this approach really works?"
+                    - "Given this strategy, what would a solid experimental setup look like?"
+                    - "How can I break this plan down into practical, testable steps?"
+                    - "Design an experiment for X"
+                    - "Generate a detailed experiment plan"
+                    - "Suggest experimental methodology"
+                    - "Turn this research plan into a concrete experiment"
+                    - Experiment design and planning
+                
+                5. **ADDITIONAL_EXPERIMENT_SUGGESTION**: For requests asking about:
                     - "Given these results, what should I try next?"
                     - "Plan follow-up experiments from my metrics or logs."
                     - "Which ablations or hyperparameter sweeps should I run?"
@@ -804,7 +824,7 @@ class MLResearcherLangGraph:
 
                 Analyze the user's request and respond with a JSON object containing:
                 {{
-                    "workflow": "MODEL_SUGGESTION", "RESEARCH_PLANNING", "PAPER_WRITING", OR "ADDITIONAL_EXPERIMENT_SUGGESTION",
+                    "workflow": "MODEL_SUGGESTION", "RESEARCH_PLANNING", "PAPER_WRITING", "EXPERIMENT_DESIGN" OR "ADDITIONAL_EXPERIMENT_SUGGESTION",
                     "confidence": 0.0-1.0,
                     "reasoning": "Brief explanation of why this workflow was chosen"
                 }}
@@ -848,6 +868,8 @@ class MLResearcherLangGraph:
                     workflow_decision = "research_planning"
                 elif workflow_decision.upper() in ["PAPER_WRITING", "PAPER_WRITE", "REPORT_GENERATION"]:
                     workflow_decision = "paper_writing"
+                if workflow_decision.upper() in ["EXPERIMENT_DESIGN", "EXPERIMENT_DESIGNS"]:
+                    workflow_decision = "experiment_design"
                 elif workflow_decision.upper() in ["ADDITIONAL_EXPERIMENT_SUGGESTION", "EXPERIMENT_SUGGESTION", "EXPERIMENT_PLANNING"]:
                     workflow_decision = "additional_experiment_suggestion"
                 else:
@@ -4591,6 +4613,28 @@ Provide the complete refined research plan:
                     "total_errors": len(final_router_state["errors"]) + len(final_paper_state["errors"])
                 }
             }
+
+        elif workflow_decision == "experiment_design":
+            print("\n🧪 STEP 2: EXECUTING EXPERIMENT DESIGN WORKFLOW")
+            experiment_state = {
+                "user_input": user_query,
+            }
+            final_experiment_state = await self.experiment_design_graph.ainvoke(experiment_state)
+            # Extract plain text output from all_designs
+            all_designs = final_experiment_state.get("all_designs", [])
+            if all_designs:
+                # Concatenate all experiment designs as plain text
+                plain_text_output = "\n\n".join(
+                    f"Experiment Idea: {d.get('experiment_idea', '')}\n\n{d.get('design', '')}"
+                    for d in all_designs if d.get('design')
+                )
+            else:
+                plain_text_output = ""
+            results = {
+                **final_experiment_state,
+                "plain_text_output": plain_text_output
+            }
+                
             
         elif workflow_decision == "additional_experiment_suggestion":
             print("\n🔬 STEP 2: EXECUTING EXPERIMENT SUGGESTION WORKFLOW")
@@ -7597,7 +7641,7 @@ BE STRICT: Only pass directions that are both **methodologically solid** and **w
                 sys.path.insert(0, design_experiment_path)
             
             try:
-                from init_utils import extract_research_components
+                from design_experiment.init_utils import extract_research_components
                 research_components_available = True
             except ImportError as e:
                 print(f"⚠️ Could not import research components: {e}")

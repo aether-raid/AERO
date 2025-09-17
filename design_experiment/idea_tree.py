@@ -18,8 +18,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any
 import treequest as tq
-from search import build_experiment_search_workflow
-from init_utils import get_llm_response, extract_research_components
+from design_experiment.search import build_experiment_search_workflow
+from design_experiment.init_utils import get_llm_response, extract_research_components
 
 import sys
 from io import StringIO
@@ -65,6 +65,8 @@ class ExperimentTreeSystem:
         self.user_input = user_input
         self.literature_context = []
         self.research_context = {}
+        self.strategy_cache = {}
+        self.methodology_cache = {}
         
     async def initialize(self):
         """Initialize search workflow and retrieve literature context"""
@@ -112,118 +114,107 @@ class ExperimentTreeSystem:
 
     async def generate_strategy(self, hypothesis: str) -> ExperimentState:
         """Generate high-level experimental strategy"""
-        literature_context = self.format_literature_context(max_chunks=5)
-        references = self.create_citation_mapping(self.literature_context[:5])
+        cache_key = hypothesis
+        if cache_key in self.strategy_cache:
+            return self.strategy_cache[cache_key]
         
-        prompt = f"""You are an expert researcher. Generate a high-level experimental strategy based on the hypothesis and relevant literature.
+        literature_context = self.format_literature_context(max_chunks=3)
+        references = self.create_citation_mapping(self.literature_context[:3])
+        
+        prompt = f"""You are an expert researcher. Based on the hypothesis and research context, propose a high-level experimental strategy.
 
-            HYPOTHESIS: {hypothesis}
+        HYPOTHESIS: {hypothesis}
 
-            RESEARCH CONTEXT:
-            - Goal: {self.research_context.get('research_goal', 'Not specified')}
-            - Variables: {self.research_context.get('variables', 'Not specified')}
-            - Additional info: {self.research_context.get('relevant_info', 'None')}
+        RESEARCH CONTEXT:
+        - Goal: {self.research_context.get('research_goal', 'Not specified')}
+        - Variables: {self.research_context.get('variables', 'Not specified')}
+        - Additional info: {self.research_context.get('relevant_info', 'None')}
 
-            {literature_context}
+        Relevant literature (numbered citations):
+        {literature_context}
 
-            Generate a HIGH-LEVEL STRATEGY that:
-            1. Identifies 2-3 broad experimental avenues/approaches
-            2. References relevant literature using numbered citations [1], [2], etc.
-            3. Outlines general methodology directions
-            4. Does NOT include specific implementation details
+        Generate a HIGH-LEVEL STRATEGY that:
+        1. Identifies 2–3 broad experimental avenues or approaches to explore.
+        2. Highlights key research questions or hypotheses each approach would address.
+        3. Suggests general directions for methodology without specifying datasets, code, or parameters.
+        4. Uses numbered citations [1], [2], etc., sparingly, only where literature strengthens reasoning.
+        5. Includes domain knowledge and reasoning beyond what is in the literature.
 
-            When referencing literature, use numbered citations in format: [1], [2], [3], etc. ONLY based on the literature list above.
-
-            Format as clear, structured text (not JSON).
+        Format as clear, structured text (not JSON).
         """
 
         content = await get_llm_response([{"role": "user", "content": prompt}])
         citations = self.extract_citations(content)
         score = await self.evaluate_experiment(content, hypothesis, "strategy")
 
-        return ExperimentState(
+        state = ExperimentState(
             level="strategy",
             content=content,
             score=score,
             citations=citations,
             references=references
         )
+        self.strategy_cache[cache_key] = state
+
+        return state
 
     async def generate_methodology(self, parent_strategy: ExperimentState, hypothesis: str) -> ExperimentState:
         """Generate mid-level methodology from strategy"""
+        if parent_strategy is not None:
+            cache_key = (parent_strategy.content, hypothesis)
+        else:
+            cache_key = "NO_PARENT"
+
+        # Only use cache if not the placeholder
+        if cache_key != "NO_PARENT" and cache_key in self.methodology_cache:
+            return self.methodology_cache[cache_key]
+
+        
         literature_context = self.format_literature_context(max_chunks=3)
         references = self.create_citation_mapping(self.literature_context[:3])
         
-        prompt = f"""You are an expert researcher. Based on the parent strategy and literature, generate a detailed methodology.
+        prompt = f"""
+        As an expert researcher, develop a **mid-level experimental methodology** guided primarily by the parent strategy and hypothesis. Incorporate literature only where relevant; emphasize reasoning and domain expertise over exhaustive procedural detail.
 
-            HYPOTHESIS: {hypothesis}
+        PARENT STRATEGY:
+        {parent_strategy.content if parent_strategy else "None"}
 
-            PARENT STRATEGY:
-            {parent_strategy.content}
+        HYPOTHESIS: {hypothesis}
 
-            {literature_context}
+        Relevant literature (numbered citations):
+        {literature_context}
 
-            Generate a MID-LEVEL METHODOLOGY that:
-            1. Elaborates on ONE specific avenue from the parent strategy
-            2. Defines experimental design, variables, and general procedures
-            3. References supporting literature using numbered citations [1], [2], etc.
-            4. Specifies data collection and analysis approaches
-            5. Does NOT include specific implementation code or exact parameters
+        Generate a **MID-LEVEL METHODOLOGY** that:
+        1. Focuses on **one specific avenue** from the parent strategy.
+        2. Defines the **experimental design** at a conceptual level:
+        - Independent and dependent variables
+        - Control or baseline conditions
+        - Broad experimental procedures (no code or low-level implementation details)
+        3. Suggests **data handling considerations**:
+        - Types of data needed
+        - Preprocessing or quality checks conceptually
+        4. Recommends **evaluation metrics and success criteria** (conceptual, not exact formulas)
+        5. Highlights any **robustness considerations** or potential challenges
+        6. References literature **sparingly** using numbered citations [1], [2], etc.
+        7. Uses reasoning **beyond the literature** to ensure a sound methodology.
 
-            When referencing literature, use numbered citations in format: [1], [2], [3], etc. ONLY based on the literature list above.
-
-            Format as structured methodology description.
+        Format as **structured, human-readable text** with headings and concise subpoints. Avoid exhaustive implementation instructions.
         """
 
         content = await get_llm_response([{"role": "user", "content": prompt}])
         citations = self.extract_citations(content)
         score = await self.evaluate_experiment(content, hypothesis, "methodology")
 
-        return ExperimentState(
+        state = ExperimentState(
             level="methodology",
             content=content,
             score=score,
             citations=citations,
             references=references
         )
+        self.methodology_cache[cache_key] = state
+        return state
 
-    async def generate_implementation(self, parent_methodology: ExperimentState, hypothesis: str) -> ExperimentState:
-        """Generate concrete implementation from methodology"""
-        literature_context = self.format_literature_context(max_chunks=2)
-        references = self.create_citation_mapping(self.literature_context[:2])
-        
-        prompt = f"""You are an expert researcher. Based on the parent methodology and literature, generate a concrete implementation plan.
-
-            HYPOTHESIS: {hypothesis}
-
-            PARENT METHODOLOGY:
-            {parent_methodology.content}
-
-            {literature_context}
-
-            Generate a CONCRETE IMPLEMENTATION that:
-            1. Provides specific, executable experimental procedures
-            2. Includes exact datasets, algorithms, and hyperparameters
-            3. Specifies evaluation metrics and statistical tests
-            4. References literature for technical choices using numbered citations [1], [2], etc.
-            5. Must be realistically executable
-
-            When referencing literature, use numbered citations in format: [1], [2], [3], etc. ONLY based on the literature list above.
-
-            Format as detailed implementation plan with specific steps.
-        """
-
-        content = await get_llm_response([{"role": "user", "content": prompt}])
-        citations = self.extract_citations(content)
-        score = await self.evaluate_experiment(content, hypothesis, "implementation")
-
-        return ExperimentState(
-            level="implementation",
-            content=content,
-            score=score,
-            citations=citations,
-            references=references
-        )
 
     def create_citation_mapping(self, literature_context: List[Dict]) -> Dict[int, Dict[str, str]]:
         """Create mapping from citation numbers to paper info"""
@@ -279,26 +270,27 @@ class ExperimentTreeSystem:
 
     async def evaluate_experiment(self, content: str, hypothesis: str, level: str) -> float:
         """Score experiment design with separate criteria and calculate weighted final score"""
-        literature_context = self.format_literature_context(max_chunks=2)
+        literature_context = self.format_literature_context(max_chunks=3)
 
-        prompt = f"""You are an expert research evaluator. Score the following {level}-level experiment design on a 0–100 scale for each criterion.
+        prompt = f"""You are an expert research evaluator. Score the following {level}-level experiment plan (strategy or methodology) on a 0–100 scale for each criterion, focusing on high-level reasoning rather than implementation details.
 
-            Criteria:
-            1. Clarity & Organization – Is the design clearly stated, logically structured, and well-organized? Does it define key concepts, variables, and evaluation strategy?  
-            2. Feasibility & Reproducibility – Can the experiment realistically be executed with available data, compute, and time? Are enough details provided for others to replicate it?  
-            3. Novelty & Significance – Does it explore something new or provide potential for meaningful scientific insight? How original and impactful is the approach?  
-            4. Soundness & Alignment – Is the design methodologically sound and does it directly test the stated hypothesis? Does it provide strong evidence for the research question?  
+        Criteria:
+        1. Clarity & Organization – Is the plan clearly stated, logically structured, and easy to follow? Are key ideas, experimental directions, and hypotheses communicated effectively?  
+        2. Conceptual Feasibility – Are the proposed approaches or methods realistic and actionable at a conceptual level? Do they make sense for the stated hypothesis?  
+        3. Novelty & Significance – Does the plan explore creative or impactful directions? How original and promising are the proposed experimental avenues?  
+        4. Soundness & Alignment – Are the proposed strategies or methodologies logically coherent and aligned with the hypothesis? Do they provide a strong rationale for the research?
 
-            Instructions:
-            - Return ONLY 4 integers between 0–100, separated by commas, in this order: 
-            Clarity, Feasibility, Novelty, Soundness
-            
-            HYPOTHESIS: {hypothesis}
+        Instructions:
+        - Return ONLY 4 integers between 0–100, separated by commas, in this order: 
+        Clarity, Conceptual Feasibility, Novelty, Soundness
 
-            EXPERIMENT DESIGN ({level}):
-            {content}
+        HYPOTHESIS: {hypothesis}
 
-            {literature_context}
+        EXPERIMENT PLAN ({level}):
+        {content}
+
+        Relevant literature (for reference, do not overly rely on it):
+        {literature_context}
         """
 
         messages = [
@@ -322,7 +314,6 @@ class ExperimentTreeSystem:
             weight_map = {
                 "strategy": [0.2, 0.1, 0.4, 0.3],        # Novelty 0.4, Soundness 0.3, Clarity 0.2, Feasibility 0.1
                 "methodology": [0.2, 0.3, 0.15, 0.35],    # Soundness 0.35, Feasibility 0.3, Clarity 0.2, Novelty 0.15
-                "implementation": [0.2, 0.4, 0.1, 0.3]    # Feasibility 0.4, Soundness 0.3, Clarity 0.2, Novelty 0.1
             }
             weights = weight_map.get(level.lower(), [0.3, 0.3, 0.2, 0.2])
 
@@ -339,7 +330,7 @@ class ExperimentTreeSystem:
 
 
     def find_best_leaf_node(self, tree) -> ExperimentState:
-        """Find the highest-scoring leaf node (implementation level)"""
+        """Find the highest-scoring leaf node (methodology level)"""
         def get_all_nodes(node):
             nodes = [node]
             for child in getattr(node, 'children', []):
@@ -349,7 +340,7 @@ class ExperimentTreeSystem:
         all_nodes = get_all_nodes(tree.tree.root)
         leaf_nodes = [node.state for node in all_nodes 
                      if hasattr(node, 'state') and 
-                     node.state.level == 'implementation' and 
+                     node.state.level == 'methodology' and 
                      node.state.score is not None]
         
         if not leaf_nodes:
@@ -362,7 +353,6 @@ class ExperimentTreeSystem:
 def sync_generate_strategy(parent_state, tree_system, hypothesis):
     import asyncio
     try:
-        loop = asyncio.get_running_loop()
         # If already in an event loop, create a new one in a thread
         import concurrent.futures
         def run_in_thread():
@@ -382,7 +372,6 @@ def sync_generate_strategy(parent_state, tree_system, hypothesis):
 def sync_generate_methodology(parent_state, tree_system, hypothesis):
     import asyncio
     try:
-        loop = asyncio.get_running_loop()
         import concurrent.futures
         def run_in_thread():
             new_loop = asyncio.new_event_loop()
@@ -395,24 +384,6 @@ def sync_generate_methodology(parent_state, tree_system, hypothesis):
             state = executor.submit(run_in_thread).result()
     except RuntimeError:
         state = asyncio.run(tree_system.generate_methodology(parent_state, hypothesis))
-    return state, state.score
-
-def sync_generate_implementation(parent_state, tree_system, hypothesis):
-    import asyncio
-    try:
-        loop = asyncio.get_running_loop()
-        import concurrent.futures
-        def run_in_thread():
-            new_loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(new_loop)
-            try:
-                return new_loop.run_until_complete(tree_system.generate_implementation(parent_state, hypothesis))
-            finally:
-                new_loop.close()
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            state = executor.submit(run_in_thread).result()
-    except RuntimeError:
-        state = asyncio.run(tree_system.generate_implementation(parent_state, hypothesis))
     return state, state.score
 
 async def run_experiment_tree_search(user_input: str, num_iterations: int):
@@ -432,13 +403,9 @@ async def run_experiment_tree_search(user_input: str, num_iterations: int):
     def methodology_gen(parent_state):
         return sync_generate_methodology(parent_state, tree_system, hypothesis)
 
-    def implementation_gen(parent_state):
-        return sync_generate_implementation(parent_state, tree_system, hypothesis)
-
     generate_fns = {
         "strategy": strategy_gen,
         "methodology": methodology_gen,
-        "implementation": implementation_gen
     }
 
     print("🌲 Building experiment design tree...(this may take a few mins)")
@@ -454,7 +421,7 @@ async def run_experiment_tree_search(user_input: str, num_iterations: int):
     import builtins
     builtins.print = filtered_print
     try:
-        algo = tq.ABMCTSM()
+        algo = tq.ABMCTSA()
         search_tree = algo.init_tree()
         search_tree.tree.root.state = ExperimentState(
             level="hypothesis",
@@ -480,27 +447,27 @@ async def run_experiment_tree_search(user_input: str, num_iterations: int):
         except Exception:
             print(f"{i+1}/{num_iterations} iterations - searching...")
 
-    # Find best leaf node (implementation)
-    best_implementation = tree_system.find_best_leaf_node(search_tree)
+    # Find best leaf node (methodology)
+    best_methodology = tree_system.find_best_leaf_node(search_tree)
 
-    if best_implementation:
+    if best_methodology:
         print("\n" + "="*80)
-        print("🏆 BEST EXPERIMENT DESIGN (Implementation Level)")
+        print("🏆 BEST EXPERIMENT METHODLOGY (Methodology Level)")
         print("="*80)
-        print(f"Score: {best_implementation.score:.3f}")
-        print(f"Level: {best_implementation.level}")
-        if best_implementation.citations:
-            print(f"Citations: {len(best_implementation.citations)} sources")
+        print(f"Score: {best_methodology.score:.3f}")
+        print(f"Level: {best_methodology.level}")
+        if best_methodology.citations:
+            print(f"Citations: {len(best_methodology.citations)} sources")
         print("\nContent:")
-        print(best_implementation.content)
-        
+        print(best_methodology.content)
+
         # Add references section
-        if best_implementation.references:
-            references_section = tree_system.format_references_section(best_implementation.references)
+        if best_methodology.references:
+            references_section = tree_system.format_references_section(best_methodology.references)
             print(references_section)
         
         print("="*80)
-        return best_implementation
+        return best_methodology
     else:
-        print("❌ No implementation-level nodes found")
+        print("❌ No methodology-level nodes found")
         return None
