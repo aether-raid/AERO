@@ -4560,81 +4560,49 @@ Provide the complete refined research plan:
                 }
             }
             
-        elif workflow_decision == "paper_writing":
-            print("\n📝 STEP 2: EXECUTING PAPER WRITING WORKFLOW")
-            print("=" * 50)
-            
-            # Initialize paper writing state
-            paper_state: PaperWritingState = {
-                "messages": [HumanMessage(content=user_query)],
-                "original_prompt": user_query,
-                "uploaded_data": uploaded_data,
-                "experimental_results": {},  # Could be extracted from uploaded data
-                "research_context": user_query,
-                "target_venue": "general",  # Could be extracted from user_query
-                "research_analysis": {},
-                "paper_structure": {},
-                "template_config": {},
-                "section_content": {},
-                "formatted_paper": "",
-                "critique_results": {},
-                "revision_count": 0,
-                "quality_score": 0.0,
-                "final_outputs": {},
-                "current_step": "",
-                "errors": [],
-                "workflow_type": "paper_writing"
-            }
-            
-            # Run the paper writing workflow
-            final_paper_state = await self.paper_writing_graph.ainvoke(paper_state)
-            
-            # Compile results
-            results = {
-                "workflow_type": "paper_writing",
-                "router_decision": {
-                    "decision": final_router_state["routing_decision"],
-                    "confidence": final_router_state["routing_confidence"],
-                    "reasoning": final_router_state["routing_reasoning"]
-                },
-                "original_prompt": final_paper_state["original_prompt"],
-                "research_analysis": final_paper_state.get("research_analysis", {}),
-                "paper_structure": final_paper_state.get("paper_structure", {}),
-                "template_config": final_paper_state.get("template_config", {}),
-                "formatted_paper": final_paper_state.get("formatted_paper", ""),
-                "final_outputs": final_paper_state.get("final_outputs", {}),
-                "errors": final_router_state["errors"] + final_paper_state["errors"],
-                "summary": {
-                    "workflow_used": "Paper Writing Pipeline",
-                    "paper_generated": bool(final_paper_state.get("formatted_paper", "")),
-                    "sections_generated": len(final_paper_state.get("section_content", {})),
-                    "paper_length": len(final_paper_state.get("formatted_paper", "")),
-                    "output_file": final_paper_state.get("final_outputs", {}).get("file_path", ""),
-                    "total_errors": len(final_router_state["errors"]) + len(final_paper_state["errors"])
-                }
-            }
-
         elif workflow_decision == "experiment_design":
             print("\n🧪 STEP 2: EXECUTING EXPERIMENT DESIGN WORKFLOW")
             experiment_state = {
                 "user_input": user_query,
             }
             final_experiment_state = await self.experiment_design_graph.ainvoke(experiment_state)
-            # Extract plain text output from all_designs
             all_designs = final_experiment_state.get("all_designs", [])
+            
+            # Create plain text output for frontend consistency
             if all_designs:
-                # Concatenate all experiment designs as plain text
-                plain_text_output = "\n\n".join(
-                    f"Experiment Idea: {d.get('experiment_idea', '')}\n\n{d.get('design', '')}"
-                    for d in all_designs if d.get('design')
+                experiment_designs = "\n\n".join(
+                    d.get('design', '') for d in all_designs if d.get('design', '')
                 )
             else:
-                plain_text_output = ""
+                experiment_designs = ""
+            
+            # IMPORTANT: Make sure experiment_designs is not empty
+            if not experiment_designs.strip():
+                experiment_designs = "No experiment designs generated."
+            
+            # Compile results for experiment design
             results = {
-                **final_experiment_state,
-                "plain_text_output": plain_text_output
+                "workflow_type": "experiment_design",
+                "router_decision": {
+                    "decision": final_router_state["routing_decision"],
+                    "confidence": final_router_state["routing_confidence"],
+                    "reasoning": final_router_state["routing_reasoning"]
+                },
+                "original_prompt": final_experiment_state.get("original_prompt", user_query),
+                "all_designs": all_designs,
+                "experiment_designs": experiment_designs,  # This should always be a non-empty string
+                "errors": final_router_state["errors"] + final_experiment_state.get("errors", []),
+                "messages": [
+                    m.content if hasattr(m, "content") else str(m)
+                    for m in final_experiment_state.get("messages", [])
+                ],
+                "summary": {
+                    "workflow_used": "Experiment Design Pipeline",
+                    "experiment_ideas_generated": len(all_designs),
+                    "designs_generated": sum(1 for d in all_designs if d.get("design")),
+                    "total_errors": len(final_router_state["errors"]) + len(final_experiment_state.get("errors", []))
+                }
             }
-                
             
         elif workflow_decision == "additional_experiment_suggestion":
             print("\n🔬 STEP 2: EXECUTING EXPERIMENT SUGGESTION WORKFLOW")

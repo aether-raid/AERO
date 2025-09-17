@@ -1,5 +1,8 @@
 import asyncio
 from langgraph.graph import StateGraph, END
+import sys
+import os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from design_experiment.experiment import ExperimentState, build_experiment_graph
 from design_experiment.init_utils import extract_research_components
 from design_experiment.idea_tree import run_experiment_tree_search
@@ -104,7 +107,7 @@ async def node_tree_search(state):
                     for s in final_state.refinement_suggestions:
                         print(f"- {s.strip('- ')}")
     else:
-        print("🌳 No explicit experiment ideas found or only one hypothesis. Running tree search...")
+        print("🌳 No explicit experiment ideas found. Running tree search to generate experiment ideas based on hypotheses...")
         combined_input = f"""Research Goal: {research_goal}
             Variables: {variables}
             Relevant Info: {relevant_info}

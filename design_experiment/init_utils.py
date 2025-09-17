@@ -1,9 +1,7 @@
 """
 Experiment Design Utilities (init_utils.py)
 ===========================================
-
 This module provides utility functions and configuration for the experiment design tree system, including:
-
 1. Environment and logging setup for LLM and API usage.
 2. Asynchronous LLM response handling using OpenAI API.
 3. Extraction and structuring of research components (goal, hypotheses, variables, constraints) from user input via LLM.
