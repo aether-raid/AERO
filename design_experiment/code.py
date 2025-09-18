@@ -70,6 +70,7 @@ async def extract_tags_node(state: CodeGenState) -> CodeGenState:
 
 # Node 2: Generate code for each tag
 async def generate_code_node(state: CodeGenState) -> CodeGenState:
+    print(f"🤖 Performing {len(state.tags)} code generation tasks...")
     generated = []
     for full_tag, description in state.tags:
         messages = [
@@ -102,6 +103,7 @@ async def validate_code_node(state: CodeGenState) -> CodeGenState:
 
 # Node 4: Refine code based on validation results
 async def refine_code_node(state: CodeGenState) -> CodeGenState:
+    print("🔧 Refining code based on validation results...")
     refined_code = state.generated_code.copy()
     for idx, (code, val, (full_tag, description)) in enumerate(zip(state.generated_code, state.validation_results, state.tags)):
         # Fix syntax errors

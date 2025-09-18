@@ -28,7 +28,7 @@ primary_client = AsyncOpenAI(
     base_url=os.getenv("BASE_URL", "https://agents.aetherraid.dev")
 )
 
-PRIMARY_MODEL = os.getenv("DEFAULT_MODEL", "gemini/gemini-2.5-flash")
+PRIMARY_MODEL = os.getenv("DEFAULT_MODEL", "gpt-4o")
 arxiv_processor = None
 
 # --- LLM response ---

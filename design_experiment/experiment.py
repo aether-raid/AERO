@@ -160,16 +160,18 @@ async def design_node(state: ExperimentState) -> ExperimentState:
     """
     # Helper: augmentation instructions to add code tags
     code_tag_instructions = """
-    You are an expert researcher generating a detailed, step-by-step experiment design. 
-    In addition to writing the design, **insert [CODE_NEEDED] tags** to mark sections where code would be useful. 
+    You are an expert researcher generating a detailed, step-by-step experiment design.
+    For every step that can be implemented in code, insert a [CODE_NEEDED: <short description>] tag directly at the relevant place in the main design (not just in a summary list).
+    - The description inside the tag must clearly state what code is needed (e.g., [CODE_NEEDED: Load EEG data from .edf files using MNE-Python]).
+    - Do NOT use [CODE_NEEDED] without a description.
+    - After the main design, provide a summary list of all [CODE_NEEDED] tags and their descriptions.
     Follow these rules:
-
     1. Only place one tag per self-contained, runnable step.
     2. Prefer tagging at the section or subsection level (e.g., Preprocessing, Modeling, Evaluation).
     3. Nested tags allowed for multi-step procedures, but each snippet must be independently executable.
     4. Include all sentences necessary for the code in the same tag.
     5. Provide a concise description for each tag.
-    6. After generating the full plan with tags, return a summary list of tags with their descriptions.
+    6. After generating the full plan with tags, return a summary list of tags and their descriptions.
     """
     formatting_instructions = """    
     Format your output using clear Markdown:
@@ -298,8 +300,7 @@ async def score_node(state: ExperimentState) -> ExperimentState:
     json_match = re.search(r"\{.*\}", response, re.DOTALL)
     if json_match:
         response = json_match.group(0)
-    # Log the raw response for debugging
-    print("Raw LLM scoring response:", response)
+    
     try:
         parsed = json.loads(response)
         state.scores = parsed.get("scores", {})
@@ -321,14 +322,18 @@ async def generate_code_node(state: ExperimentState) -> ExperimentState:
     # Use the most refined design if available
     design = state.refined_design_content or state.full_design_content
     if design:
-        # Use the code workflow to generate, validate, and refine code
         code_state = CodeGenState(user_input=design)
         code_graph = build_codegen_graph()
         final_code_state = await code_graph.ainvoke(code_state)
-        # Insert the validated code into the experiment design
-        state.generated_code = final_code_state.final_output
+        # --- Fix: handle dict fallback ---
+        if hasattr(final_code_state, "final_output"):
+            state.generated_code = final_code_state.final_output
+        elif isinstance(final_code_state, dict) and "final_output" in final_code_state:
+            state.generated_code = final_code_state["final_output"]
+        else:
+            state.generated_code = "❌ Code generation failed or returned unexpected output."
     else:
-        state.generated_code = ""
+        state.generated_code = "❌ No valid experiment design available for code generation."
     return state
 
 # --- LangGraph workflow with cyclic refinement ---
@@ -339,7 +344,6 @@ def build_experiment_graph():
     graph.add_node("plan", plan_node)
     graph.add_node("design", design_node)
     graph.add_node("score", score_node)
-    graph.add_node("generate_code", generate_code_node)  # <-- Add this node
 
     graph.add_edge("summarize", "literature")
     graph.add_edge("literature", "plan")
@@ -355,8 +359,7 @@ def build_experiment_graph():
             min_score < 70):  # Only refine if any score is below 70
             return "design"
         else:
-            return "generate_code"
+            return END
     graph.add_conditional_edges("score", refinement_decision)
-    graph.add_edge("generate_code", END)  # <-- End after code generation
     graph.set_entry_point("summarize")
     return graph.compile()

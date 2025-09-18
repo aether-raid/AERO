@@ -4671,7 +4671,7 @@ Provide the complete refined research plan:
             # Create plain text output for frontend consistency
             if all_designs:
                 experiment_designs = "\n\n".join(
-                    d.get('design', '') for d in all_designs if d.get('design', '')
+                    d.get('design_with_code', '') for d in all_designs if d.get('design_with_code', '')
                 )
             else:
                 experiment_designs = ""

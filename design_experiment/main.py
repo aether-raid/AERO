@@ -6,6 +6,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 from design_experiment.experiment import ExperimentState, build_experiment_graph
 from design_experiment.init_utils import extract_research_components
 from design_experiment.idea_tree import run_experiment_tree_search
+from design_experiment.code import build_codegen_graph, CodeGenState
 
 # --- Node: Extract research components ---
 async def node_extract_components(state):
@@ -42,13 +43,29 @@ async def node_run_experiment_design(state):
         app = build_experiment_graph()
         final_state_dict = await app.ainvoke(initial_state)
         final_state = ExperimentState(**final_state_dict)
+        design_text = final_state.refined_design_content or final_state.full_design_content
+
+        # --- INTEGRATION: Run code workflow on the design text ---
+        if design_text:
+            code_state = CodeGenState(user_input=design_text)
+            code_graph = build_codegen_graph()
+            final_code_state = await code_graph.ainvoke(code_state)
+            # --- FIX: handle both dict and dataclass ---
+            if isinstance(final_code_state, dict):
+                final_design_with_code = final_code_state.get('final_output', design_text)
+            else:
+                final_design_with_code = getattr(final_code_state, 'final_output', design_text)
+        else:
+            final_design_with_code = "❌ No valid experiment design available for code generation."
+            
         all_designs.append({
             "experiment_idea": exp_desc,
-            "design": final_state.refined_design_content or final_state.full_design_content,
-            "refinements": final_state.refinement_suggestions
+            "design": design_text,
+            "refinements": final_state.refinement_suggestions,
+            "design_with_code": final_design_with_code
         })
-        print("\n--- FINAL EXPERIMENT DESIGN ---")
-        print(final_state.refined_design_content or final_state.full_design_content)
+        print("\n--- FINAL EXPERIMENT DESIGN WITH INLINE CODE ---")
+        print(final_design_with_code)
         print("\n--- FINAL REFINEMENT SUGGESTIONS ---")
         if final_state.refinement_suggestions:
             for s in final_state.refinement_suggestions:
