@@ -4567,19 +4567,31 @@ Provide the complete refined research plan:
             }
             final_experiment_state = await self.experiment_design_graph.ainvoke(experiment_state)
             all_designs = final_experiment_state.get("all_designs", [])
-            
+             
             # Create plain text output for frontend consistency
             if all_designs:
                 experiment_designs = "\n\n".join(
-                    d.get('design_with_code', '') for d in all_designs if d.get('design_with_code', '')
+                    d.get('design', '') for d in all_designs if d.get('design', '')
                 )
             else:
                 experiment_designs = ""
-            
-            # IMPORTANT: Make sure experiment_designs is not empty
+
+            # If no designs were generated, provide a fallback message
             if not experiment_designs.strip():
                 experiment_designs = "No experiment designs generated."
-            
+
+            # Aggregate all code blocks into one cell for the Code tab
+            if all_designs:
+                code_output = "\n\n".join(
+                    d.get('code', '') for d in all_designs if d.get('code', '')
+                )
+            else:
+                code_output = ""
+
+            # If no code was generated, provide a fallback message
+            if not code_output.strip():
+                code_output = "No code generated for these experiment designs."
+                        
             # Compile results for experiment design
             results = {
                 "workflow_type": "experiment_design",
@@ -4590,7 +4602,8 @@ Provide the complete refined research plan:
                 },
                 "original_prompt": final_experiment_state.get("original_prompt", user_query),
                 "all_designs": all_designs,
-                "experiment_designs": experiment_designs,  # This should always be a non-empty string
+                "experiment_designs": experiment_designs,
+                "code_output": code_output,  # <-- Add this line
                 "errors": final_router_state["errors"] + final_experiment_state.get("errors", []),
                 "messages": [
                     m.content if hasattr(m, "content") else str(m)

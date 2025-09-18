@@ -595,6 +595,28 @@
                         <div v-else class="text-gray-500 italic">No experiment design output available.</div>
                     </div>
 
+                    <!-- Code Tab -->
+                    <div v-if="activeTab === 'code'" class="space-y-4">
+                        <!-- If code_output is a string -->
+                        <div v-if="analysisResult.results.code_output && typeof analysisResult.results.code_output === 'string'" class="bg-gray-50 rounded-lg p-4">
+                            <div class="prose prose-lg max-w-none text-gray-800" v-html="renderMarkdown(analysisResult.results.code_output)"></div>
+                        </div>
+                        <!-- If code is in all_designs array -->
+                        <div v-else-if="analysisResult.results.all_designs && analysisResult.results.all_designs.length" class="space-y-6">
+                            <div 
+                                v-for="(d, idx) in analysisResult.results.all_designs" 
+                                :key="idx"
+                                class="bg-gray-50 rounded-lg p-4"
+                            >
+                                <h3 class="text-xl font-bold text-indigo-700 mb-2">
+                                    Experiment {{ idx + 1 }}
+                                </h3>
+                                <div class="prose prose-lg max-w-none text-gray-800" v-html="renderMarkdown(d.design_with_code || d.code_output || '')"></div>
+                            </div>
+                        </div>
+                        <div v-else class="text-gray-500 italic">No code output available.</div>
+                    </div>
+
                     <!-- Experiment Suggestions Tab -->
                     <div v-if="activeTab === 'experiment_suggestions' && analysisResult.results.experiment_suggestions" class="space-y-4">
                         <div class="bg-indigo-50 rounded-lg p-6 border border-indigo-200">
@@ -903,6 +925,12 @@
                     // Alternative: Also check all_designs as fallback
                     else if (results.all_designs && Array.isArray(results.all_designs) && results.all_designs.length > 0) {
                         tabs.push({ key: 'experiment_design', label: 'Experiment Design', icon: 'fas fa-list' });
+                    }
+                    if (
+                        (results.code_output && typeof results.code_output === 'string' && results.code_output.trim()) ||
+                        (results.all_designs && results.all_designs.some(d => d.design_with_code && d.design_with_code.trim()))
+                    ) {
+                        tabs.push({ key: 'code', label: 'Code', icon: 'fas fa-code' });
                     }
                     if (results.experiment_suggestions) {
                         tabs.push({ key: 'experiment_suggestions', label: 'Experiment Suggestions', icon: 'fas fa-flask' });

@@ -18,12 +18,12 @@ from langgraph.graph import StateGraph, END
 import os
 import sys
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from design_experiment.init_utils import get_llm_response
+from design_experiment.init_utils import get_llm_response, get_gpt_llm_response
 from design_experiment.search import build_experiment_search_workflow, search_dataset_online
 from design_experiment.code import build_codegen_graph, CodeGenState
 from langchain_core.messages import AIMessage
 
-MAX_REFINEMENT_ROUNDS = 1
+MAX_REFINEMENT_ROUNDS = 2
 
 @dataclass
 class ExperimentState:
@@ -161,14 +161,17 @@ async def design_node(state: ExperimentState) -> ExperimentState:
     # Helper: augmentation instructions to add code tags
     code_tag_instructions = """
     You are an expert researcher generating a detailed, step-by-step experiment design.
-    For every step that can be implemented in code, insert a [CODE_NEEDED: <short description>] tag directly at the relevant place in the main design (not just in a summary list).
+
+    For every major section or subsection (e.g., "Preprocessing", "Modeling", "Evaluation") that can be implemented in code, insert a single [CODE_NEEDED: <short description>] tag at the BOTTOM of that section or subsection. Do NOT add a tag for every individual step or bullet point—only one tag per self-contained, runnable section.
+
     - The description inside the tag must clearly state what code is needed (e.g., [CODE_NEEDED: Load EEG data from .edf files using MNE-Python]).
     - Do NOT use [CODE_NEEDED] without a description.
     - After the main design, provide a summary list of all [CODE_NEEDED] tags and their descriptions.
+
     Follow these rules:
-    1. Only place one tag per self-contained, runnable step.
-    2. Prefer tagging at the section or subsection level (e.g., Preprocessing, Modeling, Evaluation).
-    3. Nested tags allowed for multi-step procedures, but each snippet must be independently executable.
+    1. Only place one tag per major section or subsection that represents a logical, runnable code block.
+    2. Do NOT place a tag after every bullet or micro-step.
+    3. Nested tags are allowed for multi-step procedures, but each snippet must be independently executable.
     4. Include all sentences necessary for the code in the same tag.
     5. Provide a concise description for each tag.
     6. After generating the full plan with tags, return a summary list of tags and their descriptions.
@@ -336,6 +339,28 @@ async def generate_code_node(state: ExperimentState) -> ExperimentState:
         state.generated_code = "❌ No valid experiment design available for code generation."
     return state
 
+async def cleanup_code_tags_node(state: ExperimentState) -> ExperimentState:
+    """
+    Removes all [CODE_NEEDED: ...] tags, their descriptions, and the summary list of code tags from the experiment plan.
+    """
+    def remove_code_tags(text):
+        # Remove [CODE_NEEDED: ...] and [CODE_NEEDED] ... tags (entire line)
+        text = re.sub(r'\[CODE_NEEDED(?::[^\]]*)?\][^\n]*\n?', '', text)
+        # Remove summary list section (header and following bullets)
+        text = re.sub(
+            r'(?i)Summary List of \[CODE_NEEDED\][^\n]*\n(?:\s*[\d\-\*\.]+\s*[^\n]+\n?)*', 
+            '', text
+        )
+        # Remove any leftover "Summary List of ..." header on its own line
+        text = re.sub(r'(?i)^Summary List of.*$', '', text, flags=re.MULTILINE)
+        return text.strip()
+
+    if state.refined_design_content:
+        state.refined_design_content = remove_code_tags(state.refined_design_content)
+    if state.full_design_content:
+        state.full_design_content = remove_code_tags(state.full_design_content)
+    return state
+
 # --- LangGraph workflow with cyclic refinement ---
 def build_experiment_graph():
     graph = StateGraph(ExperimentState)
@@ -344,11 +369,16 @@ def build_experiment_graph():
     graph.add_node("plan", plan_node)
     graph.add_node("design", design_node)
     graph.add_node("score", score_node)
+    graph.add_node("generate_code", generate_code_node)  # Add code generation node
+    graph.add_node("cleanup", cleanup_code_tags_node)    # Add cleanup node
 
     graph.add_edge("summarize", "literature")
     graph.add_edge("literature", "plan")
     graph.add_edge("plan", "design")
     graph.add_edge("design", "score")
+    graph.add_edge("score", "generate_code")     # Score to code generation
+    graph.add_edge("generate_code", "cleanup")   # Code generation to cleanup
+    graph.add_edge("cleanup", END)               # Cleanup to END
 
     # Conditional edge: if refinement_round < MAX_REFINEMENT_ROUNDS and suggestions exist, go back to design
     async def refinement_decision(state: ExperimentState):
@@ -359,7 +389,8 @@ def build_experiment_graph():
             min_score < 70):  # Only refine if any score is below 70
             return "design"
         else:
-            return END
+            return "generate_code"  # Go to code generation, not END
+
     graph.add_conditional_edges("score", refinement_decision)
     graph.set_entry_point("summarize")
     return graph.compile()
