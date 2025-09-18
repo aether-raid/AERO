@@ -176,20 +176,6 @@ async def design_node(state: ExperimentState) -> ExperimentState:
     5. Provide a concise description for each tag.
     6. After generating the full plan with tags, return a summary list of tags and their descriptions.
     """
-    formatting_instructions = """    
-    Format your output using clear Markdown:
-    - Use `##` for main sections (e.g., "## Datasets", "## Data Preprocessing", "## Experimental Procedures").
-    - Use `###` for subsections (e.g., "### Source Domain (EEG)", "### Target Domain (fNIRS)").
-    - Use bullet points for lists.
-    - Always ensure there is a blank line before any bullet list in your Markdown output.
-    - Do not wrap lists in code blocks.
-    - For dataset links, use `[Dataset Name](URL)` or state "N/A (custom collection)" if not available.
-    - For citations, use `[1]` style and include a "## References" section at the end.
-    - For code, always use triple backticks with `python` (e.g., ```python ... ```).
-    - Do **not** use excessive indentation or nested lists.
-    - Do **not** restate the experiment description at the top.
-    - Ensure all sections are clearly separated and easy to read.
-    """
 
     # Use refined design and suggestions if this is a refinement round
     if state.refinement_round > 0:
@@ -214,7 +200,7 @@ async def design_node(state: ExperimentState) -> ExperimentState:
             {code_tag_instructions}
 
             """
-        content = await get_llm_response([{"role": "user", "content": prompt}])
+        content = await get_gpt_llm_response([{"role": "user", "content": prompt}])
         state.refined_design_content = content.strip()
     else:
         state.refinement_round += 1
@@ -253,7 +239,7 @@ async def design_node(state: ExperimentState) -> ExperimentState:
             {code_tag_instructions}
 
             """
-    content = await get_llm_response([{"role": "user", "content": prompt}])
+    content = await get_gpt_llm_response([{"role": "user", "content": prompt}])
     if state.refinement_round > 0:
         state.refined_design_content = content.strip()
     else:
