@@ -9,6 +9,9 @@
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/themes/prism-tomorrow.min.css" rel="stylesheet" />
+    <script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/prism.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-python.min.js"></script>
     <style>
         .gradient-bg {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -598,8 +601,16 @@
                     <!-- Code Tab -->
                     <div v-if="activeTab === 'code'" class="space-y-4">
                         <!-- If code_output is a string -->
-                        <div v-if="analysisResult.results.code_output && typeof analysisResult.results.code_output === 'string'" class="bg-gray-50 rounded-lg p-4">
-                            <div class="prose prose-lg max-w-none text-gray-800" v-html="renderMarkdown(analysisResult.results.code_output)"></div>
+                        <div v-if="analysisResult.results.code_output && typeof analysisResult.results.code_output === 'string'" class="rounded-lg p-0 relative">
+                            <!-- Copy button at top right -->
+                            <button
+                                @click="copyCode(analysisResult.results.code_output)"
+                                class="absolute top-2 right-2 px-3 py-1 text-sm bg-gray-800 text-white rounded hover:bg-gray-700 z-10"
+                                title="Copy code to clipboard"
+                            >
+                                <i class="fas fa-copy mr-1"></i> Copy Code
+                            </button>
+                            <pre class="code-block mt-8"><code class="language-python" v-html="highlightCode(analysisResult.results.code_output)"></code></pre>
                         </div>
                         <!-- If code is in all_designs array -->
                         <div v-else-if="analysisResult.results.all_designs && analysisResult.results.all_designs.length" class="space-y-6">
@@ -956,6 +967,24 @@
                 }
             },
             methods: {
+                copyCode(code) {
+                    if (!code) return;
+                    // Remove markdown code block markers if present
+                    let clean = code.replace(/^```(python)?/gm, '').replace(/```$/gm, '').trim();
+                    navigator.clipboard.writeText(clean).then(() => {
+                        alert('Code copied to clipboard!');
+                    }).catch(err => {
+                        alert('Failed to copy code');
+                    });
+                },
+
+                highlightCode(code) {
+                    // Remove markdown code block markers if present
+                    let clean = code.replace(/^```(python)?/gm, '').replace(/```$/gm, '').trim();
+                    // Use Prism for syntax highlighting
+                    return Prism.highlight(clean, Prism.languages.python, 'python');
+                },
+
                 truncatePrompt(prompt, maxLen = 180) {
                     if (!prompt) return '';
                     return prompt.length > maxLen ? prompt.slice(0, maxLen) + '…' : prompt;

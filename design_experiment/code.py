@@ -69,11 +69,11 @@ async def extract_tags_node(state: CodeGenState) -> CodeGenState:
     state.tags = extract_code_tags(state.user_input)
     return state
 
-# Node 2: Generate code for each tag
+# Node 2: Generate code for each tag (in parallel)
 async def generate_code_node(state: CodeGenState) -> CodeGenState:
     print(f"🤖 Performing {len(state.tags)} code generation tasks...")
-    generated = []
-    for full_tag, description in state.tags:
+
+    async def generate_for_tag(full_tag, description):
         messages = [
             {"role": "system", "content": (
                 "You are a coding assistant. Generate only the minimal, essential Python code needed to execute the described steps. "
@@ -84,8 +84,11 @@ async def generate_code_node(state: CodeGenState) -> CodeGenState:
             {"role": "user", "content": f"Task: {description}\n\nGenerate only the minimal Python code required for this step. No error handling, no alternatives, no explanations, only the essential code."}
         ]
         code_snippet = await get_llm_response(messages)
-        code_snippet = strip_code_fence(code_snippet)
-        generated.append(code_snippet)
+        return strip_code_fence(code_snippet)
+
+    # Launch all code generation tasks in parallel
+    tasks = [generate_for_tag(full_tag, description) for full_tag, description in state.tags]
+    generated = await asyncio.gather(*tasks)
     state.generated_code = generated
     return state
 
