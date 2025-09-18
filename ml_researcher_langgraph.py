@@ -19,6 +19,8 @@ Usage:
 """
 
 import os
+
+from arxiv_paper_utils import ArxivPaperProcessor
 # Disable TensorFlow oneDNN optimization messages and other warnings
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Suppress all TensorFlow warnings and info messages
@@ -48,6 +50,7 @@ from typing import Dict, List, Any, Optional, TypedDict, Annotated
 import urllib.request as libreq
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
 
 # LangGraph imports
 from langgraph.graph import StateGraph, END
@@ -62,8 +65,9 @@ from tavily import TavilyClient
 
 # Local imports
 from Report_to_txt import extract_pdf_text
+from arxiv import format_search_string
 # Note: arxiv imports removed for research planning workflow - using Tavily web search instead
-
+from arxiv import explore_atom_elements  # Kept for potential XML exploration needs
 import os
 import pickle
 import faiss
@@ -221,6 +225,19 @@ class ExperimentSuggestionState(BaseState):
     experiment_paper_validation_decision: str # Decision from validation (continue/search_new/search_backup)
     research_direction: Dict[str, Any]        # Research direction analysis
     validated_experiment_papers: List[Dict[str, Any]]  # Validated papers for suggestions
+    current_experiment_iteration: int        # Current iteration of experiment suggestion
+    iteration_from_state: int                 # Iteration number from state
+    # Issue tracking for iterative improvement
+    past_fixed_issues: List[str]              # Issues that were resolved in previous iterations
+    past_unresolved_issues: List[str]         # Issues that persist across iterations
+    most_recent_generation_issues: List[str]  # Issues from the most recent experiment generation
+    cumulative_validation_feedback: List[Dict[str, Any]]  # Historical validation feedback
+    
+    # 🆕 SOLVED ISSUES TRACKING FOR LLM FEEDBACK LOOP
+    solved_issues_history: List[Dict[str, Any]]  # Track all solved issues across iterations
+    current_solved_issues: List[str]           # Issues solved in current validation iteration
+    validation_issue_patterns: Dict[str, int]  # Track frequency of issue types for pattern recognition
+    generation_feedback_context: str           # Accumulated feedback to prevent LLM mistakes
     
     # Output
     experiment_suggestions: Dict[str, Any]    # Comprehensive experiment suggestions
@@ -253,6 +270,7 @@ class MLResearcherLangGraph:
         self.base_url = self._load_from_env_file("BASE_URL") or "https://agents.aetherraid.dev"
         self.model = self._load_from_env_file("DEFAULT_MODEL") or "gemini/gemini-2.5-flash"
         self.model_cheap = "gemini/gemini-2.5-flash-lite"
+        self.model_expensive = "gemini/gemini-2.5-pro"
 
         # Load and compile the experiment design graph from design_experiment module
         from design_experiment.main import design_experiment_workflow
@@ -270,6 +288,7 @@ class MLResearcherLangGraph:
             base_url=self.base_url
         )
         
+        
         # Initialize Tavily client for web search
         try:
             self.tavily_client = TavilyClient(api_key=self.tavily_api_key)
@@ -281,8 +300,8 @@ class MLResearcherLangGraph:
         try:
             # ArXiv processor - only needed for model suggestion workflow, not research planning
             # Research planning workflow uses Tavily web search instead
-            self.arxiv_processor = None  # Disabled for research planning optimization
-            # self.arxiv_processor = ArxivPaperProcessor(self.client, self.model_cheap)
+            #self.arxiv_processor = None  # Disabled for research planning optimization
+            self.arxiv_processor = ArxivPaperProcessor(self.client, self.model_cheap)
             print("ArXiv processor disabled for research planning workflow - using Tavily web search")
         except Exception as e:
             self.arxiv_processor = None
@@ -699,9 +718,14 @@ class MLResearcherLangGraph:
         workflow.add_node("generate_experiment_search_query", self._generate_experiment_search_query_node)
         workflow.add_node("search_experiment_papers", self._search_experiment_papers_node)
         workflow.add_node("validate_experiment_papers", self._validate_experiment_papers_node)
+        # OLD DUAL EDGE ARCHITECTURE (DEPRECATED - causes state conflicts)
         workflow.add_node("suggest_experiments", self._suggest_experiments_tree_node)
         workflow.add_node("suggest_experiments_iteration", self._suggest_experiments_tree_node)  # Separate node for iteration path
         workflow.add_node("validate_experiments", self._validate_experiments_node)
+        
+        # NEW CLEAN ARCHITECTURE (RECOMMENDED - no dual edges, no state conflicts)
+        workflow.add_node("suggest_experiments_tree_2", self._suggest_experiments_tree_2_node)
+        workflow.add_node("validate_experiments_tree_2", self._validate_experiments_tree_2_node)
 
         # Define the flow
         workflow.set_entry_point("analyze_findings")
@@ -735,24 +759,39 @@ class MLResearcherLangGraph:
         # Conditional edge after validation - use next_node field  
         workflow.add_conditional_edges(
             "validate_experiment_papers",
-            lambda state: state.get("next_node", "suggest_experiments"),
+            lambda state: state.get("next_node", "suggest_experiments_tree_2"),  # DEFAULT: Route to NEW CLEAN ARCHITECTURE
             {
-                "suggest_experiments": "suggest_experiments",           # Papers are good, continue with suggestions
+                "suggest_experiments_tree_2": "suggest_experiments_tree_2",  # NEW CLEAN architecture (default)
+                "suggest_experiments": "suggest_experiments",           # OLD dual-edge architecture (fallback)
                 "search_experiment_papers": "search_experiment_papers", # Keep current papers, search for backup
                 "generate_experiment_search_query": "generate_experiment_search_query"  # Start fresh with new search query
             }
         )
         
+        # OLD DUAL EDGE ARCHITECTURE (DEPRECATED - keep for backward compatibility)
         workflow.add_edge("suggest_experiments", "validate_experiments")
         workflow.add_edge("suggest_experiments_iteration", "validate_experiments")  # Iteration path
         
-        # Conditional edge after experiment validation - use next_node field
+        # NEW CLEAN ARCHITECTURE (ACTIVE - single path, no dual edges, no state conflicts)
+        workflow.add_edge("suggest_experiments_tree_2", "validate_experiments_tree_2")
+        
+        # OLD CONDITIONAL EDGES (for backward compatibility)
         workflow.add_conditional_edges(
             "validate_experiments",
             lambda state: state.get("next_node", "suggest_experiments_iteration"),
             {
                 "END": END,  # Experiments are valid, finish workflow
                 "suggest_experiments_iteration": "suggest_experiments_iteration"  # Experiments need refinement, iterate
+            }
+        )
+        
+        # NEW CLEAN CONDITIONAL EDGE (ACTIVE - no state conflicts)
+        workflow.add_conditional_edges(
+            "validate_experiments_tree_2",
+            lambda state: state.get("next_node", "suggest_experiments_tree_2"),
+            {
+                "END": END,  # Experiments are valid, finish workflow
+                "suggest_experiments_tree_2": "suggest_experiments_tree_2"  # Loop back with feedback
             }
         )
 
@@ -5753,6 +5792,7 @@ Provide the complete refined research plan:
             return {
                 **state,
                 "findings_analysis": analysis_json,
+                "current_analysis_iteration": current_iteration,
                 "research_context": {
                     "original_prompt": original_prompt,
                     "domain": analysis_json.get("domain_analysis", {}).get("primary_domain", "machine learning"),
@@ -5766,6 +5806,7 @@ Provide the complete refined research plan:
             print(f"❌ Error in analyze_experiment_findings: {str(e)}")
             return {
                 **state,
+                "current_analysis_iteration": state.get("current_analysis_iteration", 1),
                 "errors": state.get("errors", []) + [f"Findings analysis error: {str(e)}"],
                 "analysis_completed": False,
                 "current_step": "analysis_error"
@@ -6288,15 +6329,32 @@ BE STRICT: Only pass directions that are both **methodologically solid** and **w
             findings_analysis = state.get("findings_analysis", {})
             research_direction = state.get("research_direction", {})
             
-            # Track experiment iteration history
+            # Track experiment iteration history - use stored value from generation node
             experiment_iterations = state.get("experiment_iterations", [])
-            current_iteration = len(experiment_iterations) + 1
+            stored_iteration = state.get("current_experiment_iteration", None)
+            
+            # CRITICAL FIX: Handle iteration tracking properly for multiple edge sources
+            if stored_iteration is not None:
+                # Use the iteration number that was calculated and stored by the suggestion node
+                current_iteration = stored_iteration
+                print(f"🐛 DEBUG _validate_experiments_node (using stored iteration):")
+            else:
+                # Fallback calculation if no stored iteration (shouldn't happen after fix)
+                current_iteration = len(experiment_iterations)
+                print(f"🐛 DEBUG _validate_experiments_node (fallback calculation):")
+                
+            print(f"   experiment_iterations length: {len(experiment_iterations)}")
+            print(f"   stored current_experiment_iteration: {stored_iteration}")
+            print(f"   using current_iteration: {current_iteration}")
+            print(f"   called from node path: {state.get('current_step', 'unknown')}")
+            print(f"   suggestion_source: {state.get('suggestion_source', 'unknown')}")
+            print(f"   state keys: {list(state.keys())[:10]}...")  # Show first 10 state keys
             
             
             # Add current experiments to history
             current_experiment_record = {
                 "iteration": current_iteration,
-                "experiments": experiment_suggestions[:500] if isinstance(experiment_suggestions, str) else str(experiment_suggestions)[:500],
+                "experiments": experiment_suggestions if isinstance(experiment_suggestions, str) else str(experiment_suggestions),
                 "summary": experiment_summary,
                 "timestamp": __import__('datetime').datetime.now().isoformat()
             }
@@ -6365,27 +6423,18 @@ BE STRICT: Only pass directions that are both **methodologically solid** and **w
                     "validation_result": "PASS" | "FAIL",
                     "overall_score": 0.0-1.0,
                     "detailed_scores": {{
-                        "accuracy": 0.0-1.0,
-                        "feasibility": 0.0-1.0,
-                        "lack_of_hallucinations": 0.0-1.0,
-                        "research_grounding": 0.0-1.0,
-                        "clarity_completeness": 0.0-1.0,
-                        "relevance": 0.0-1.0,
-                        "novelty_value": 0.0-1.0,
-                        "statistical_rigor": 0.0-1.0,
-                        "source_citation": 0.0-1.0,
-                        "technical_depth": 0.0-1.0
+                        "research_direction_alignment": 0.0-1.0,
+                        "novelty_potential": 0.0-1.0,
+                        "justification_quality": 0.0-1.0
                     }},
                     "critical_issues": ["list", "of", "critical", "problems"],
-                    "hallucination_flags": ["identified", "hallucinations", "or", "inaccuracies"],
-                    "citation_violations": ["missing", "citations", "or", "citation", "errors"],
+                    "direction_misalignment": ["ways", "experiments", "dont", "align", "with", "direction"],
+                    "novelty_concerns": ["lack", "of", "novelty", "or", "contribution", "issues"],
                     "improvement_recommendations": ["specific", "actionable", "improvements"],
-                    "decision_rationale": "Clear explanation of pass/fail decision focusing on feasibility, accuracy, and citations",
-                    "iteration_assessment": "Analysis of improvement from previous iterations (if applicable)",
-                    "confidence_in_validation": 0.0-1.0
+                    "decision_rationale": "Clear explanation focusing on direction alignment, novelty, and justification quality"
                 }}
 
-                HYPER-STRICT PASSING THRESHOLD: Overall score ≥ 0.85 AND no critical issues AND no hallucination flags AND no citation violations AND all detailed scores ≥ 0.75
+                HYPER-STRICT PASSING THRESHOLD: Overall score ≥ 0.85 AND no critical issues AND no direction misalignment AND no novelty concerns AND all detailed scores ≥ 0.75
                 BE RUTHLESSLY STRICT: Only pass experiments that are **technically perfect**, **fully cited**, **practically feasible**, and **completely free from any inaccuracies**.
             """
 
@@ -6416,22 +6465,22 @@ BE STRICT: Only pass directions that are both **methodologically solid** and **w
                 validation_result = validation_json.get("validation_result", "FAIL").upper()
                 overall_score = validation_json.get("overall_score", 0.0)
                 critical_issues = validation_json.get("critical_issues", [])
-                hallucination_flags = validation_json.get("hallucination_flags", [])
-                citation_violations = validation_json.get("citation_violations", [])
+                direction_misalignment = validation_json.get("direction_misalignment", [])
+                novelty_concerns = validation_json.get("novelty_concerns", [])
                 improvement_recommendations = validation_json.get("improvement_recommendations", [])
                 
                 # Safety check: Enforce HYPER-STRICT thresholds
-                if overall_score < 0.85 or len(critical_issues) > 0 or len(hallucination_flags) > 0 or len(citation_violations) > 0:
+                if overall_score < 0.85 or len(critical_issues) > 0 or len(direction_misalignment) > 0 or len(novelty_concerns) > 0:
                     validation_result = "FAIL"
                 
                 # Check iteration limit (max 3 iterations to prevent infinite loops)
                 if current_iteration >= 3 and validation_result == "FAIL":
                     print(f"⚠️ Maximum experiment iterations reached ({current_iteration}). Forcing continuation with current experiments.")
-                    print(f"🚨 WARNING: Validation found {len(critical_issues)} critical issues, {len(hallucination_flags)} hallucinations, {len(citation_violations)} citation violations.")
+                    print(f"🚨 WARNING: Validation found {len(critical_issues)} critical issues, {len(direction_misalignment)} direction misalignments, {len(novelty_concerns)} novelty concerns.")
                     print(f"🚨 This is a FORCED PASS to prevent infinite loops - experiments have unresolved validation issues!")
                     validation_result = "PASS"
                     validation_json["forced_pass"] = True
-                    validation_json["decision_rationale"] = f"Forced pass after {current_iteration} iterations to prevent infinite loop. Original validation failed due to: {len(critical_issues)} critical issues, {len(hallucination_flags)} hallucinations, {len(citation_violations)} citation violations."
+                    validation_json["decision_rationale"] = f"Forced pass after {current_iteration} iterations to prevent infinite loop. Original validation failed due to: {len(critical_issues)} critical issues, {len(direction_misalignment)} direction misalignments, {len(novelty_concerns)} novelty concerns."
                 
                 print("\n" + "=" * 80)
                 print("🧪 HYPER-STRICT EXPERIMENT VALIDATION RESULTS")
@@ -6444,22 +6493,23 @@ BE STRICT: Only pass directions that are both **methodologically solid** and **w
                 print(f"📈 Overall Score: {overall_score:.2f}/1.0 (Required: ≥0.85)")
                 print(f"🔴 Critical Issues: {len(critical_issues)}")
                 print(f"⚠️ Hallucination Flags: {len(hallucination_flags)}")
-                print(f"📚 Citation Violations: {len(citation_violations)}")
+                print(f"🎯 Direction Misalignment: {len(direction_misalignment)}")
+                print(f"💡 Novelty Concerns: {len(novelty_concerns)}")
                 
                 if critical_issues:
                     print("Critical Issues:")
                     for issue in critical_issues[:3]:
                         print(f"  • {issue}")
                 
-                if hallucination_flags:
-                    print("Hallucination Flags:")
-                    for flag in hallucination_flags[:3]:
-                        print(f"  • {flag}")
+                if direction_misalignment:
+                    print("Direction Misalignment:")
+                    for misalign in direction_misalignment[:3]:
+                        print(f"  • {misalign}")
                 
-                if citation_violations:
-                    print("Citation Violations:")
-                    for violation in citation_violations[:3]:
-                        print(f"  • {violation}")
+                if novelty_concerns:
+                    print("Novelty Concerns:")
+                    for concern in novelty_concerns[:3]:
+                        print(f"  • {concern}")
                 
                 if validation_result == "FAIL" and improvement_recommendations:
                     print("🔧 Improvement Recommendations:")
@@ -6491,6 +6541,56 @@ BE STRICT: Only pass directions that are both **methodologically solid** and **w
                     print(f"❌ Experiment validation failed. Iterating to improve experiments (iteration {current_iteration + 1}).")
                     next_node = "suggest_experiments_iteration"  # Route to iteration node to avoid state collision
                 
+                # ==================================================================================
+                # ISSUE TRACKING & ACCUMULATION LOGIC
+                # ==================================================================================
+                
+                # Extract all current issues from validation
+                all_current_issues = []
+                all_current_issues.extend(critical_issues)
+                all_current_issues.extend(direction_misalignment)
+                all_current_issues.extend(novelty_concerns)
+                all_current_issues.extend(improvement_recommendations)
+                
+                # Get existing issue tracking from state
+                past_fixed_issues = state.get("past_fixed_issues", [])
+                past_unresolved_issues = state.get("past_unresolved_issues", [])
+                most_recent_generation_issues = state.get("most_recent_generation_issues", [])
+                cumulative_validation_feedback = state.get("cumulative_validation_feedback", [])
+                
+                # Add current validation feedback to history
+                current_feedback = {
+                    "iteration": current_iteration,
+                    "validation_result": validation_result,
+                    "overall_score": overall_score,
+                    "critical_issues": critical_issues,
+                    "direction_misalignment": direction_misalignment,
+                    "novelty_concerns": novelty_concerns,
+                    "improvement_recommendations": improvement_recommendations,
+                    "forced_pass": forced_pass
+                }
+                cumulative_validation_feedback.append(current_feedback)
+                
+                # Update issue tracking based on validation result
+                if validation_result == "PASS" and not forced_pass:
+                    # Move all previous unresolved issues to fixed issues
+                    newly_fixed = [issue for issue in past_unresolved_issues if issue not in past_fixed_issues]
+                    past_fixed_issues.extend(newly_fixed)
+                    past_unresolved_issues = []  # Clear unresolved issues
+                    most_recent_generation_issues = []  # Clear since validation passed
+                elif validation_result == "FAIL" or forced_pass:
+                    # Add new issues to unresolved list (avoiding duplicates)
+                    for issue in all_current_issues:
+                        if issue not in past_unresolved_issues and issue not in past_fixed_issues:
+                            past_unresolved_issues.append(issue)
+                    # Update most recent generation issues
+                    most_recent_generation_issues = all_current_issues.copy()
+                
+                print(f"\n🔍 ISSUE TRACKING STATUS:")
+                print(f"   Past Fixed Issues: {len(past_fixed_issues)}")
+                print(f"   Current Unresolved Issues: {len(past_unresolved_issues)}")
+                print(f"   Most Recent Generation Issues: {len(most_recent_generation_issues)}")
+                
                 # Store validation results in state
                 return {
                     **state,
@@ -6499,7 +6599,12 @@ BE STRICT: Only pass directions that are both **methodologically solid** and **w
                     "experiment_validation_decision": validation_result,
                     "current_experiment_iteration": current_iteration,
                     "current_step": "experiments_validated",
-                    "next_node": next_node
+                    "next_node": next_node,
+                    # Issue tracking fields
+                    "past_fixed_issues": past_fixed_issues,
+                    "past_unresolved_issues": past_unresolved_issues,
+                    "most_recent_generation_issues": most_recent_generation_issues,
+                    "cumulative_validation_feedback": cumulative_validation_feedback
                 }
                 
             except json.JSONDecodeError as e:
@@ -6521,7 +6626,12 @@ BE STRICT: Only pass directions that are both **methodologically solid** and **w
                     "experiment_validation_decision": "FAIL",
                     "current_experiment_iteration": current_iteration,
                     "current_step": "experiment_validation_error",
-                    "next_node": "suggest_experiments"  # Always retry on error
+                    "next_node": "suggest_experiments_tree_2",  # Route to NEW CLEAN architecture
+                    # Preserve issue tracking fields
+                    "past_fixed_issues": state.get("past_fixed_issues", []),
+                    "past_unresolved_issues": state.get("past_unresolved_issues", []),
+                    "most_recent_generation_issues": state.get("most_recent_generation_issues", []),
+                    "cumulative_validation_feedback": state.get("cumulative_validation_feedback", [])
                 }
                 
         except Exception as e:
@@ -6542,7 +6652,12 @@ BE STRICT: Only pass directions that are both **methodologically solid** and **w
                 "current_experiment_iteration": current_iteration,
                 "errors": state.get("errors", []) + [f"Experiment validation error: {str(e)}"],
                 "current_step": "experiment_validation_error_pass",
-                "next_node": "END"  # Continue on error with PASS - finish workflow
+                "next_node": "END",  # Continue on error with PASS - finish workflow
+                # Preserve issue tracking fields
+                "past_fixed_issues": state.get("past_fixed_issues", []),
+                "past_unresolved_issues": state.get("past_unresolved_issues", []),
+                "most_recent_generation_issues": state.get("most_recent_generation_issues", []),
+                "cumulative_validation_feedback": state.get("cumulative_validation_feedback", [])
             }
 
     def _should_continue_with_experiments(self, state: ExperimentSuggestionState) -> str:
@@ -6572,7 +6687,7 @@ BE STRICT: Only pass directions that are both **methodologically solid** and **w
             return "END"
         else:
             print(f"❌ Experiment validation failed. Iterating to improve experiments (iteration {current_iteration + 1}).")
-            return "suggest_experiments"
+            return "suggest_experiments_tree_2"
 
     async def _validate_analysis_node(self, state: ExperimentSuggestionState) -> ExperimentSuggestionState:
         """Node for validating the generated data analysis with hyper-strict criteria."""
@@ -7025,6 +7140,13 @@ BE STRICT: Only pass directions that are both **methodologically solid** and **w
             existing_papers = state["experiment_papers"]
             print(f"📚 Preserving {len(existing_papers)} papers from previous search")
         
+        # Safety check: After 3 iterations, force continue to avoid infinite loops
+        if search_iteration >= 3:
+            print(f"⚠️ Maximum search iterations reached ({search_iteration}). Proceeding with existing papers...")
+            state["experiment_papers"] = existing_papers if existing_papers else []
+            state["experiment_search_completed"] = True
+            return state
+        
         try:
             search_query = state.get("experiment_search_query", "experimental methodology")
             research_direction = state.get("research_direction", {})
@@ -7156,6 +7278,8 @@ BE STRICT: Only pass directions that are both **methodologically solid** and **w
                 
                 if paper.get('summary'):
                     print(f"Summary: {paper['summary'][:300]}...")
+                if has_content and paper.get('content'):
+                    print(f"Content Snippet: {paper['content'][:500]}...")
                 
                 print("-" * 60)
             
@@ -7166,7 +7290,13 @@ BE STRICT: Only pass directions that are both **methodologically solid** and **w
                 existing_ids = {p['id'] for p in existing_papers}
                 new_papers = [p for p in papers if p['id'] not in existing_ids]
                 final_papers = existing_papers + new_papers
-            
+                
+                # Sort by relevance score and keep only top 5
+                final_papers.sort(key=lambda x: x.get('relevance_score', 0), reverse=True)
+                final_papers = final_papers[:7]
+            else:
+                # For non-backup searches, also limit to top 5
+                final_papers = papers[:5]
             return {
                 **state,
                 "experiment_papers": final_papers,
@@ -7189,10 +7319,28 @@ BE STRICT: Only pass directions that are both **methodologically solid** and **w
         print("\n🔍 Step 4.5: Validating experiment paper relevance and determining next steps...")
         state["current_step"] = "validate_experiment_papers"
         
+        # Early bypass: If max iterations reached, skip validation and proceed directly
+        search_iteration = state.get("experiment_search_iteration", 0)
+        if search_iteration > 3:
+            print(f"⚠️ Maximum iterations ({search_iteration}) reached. Skipping validation and proceeding to experiment generation...")
+            
+            # CRITICAL FIX: Transfer papers to the correct state keys for new clean architecture
+            papers = state.get("experiment_papers", [])
+            print(f"📚 Transferring {len(papers)} papers to validated_papers for clean architecture")
+            
+            state["experiment_paper_validation_decision"] = "PROCEED_DIRECT"
+            state["validated_papers"] = papers  # NEW: Transfer papers to the key the clean architecture expects
+            state["experiment_paper_validation_results"] = {
+                "validation_result": "SKIP",
+                "decision": "PROCEED_DIRECT", 
+                "papers_count": len(papers),
+                "reason": "max_iterations_reached"
+            }
+            return state
+        
         try:
             papers = state.get("experiment_papers", [])
             user_query = state["original_prompt"]
-            search_iteration = state.get("experiment_search_iteration", 0)
             research_direction = state.get("research_direction", {})
             
             # Prepare paper summaries for validation with methodology checks
@@ -7237,6 +7385,7 @@ BE STRICT: Only pass directions that are both **methodologically solid** and **w
                     Paper {i} [{content_status}] - Relevance: {relevance_score:.1f}/10.0:
                     Title: {clean_title}
                     Abstract: {clean_abstract}
+                    content_snippet: {full_content[:4000]}...
                     Content Analysis: {methodology_status} | {experiment_status}
                     ---
                 """
@@ -7396,8 +7545,13 @@ BE STRICT: Only pass directions that are both **methodologically solid** and **w
                 
                 # Map validation decision to next node
                 if validation_decision == "CONTINUE":
-                    next_node = "suggest_experiments"
+                    next_node = "suggest_experiments_tree_2"  # Route to NEW CLEAN architecture
                     print(f"✅ Experiment papers are adequate. Continuing to experiment suggestions.")
+                    
+                    # CRITICAL FIX: Transfer papers to validated_papers for clean architecture
+                    print(f"📚 Transferring {len(papers)} papers to validated_papers for clean architecture")
+                    state["validated_papers"] = papers
+                    
                 elif validation_decision == "SEARCH_BACKUP":
                     next_node = "search_experiment_papers"
                     print(f"🔄 Papers need backup. Searching for additional papers.")
@@ -7406,8 +7560,12 @@ BE STRICT: Only pass directions that are both **methodologically solid** and **w
                     print(f"🔄 Papers inadequate. Generating new search query.")
                 else:
                     # Default fallback
-                    next_node = "suggest_experiments"
+                    next_node = "suggest_experiments_tree_2"  # Route to NEW CLEAN architecture
                     print(f"⚠️ Unknown validation decision '{validation_decision}'. Defaulting to continue.")
+                    
+                    # CRITICAL FIX: Also transfer papers for default fallback
+                    print(f"📚 Transferring {len(papers)} papers to validated_papers for clean architecture (fallback)")
+                    state["validated_papers"] = papers
                 
                 # Increment search iteration counter
                 state["experiment_search_iteration"] = search_iteration + 1
@@ -7437,7 +7595,10 @@ BE STRICT: Only pass directions that are both **methodologically solid** and **w
                 
                 # Add routing for error case
                 if decision == "continue":
-                    state["next_node"] = "suggest_experiments"
+                    state["next_node"] = "suggest_experiments_tree_2"  # Route to NEW CLEAN architecture
+                    # CRITICAL FIX: Transfer papers for continue decision in JSON error case
+                    print(f"📚 Transferring {len(papers)} papers to validated_papers (JSON fallback)")
+                    state["validated_papers"] = papers
                 else:
                     state["next_node"] = "search_experiment_papers"
                 
@@ -7461,7 +7622,12 @@ BE STRICT: Only pass directions that are both **methodologically solid** and **w
             state["experiment_paper_validation_decision"] = "continue"
             
             # Add routing for error case  
-            state["next_node"] = "suggest_experiments"
+            state["next_node"] = "suggest_experiments_tree_2"  # Route to NEW CLEAN architecture
+            
+            # CRITICAL FIX: Transfer papers for general error case too
+            papers = state.get("experiment_papers", [])
+            print(f"📚 Transferring {len(papers)} papers to validated_papers (general error)")
+            state["validated_papers"] = papers
             
             state["experiment_search_iteration"] = state.get("experiment_search_iteration", 0) + 1
         
@@ -7480,7 +7646,7 @@ BE STRICT: Only pass directions that are both **methodologically solid** and **w
         
         # Safety check: After 3 iterations, force continue to avoid infinite loops
         if search_iteration >= 3:
-            return "suggest_experiments"
+            return "suggest_experiments_tree_2"
         
         # Clean up decision string
         decision = str(decision).strip().upper()
@@ -7493,13 +7659,16 @@ BE STRICT: Only pass directions that are both **methodologically solid** and **w
         elif decision == "SEARCH_NEW":
             print(f"Validation decision: {decision} -> Performing new search")
             return "generate_experiment_search_query"
+        elif decision == "PROCEED_DIRECT":
+            print(f"Validation decision: {decision} -> Bypassing further validation due to max iterations")
+            return "suggest_experiments_tree_2"  # FIXED: Route to NEW CLEAN architecture
         else:
             print(f"Validation decision: {decision} -> Continuing with current papers")
-            return "suggest_experiments"
+            return "suggest_experiments_tree_2"  # FIXED: Route to NEW CLEAN architecture
 
     async def _suggest_experiments_node(self, state: ExperimentSuggestionState) -> ExperimentSuggestionState:
-        """Node for generating comprehensive, actionable experiment suggestions."""
-        print("\n🧪 Experiment Suggestion: Generating comprehensive experiment recommendations...")
+        """Node for generating experiments using a 2-phase approach for better reliability."""
+        print("\n🧪 Experiment Suggestion: Generating experiments using 2-phase approach...")
         
         try:
             # Extract analysis context
@@ -7510,20 +7679,420 @@ BE STRICT: Only pass directions that are both **methodologically solid** and **w
             research_direction = state.get("research_direction", {})
             validated_papers = state.get("validated_experiment_papers", [])
             
+            # Track experiment iteration for proper state management
+            experiment_iterations = state.get("experiment_iterations", [])
+            current_iteration = len(experiment_iterations) + 1
+            
+            print(f"🐛 DEBUG _suggest_experiments_node:")
+            print(f"   experiment_iterations length: {len(experiment_iterations)}")
+            print(f"   calculated current_iteration: {current_iteration}")
+            print(f"   stored current_experiment_iteration: {state.get('current_experiment_iteration', 'NOT SET')}")
+            print(f"   previous step: {state.get('current_step', 'unknown')}")
+            print(f"   is this an iteration call: {current_iteration > 1}")
+            
+            # Extract validation feedback for improvement (if iteration > 1)
+            experiment_validation_results = state.get("experiment_validation_results", {})
+            past_fixed_issues = state.get("past_fixed_issues", [])
+            past_unresolved_issues = state.get("past_unresolved_issues", [])
+            most_recent_generation_issues = state.get("most_recent_generation_issues", [])
+            cumulative_validation_feedback = state.get("cumulative_validation_feedback", [])
+            
+            validation_feedback = ""
+            if current_iteration > 1:
+                # Build comprehensive feedback from past iterations
+                validation_feedback = f"""
+🔄 COMPREHENSIVE ISSUE TRACKING (Iteration {current_iteration}):
+
+✅ ISSUES SUCCESSFULLY FIXED IN PAST ITERATIONS ({len(past_fixed_issues)}):
+{chr(10).join(f"• {issue}" for issue in past_fixed_issues[-5:]) if past_fixed_issues else "• No issues have been fixed yet"}
+
+❌ PERSISTENT UNRESOLVED ISSUES ({len(past_unresolved_issues)}):
+{chr(10).join(f"• {issue}" for issue in past_unresolved_issues) if past_unresolved_issues else "• No persistent issues"}
+
+🚨 MOST RECENT GENERATION ISSUES ({len(most_recent_generation_issues)}):
+{chr(10).join(f"• {issue}" for issue in most_recent_generation_issues) if most_recent_generation_issues else "• No issues in last generation"}
+
+📊 RECENT VALIDATION HISTORY:
+{chr(10).join(f"• Iteration {fb.get('iteration', '?')}: {fb.get('validation_result', 'UNKNOWN')} (Score: {fb.get('overall_score', 0):.2f})" for fb in cumulative_validation_feedback[-3:]) if cumulative_validation_feedback else "• No validation history available"}
+
+🎯 CRITICAL: YOU MUST ADDRESS ALL UNRESOLVED AND RECENT ISSUES!
+- Do NOT repeat any issues from the persistent unresolved list
+- Learn from successfully fixed issues to avoid regression
+- Every model, methodology, metric, and tool MUST have proper citations
+- Focus on the specific problems that caused validation failures
+"""
+                
+                # Add current validation feedback if available
+                if experiment_validation_results:
+                    critical_issues = experiment_validation_results.get("critical_issues", [])
+                    improvement_recommendations = experiment_validation_results.get("improvement_recommendations", [])
+                    hallucination_flags = experiment_validation_results.get("hallucination_flags", [])
+                    citation_violations = experiment_validation_results.get("citation_violations", [])
+                    
+                    validation_feedback += f"""
+
+� LATEST VALIDATION DETAILS:
+
+Critical Issues from Last Attempt:
+{chr(10).join(f"• {issue}" for issue in critical_issues[:3]) if critical_issues else "• None"}
+
+Specific Improvement Recommendations:
+{chr(10).join(f"• {rec}" for rec in improvement_recommendations[:3]) if improvement_recommendations else "• None"}
+
+Citation Violations (MUST FIX):
+{chr(10).join(f"• {viol}" for viol in citation_violations[:3]) if citation_violations else "• None"}
+
+Hallucination Flags (COMPLETELY AVOID):
+{chr(10).join(f"• {flag}" for flag in hallucination_flags[:3]) if hallucination_flags else "• None"}
+"""
+                print(f"🔄 Incorporating validation feedback from iteration {current_iteration - 1}")
+            
             # Prepare paper context for suggestions
             paper_context = ""
             if validated_papers:
-                
                 paper_context = "\n\n**Relevant Experimental Literature:**\n"
-                
-                for i, paper in enumerate(validated_papers, 1):
+                for i, paper in enumerate(validated_papers[:5], 1):  # Limit to top 5 for context
                     title = paper.get('title', 'Unknown Title')
                     score = paper.get('experimental_relevance_score', 0)
-                    
-                    content_preview = paper.get('content', '')
-                    
+                    content_preview = paper.get('content', '')[:200]  # Shortened preview
                     paper_context += f"{i}. {title} (Relevance: {score:.1f}/10)\n"
-                    paper_context += f"   Key insights: {content_preview}\n\n"
+                    paper_context += f"   Key insights: {content_preview}...\n\n"
+            
+            # Extract research direction details
+            selected_direction = research_direction.get("selected_direction", {})
+            direction_text = selected_direction.get("direction", "Continue current research")
+            key_questions = selected_direction.get("key_questions", [])
+            direction_justification = selected_direction.get("justification", "")
+            
+            # PHASE 1: Generate high-level experiment structure and priorities
+            print("📋 Phase 1: Generating experiment structure and priorities...")
+            
+            structure_prompt = f"""You are an expert ML researcher. Based on the research context below, generate a high-level experimental structure and priorities.
+
+**Research Request:** {original_prompt}
+
+**Research Direction:** {direction_text}
+
+**Key Questions:** {chr(10).join(f"• {q}" for q in key_questions[:3])}
+
+**Direction Justification:** {direction_justification[:300]}
+
+**Current Analysis Context:**
+{str(findings_analysis)[:500] if findings_analysis else "No specific analysis available"}
+
+{validation_feedback if validation_feedback else ""}
+
+Generate a structured experimental outline with:
+
+## Experimental Structure
+
+### 1. Top 3 Priority Experiments
+For each experiment, provide:
+- **Name** (concise, descriptive)
+- **Primary Objective** (1-2 sentences)
+- **Expected Impact** (High/Medium/Low)
+- **Implementation Complexity** (Simple/Medium/Complex)
+
+### 2. Critical Components to Ablate
+List 3-4 key components that should be systematically studied:
+- Component name and rationale for investigation
+
+### 3. Essential Hyperparameters  
+Identify 3-5 most important parameters to optimize:
+- Parameter name, current understanding, and expected impact
+
+### 4. Baseline Comparisons Needed
+List 2-3 baseline methods for fair comparison:
+- Method name and why it's an appropriate baseline
+
+### 5. Success Metrics Framework
+- **Primary Metrics** (most important 2-3 metrics)
+- **Secondary Metrics** (additional insights)
+- **Improvement Thresholds** (what constitutes success)
+
+### 6. Resource Estimates
+- **Computational Requirements** (GPU hours estimate)
+- **Timeline Estimate** (weeks/months)
+- **Complexity Assessment** (technical difficulty level)
+
+Keep this concise (under 1200 words) - focus on structure and priorities only. Use clear markdown formatting with bullet points and emphasis."""
+
+            try:
+                response1 = await asyncio.wait_for(
+                    asyncio.get_event_loop().run_in_executor(
+                        None,
+                        lambda: self.client.chat.completions.create(
+                            model=self.model,
+                            messages=[
+                                {"role": "system", "content": "You are an expert ML researcher. Provide structured experimental outlines in clear markdown."},
+                                {"role": "user", "content": structure_prompt}
+                            ],
+                            temperature=0.2,
+                            max_tokens=2500
+                        )
+                    ),
+                    timeout=60  # Shorter timeout for first phase
+                )
+                
+                experiment_structure = response1.choices[0].message.content.strip()
+                print(f"✅ Phase 1 complete: Generated experiment structure ({len(experiment_structure)} chars)")
+                
+            except asyncio.TimeoutError:
+                print("⏰ Phase 1 timeout - using simplified structure...")
+                experiment_structure = self._create_simple_experiment_structure(state)
+            except Exception as e:
+                print(f"❌ Phase 1 error: {str(e)} - using fallback structure...")
+                experiment_structure = self._create_simple_experiment_structure(state)
+            
+            # PHASE 2: Generate detailed implementation based on structure
+            print("🔧 Phase 2: Generating detailed implementation plans...")
+            
+            detailed_prompt = f"""You are an expert ML researcher. Using the experimental structure below as a foundation, generate detailed, actionable implementation plans for each component.
+
+**Original Research Context:**
+{original_prompt}
+
+**Research Direction:**
+{direction_text}
+
+**Generated Experimental Structure:**
+{experiment_structure}
+
+**Available Literature Context:**
+{len(validated_papers)} relevant papers have been reviewed for experimental guidance.
+{paper_context[:800] if paper_context else ""}
+
+{validation_feedback if validation_feedback else ""}
+
+Now expand this structure into a comprehensive, detailed experimental roadmap:
+
+IMPORTANT: If validation feedback is provided above, ensure ALL issues are addressed in the detailed implementation below. Pay special attention to citation requirements - every model, methodology, metric, and tool MUST have proper citations (e.g., [Author, Year]).
+
+# 🔬 Detailed Experimental Implementation Plan
+
+## 1. Priority Experiments (Detailed Implementation)
+For each experiment from the structure above, provide:
+- **Complete Methodology** (step-by-step procedures)
+- **Specific Implementation Details** (algorithms, frameworks)
+- **Data Requirements** (datasets, preprocessing)
+- **Evaluation Protocol** (metrics, validation strategy)
+- **Timeline Breakdown** (week-by-week plan)
+- **Success Criteria** (specific thresholds and benchmarks)
+- **Risk Assessment** (potential issues and mitigation)
+
+## 2. Ablation Study Protocols
+For each component identified above:
+- **Ablation Procedure** (systematic removal/modification process)
+- **Control Conditions** (baseline configurations)
+- **Measurement Methodology** (how to quantify impact)
+- **Expected Outcomes** (hypotheses about results)
+
+## 3. Hyperparameter Optimization Strategy
+For each parameter identified:
+- **Search Space Definition** (ranges and constraints)
+- **Optimization Strategy** (grid/random/Bayesian approach)
+- **Evaluation Protocol** (cross-validation, early stopping)
+- **Computational Budget** (resource allocation per search)
+
+## 4. Comparative Evaluation Framework
+- **Baseline Implementation Details** (exact configurations)
+- **Fair Comparison Protocols** (standardized evaluation)
+- **Statistical Validation Methods** (significance testing)
+- **Reporting Standards** (metrics, confidence intervals)
+
+## 5. Implementation Roadmap
+### Week 1-2: Foundation
+- Specific setup tasks and initial implementations
+
+### Week 3-6: Core Experiments  
+- Priority experiment execution plan
+
+### Week 7-12: Advanced Analysis
+- Detailed studies and comparative evaluation
+
+## 6. Resource Planning & Requirements
+- **Computational Specifications** (hardware requirements)
+- **Software Dependencies** (frameworks, libraries)
+- **Data Requirements** (storage, processing needs)
+- **Personnel Time** (researcher effort estimates)
+
+Make this actionable and implementation-ready. Include specific technical details and practical considerations."""
+
+            try:
+                response2 = await asyncio.wait_for(
+                    asyncio.get_event_loop().run_in_executor(
+                        None,
+                        lambda: self.client.chat.completions.create(
+                            model=self.model,
+                            messages=[
+                                {"role": "system", "content": "You are an expert ML researcher. Provide detailed, actionable implementation plans in clear markdown."},
+                                {"role": "user", "content": detailed_prompt}
+                            ],
+                            temperature=0.3,
+                            max_tokens=5000
+                        )
+                    ),
+                    timeout=120  # Longer timeout for detailed phase
+                )
+                
+                detailed_experiments = response2.choices[0].message.content.strip()
+                print(f"✅ Phase 2 complete: Generated detailed implementation ({len(detailed_experiments)} chars)")
+                
+            except asyncio.TimeoutError:
+                print("⏰ Phase 2 timeout - using structure-based details...")
+                # Check if experiment_structure is a string (from LLM) or dict (from fallback)
+                if isinstance(experiment_structure, str):
+                    detailed_experiments = f"## Phase 2: Detailed Implementation Plans\n\n{experiment_structure}\n\n*Note: Phase 2 timeout - detailed implementation generated from structure.*"
+                else:
+                    detailed_experiments = self._expand_structure_to_details(experiment_structure, state)
+            except Exception as e:
+                print(f"❌ Phase 2 error: {str(e)} - using structure-based details...")
+                # Check if experiment_structure is a string (from LLM) or dict (from fallback)
+                if isinstance(experiment_structure, str):
+                    detailed_experiments = f"## Phase 2: Detailed Implementation Plans\n\n{experiment_structure}\n\n*Note: Phase 2 error ({str(e)}) - detailed implementation generated from structure.*"
+                else:
+                    detailed_experiments = self._expand_structure_to_details(experiment_structure, state)
+            
+            # Combine both phases
+            # Convert experiment_structure to string if it's a dictionary (from fallback)
+            if isinstance(experiment_structure, dict):
+                structure_text = f"""## Fallback Experiment Structure
+
+**Total Experiments:** {experiment_structure.get('metadata', {}).get('total_experiments', 'N/A')}
+**Complexity:** {experiment_structure.get('metadata', {}).get('complexity', 'N/A')}
+**Timeline:** {experiment_structure.get('metadata', {}).get('estimated_total_duration', 'N/A')}
+
+### Experiments:
+"""
+                for i, exp in enumerate(experiment_structure.get('experiments', []), 1):
+                    structure_text += f"{i}. **{exp.get('name', 'Unknown')}** ({exp.get('priority', 'medium')} priority)\n"
+                    structure_text += f"   - {exp.get('description', 'No description')}\n"
+                    structure_text += f"   - Duration: {exp.get('estimated_duration', 'TBD')}\n\n"
+                
+                if experiment_structure.get('metadata', {}).get('fallback_reason'):
+                    structure_text += f"\n*Note: {experiment_structure['metadata']['fallback_reason']}*"
+                
+                experiment_structure_text = structure_text
+            else:
+                experiment_structure_text = str(experiment_structure)
+            
+            combined_plan = f"""# 🧪 Comprehensive Experimental Roadmap
+
+*Generated using 2-phase approach: Structure + Implementation Details*
+
+## Phase 1: Experimental Structure & Priorities
+{experiment_structure_text}
+
+---
+
+## Phase 2: Detailed Implementation Plans
+{detailed_experiments}
+
+---
+
+**Methodology Note:** This experimental roadmap was generated using a 2-phase approach:
+1. **Structure Generation:** High-level experimental design and strategic priorities
+2. **Implementation Expansion:** Comprehensive technical details and actionable protocols
+
+This approach ensures both strategic coherence and practical actionability, while reducing API timeout risks."""
+            
+            print(f"✅ 2-Phase experimental plan completed ({len(combined_plan)} chars)")
+            
+            # Create structured summary for state management
+            experiment_summary = {
+                "format": "2-phase_split",
+                "methodology": "structure_then_details",
+                "phase1_chars": len(experiment_structure_text),
+                "phase2_chars": len(detailed_experiments),
+                "total_chars": len(combined_plan),
+                "generated_at": "2-phase_experiments_complete",
+                "phases": {
+                    "structure_phase": "Priority experiments, ablations, hyperparameters, baselines",
+                    "implementation_phase": "Detailed protocols, timelines, resources, evaluation"
+                }
+            }
+            
+            # Extract priority experiments for quick access
+            prioritized_experiments = []
+            if "Priority Experiments" in experiment_structure_text:
+                import re
+                experiment_matches = re.findall(r'\*\*([^*]+)\*\*', experiment_structure_text)
+                prioritized_experiments = experiment_matches[:5] if experiment_matches else []
+            
+            # Create implementation roadmap
+            implementation_roadmap = {
+                "total_experiments": len(prioritized_experiments),
+                "estimated_timeline": "3-6 months",
+                "format": "2-phase_split",
+                "structure_available": True,
+                "details_available": True,
+                "next_immediate_actions": prioritized_experiments[:2] if prioritized_experiments else []
+            }
+            
+            # Generate formatted summary
+            formatted_summary = self._format_experiment_suggestions_summary_markdown(combined_plan, original_prompt)
+            
+            # Add current iteration to the iterations list
+            experiment_iterations.append({
+                "iteration": current_iteration,
+                "generated_at": datetime.now().isoformat(),
+                "method": "2-phase_split",
+                "structure_chars": len(experiment_structure_text),
+                "details_chars": len(detailed_experiments),
+                "total_chars": len(combined_plan)
+            })
+            
+            # Store results
+            return {
+                **state,
+                "experiment_suggestions": combined_plan,
+                "current_experiment_iteration": current_iteration,  # FIXED: Now properly stored!
+                "experiment_iterations": experiment_iterations,  # FIXED: Include updated iterations list
+                "experiment_structure": experiment_structure_text,  # Store structure as text
+                "detailed_implementation": detailed_experiments,  # Store details separately
+                "experiment_summary": experiment_summary,
+                "prioritized_experiments": prioritized_experiments,
+                "implementation_roadmap": implementation_roadmap,
+                "final_outputs": {
+                    "formatted_summary": formatted_summary,
+                    "full_plan": combined_plan,
+                    "format": "2-phase_markdown",
+                    "phase_count": 2
+                },
+                "generation_method": "2-phase_split",
+                "current_step": "experiments_suggested_2phase"
+            }
+                
+        except Exception as e:
+            print(f"❌ Error in 2-phase suggest_experiments_node: {str(e)}")
+            
+            # Track iteration even in error case
+            experiment_iterations = state.get("experiment_iterations", [])
+            current_iteration = len(experiment_iterations) + 1
+            
+            # Add error iteration to the list
+            experiment_iterations.append({
+                "iteration": current_iteration,
+                "generated_at": datetime.now().isoformat(),
+                "method": "fallback_error",
+                "error": str(e),
+                "status": "failed"
+            })
+            
+            # Fallback to simple plan
+            fallback_plan = self._create_fallback_experiment_plan(
+                state.get("original_prompt", ""), 
+                state.get("research_direction", {})
+            )
+            return {
+                **state,
+                "experiment_suggestions": fallback_plan,
+                "current_experiment_iteration": current_iteration,  # Store iteration even on error
+                "experiment_iterations": experiment_iterations,     # Update iterations list
+                "generation_method": "fallback_due_to_error",
+                "errors": state.get("errors", []) + [f"2-phase experiment generation error: {str(e)}"],
+                "current_step": "experiments_suggested_fallback"
+            }
             
             # Extract research direction details
             selected_direction = research_direction.get("selected_direction", {})
@@ -7638,20 +8207,88 @@ BE STRICT: Only pass directions that are both **methodologically solid** and **w
             Be specific, practical, and actionable. Each suggestion should be implementable by a researcher with the context provided. Use clear markdown formatting with headers, bullet points, and emphasis.
             """
             print(f'📝 Generated experiment suggestions prompt ({len(suggestions_prompt)} characters)')
-            response = await asyncio.get_event_loop().run_in_executor(
-                None,
-                lambda: self.client.chat.completions.create(
-                    model=self.model,
-                    messages=[
-                        {"role": "system", "content": "You are an expert ML researcher. Provide comprehensive experiment plans in clear, well-formatted Markdown."},
-                        {"role": "user", "content": suggestions_prompt}
-                    ],
-                    temperature=0.3
-                )
-            )
             
-            # Get the markdown suggestions
-            suggestions_markdown = response.choices[0].message.content.strip()
+            # Use streaming for better timeout handling
+            print("🔄 Starting streaming response generation...")
+            response_chunks = []
+            total_chars = 0
+            
+            try:
+                # Create streaming response with timeout
+                response = await asyncio.wait_for(
+                    asyncio.get_event_loop().run_in_executor(
+                        None,
+                        lambda: self.client.chat.completions.create(
+                            model=self.model,
+                            messages=[
+                                {"role": "system", "content": "You are an expert ML researcher. Provide comprehensive experiment plans in clear, well-formatted Markdown."},
+                                {"role": "user", "content": suggestions_prompt}
+                            ],
+                            temperature=0.2,
+                            max_tokens=6000,  # Increased for comprehensive plans
+                            stream=True
+                        )
+                    ),
+                    timeout=180  # 3 minutes timeout
+                )
+                
+                # Process streaming chunks
+                for chunk in response:
+                    if chunk.choices[0].delta.content:
+                        chunk_content = chunk.choices[0].delta.content
+                        response_chunks.append(chunk_content)
+                        total_chars += len(chunk_content)
+                        
+                        # Progress indicator every 500 characters
+                        if total_chars % 500 == 0:
+                            print(f"📝 Generated {total_chars} characters...")
+                
+                # Combine all chunks
+                suggestions_markdown = ''.join(response_chunks)
+                
+                if not suggestions_markdown.strip():
+                    raise ValueError("Empty response received from streaming")
+                    
+                print(f"✅ Streaming complete! Generated {len(suggestions_markdown)} characters")
+                
+            except asyncio.TimeoutError:
+                print("⏰ Streaming timeout - using partial response...")
+                suggestions_markdown = ''.join(response_chunks) if response_chunks else None
+                
+                if not suggestions_markdown or len(suggestions_markdown) < 500:
+                    # If we don't have enough content, create a fallback
+                    print("⚠️ Insufficient content from timeout, creating fallback plan...")
+                    suggestions_markdown = self._create_fallback_experiment_plan(original_prompt, research_direction)
+                else:
+                    print(f"📝 Using partial response ({len(suggestions_markdown)} characters)")
+                    
+            except Exception as e:
+                print(f"❌ Streaming error: {str(e)}")
+                print("🔄 Falling back to non-streaming request...")
+                
+                # Fallback to non-streaming with shorter timeout
+                try:
+                    response = await asyncio.wait_for(
+                        asyncio.get_event_loop().run_in_executor(
+                            None,
+                            lambda: self.client.chat.completions.create(
+                                model=self.model,
+                                messages=[
+                                    {"role": "system", "content": "You are an expert ML researcher. Provide comprehensive experiment plans in clear, well-formatted Markdown."},
+                                    {"role": "user", "content": self._create_shorter_experiment_prompt(original_prompt, research_direction, findings_analysis)}
+                                ],
+                                temperature=0.2,
+                                max_tokens=3000
+                            )
+                        ),
+                        timeout=90  # Shorter timeout for fallback
+                    )
+                    suggestions_markdown = response.choices[0].message.content.strip()
+                    print(f"✅ Fallback request successful ({len(suggestions_markdown)} characters)")
+                    
+                except Exception as fallback_error:
+                    print(f"❌ Fallback also failed: {str(fallback_error)}")
+                    suggestions_markdown = self._create_fallback_experiment_plan(original_prompt, research_direction)
             print(f"📝 Generated comprehensive experiment plan ({len(suggestions_markdown)} characters)")
             
             # Create a structured summary for state management while keeping the full markdown
@@ -7701,6 +8338,8 @@ BE STRICT: Only pass directions that are both **methodologically solid** and **w
                 "experiment_summary": experiment_summary,
                 "prioritized_experiments": prioritized_experiments,
                 "implementation_roadmap": implementation_roadmap,
+                "current_experiment_iteration": current_iteration,  # 🔥 CRITICAL FIX: Store iteration number
+                "suggestion_source": "suggest_experiments" if current_iteration == 1 else "suggest_experiments_iteration",  # Track call source
                 "final_outputs": {
                     "formatted_summary": formatted_summary,
                     "full_plan": suggestions_markdown,
@@ -7714,6 +8353,8 @@ BE STRICT: Only pass directions that are both **methodologically solid** and **w
             print(f"❌ Error in suggest_experiments_node: {str(e)}")
             return {
                 **state,
+                "current_experiment_iteration": current_iteration,  # 🔥 CRITICAL FIX: Store iteration even on error
+                "suggestion_source": "error_path",  # Track error source
                 "errors": state.get("errors", []) + [f"Experiment suggestion error: {str(e)}"],
                 "current_step": "suggestion_error"
             }
@@ -7760,7 +8401,39 @@ BE STRICT: Only pass directions that are both **methodologically solid** and **w
             # Check for previous experiment iterations and validation feedback
             experiment_iterations = state.get("experiment_iterations", [])
             experiment_validation_results = state.get("experiment_validation_results", {})
-            current_iteration = len(experiment_iterations) + 1
+            
+            # CRITICAL FIX: Handle dual edge state conflict
+            # If we're in an iteration step but experiment_iterations is empty, use stored iteration
+            stored_iteration = state.get("current_experiment_iteration")
+            current_step = state.get("current_step", "unknown")
+            
+            # Detect stale state from dual edge conflict
+            # If previous step was validation but experiment_iterations is empty, we have stale state
+            if current_step == "experiments_validated" and len(experiment_iterations) == 0:
+                print(f"🚨 DUAL EDGE STATE CONFLICT DETECTED!")
+                print(f"   current_step: {current_step} (indicates validation happened)")
+                print(f"   experiment_iterations length: {len(experiment_iterations)} (should not be 0 after validation)")
+                print(f"   stored_iteration: {stored_iteration}")
+                print(f"   FIX: Validation happened but experiment_iterations is empty due to stale state")
+                
+                # If we have a stored iteration, use it + 1, otherwise assume this is iteration 2
+                if stored_iteration is not None:
+                    current_iteration = stored_iteration + 1
+                    print(f"   Using stored_iteration + 1 = {current_iteration}")
+                else:
+                    current_iteration = 2  # Assume this is the second iteration after first failure
+                    print(f"   No stored iteration, assuming this is iteration 2")
+            else:
+                current_iteration = len(experiment_iterations) + 1
+            
+            # DEBUG: Track iteration counter in tree node
+            print(f"🐛 DEBUG _suggest_experiments_tree_node:")
+            print(f"   experiment_iterations length: {len(experiment_iterations)}")
+            print(f"   calculated current_iteration: {current_iteration}")
+            print(f"   stored current_experiment_iteration: {stored_iteration}")
+            print(f"   previous step: {current_step}")
+            print(f"   is this an iteration call: {current_iteration > 1}")
+            print(f"   state conflict detected: {current_step == 'experiments_validated' and len(experiment_iterations) == 0}")
             
             # Extract validation feedback for improvement
             validation_feedback = ""
@@ -7800,8 +8473,8 @@ IMPORTANT: Address ALL the above issues in this iteration. Use only verified met
                 literature_context = ""
                 for i, paper in enumerate(validated_papers[:5], 1):
                     title = paper.get('title', 'Unknown Title')
-                    content = paper.get('content', paper.get('abstract', ''))[:300]
-                    literature_context += f"[{i}] {title}\nContent: {content}...\n\n"
+                    content = paper.get('content', paper.get('abstract', ''))
+                    literature_context += f"[{i}] {title}\nContent: {content}\n"
                 
                 # Generate experiments using existing literature without redundant search
                 experiment_plan = await self._generate_literature_grounded_experiments(
@@ -7824,10 +8497,14 @@ IMPORTANT: Address ALL the above issues in this iteration. Use only verified met
                 
                 print(f"✅ Generated literature-grounded experiments using {len(validated_papers)} existing papers")
                 
+                print(f"🔍 DEBUG: About to return from main success path with current_iteration={current_iteration}")
+                
                 return {
                     **state,
                     "experiment_suggestions": experiment_plan,
                     "experiment_summary": experiment_summary,
+                    "current_experiment_iteration": current_iteration,  # Store iteration for validation node
+                    "suggestion_source": "suggest_experiments_tree" if current_iteration == 1 else "suggest_experiments_iteration_tree",  # Track call source
                     "final_outputs": {
                         "formatted_summary": experiment_plan,
                         "full_plan": experiment_plan,
@@ -7840,10 +8517,14 @@ IMPORTANT: Address ALL the above issues in this iteration. Use only verified met
                 print("⚠️ No existing papers found, falling back to basic experiment framework")
                 fallback_plan = self._create_fallback_tree_experiment(original_prompt)
                 
+                print(f"🔍 DEBUG: About to return from fallback path with current_iteration={current_iteration}")
+                
                 return {
                     **state,
                     "experiment_suggestions": fallback_plan,
                     "experiment_summary": {"format": "fallback", "methodology": "basic_framework"},
+                    "current_experiment_iteration": current_iteration,  # Store iteration for validation node
+                    "suggestion_source": "suggest_experiments_tree_fallback",  # Track call source
                     "final_outputs": {"formatted_summary": fallback_plan, "format": "fallback"},
                     "current_step": "fallback_experiments_suggested"
                 }
@@ -7862,6 +8543,8 @@ IMPORTANT: Address ALL the above issues in this iteration. Use only verified met
                     "methodology": "fallback_due_to_error",
                     "error": str(e)
                 },
+                "current_experiment_iteration": current_iteration,  # Use corrected iteration value
+                "suggestion_source": "suggest_experiments_tree_error",  # Track call source
                 "errors": state.get("errors", []) + [f"Experiment tree error: {str(e)}"],
                 "current_step": "tree_suggestion_error"
             }
@@ -7882,6 +8565,903 @@ IMPORTANT: Address ALL the above issues in this iteration. Use only verified met
                         del os.environ["BASE_URL"]
             except:
                 pass  # Ignore cleanup errors
+
+    async def _suggest_experiments_tree_2_node(self, state: ExperimentSuggestionState) -> ExperimentSuggestionState:
+        """NEW CLEAN EXPERIMENT SUGGESTION NODE - No dual edge conflicts."""
+        print("\n🌳 Clean Experiment Tree: Generating validated experiments...")
+        
+        try:
+            original_prompt = state.get("original_prompt", "")
+            
+            # Track iteration with clean state management
+            experiment_iterations = state.get("experiment_iterations", [])
+            
+            iteration_from_state = state.get("current_experiment_iteration", 0)
+        
+            iteration_from_state += 1
+           
+            current_iteration = iteration_from_state
+            print(f"🐛 DEBUG _suggest_experiments_tree_2_node ITERATION NUMBER:{experiment_iterations}")
+            print(f"   calculated current_iteration: {current_iteration}")
+            print(f"   iteration_from_state: {iteration_from_state}")
+            print(f"   stored current_experiment_iteration: {state.get('current_experiment_iteration')}")
+            # Extract validation feedback for improvement
+            validation_feedback = ""
+            
+            # 🆕 SOLVED ISSUES FEEDBACK LOOP - Prevent LLM from repeating mistakes
+            solved_issues_history = state.get("solved_issues_history", [])
+            generation_feedback_context = state.get("generation_feedback_context", "")
+            
+            if solved_issues_history:
+                validation_feedback += f"""
+🧠 CRITICAL: LEARNED LESSONS FROM PREVIOUS VALIDATIONS
+We have successfully solved {len(solved_issues_history)} categories of issues across {len([item for hist in solved_issues_history for item in hist.get('solved_issues', [])])} specific problems.
+
+🎯 SOLVED ISSUES HISTORY:
+"""
+                for i, solved_entry in enumerate(solved_issues_history[-3:], 1):  # Show last 3 iterations
+                    solved_issues = solved_entry.get("solved_issues", [])
+                    if solved_issues:
+                        validation_feedback += f"Iteration {solved_entry.get('iteration', i)}: {len(solved_issues)} issues solved\n"
+                        for issue in solved_issues[:2]:  # Show first 2 per iteration
+                            validation_feedback += f"  ✓ {issue}\n"
+                
+                validation_feedback += f"""
+🚨 ABSOLUTELY CRITICAL INSTRUCTIONS:
+• NEVER repeat any of the solved issues listed above
+• These represent problems we have ALREADY FIXED - do not regress
+• Focus on NEW issues that remain unsolved
+• Build upon the successful patterns that led to these resolutions
+• If tempted to make similar mistakes, consciously choose different approaches
+
+{generation_feedback_context}
+"""
+                print(f"🧠 Incorporated solved issues feedback from {len(solved_issues_history)} validation iterations")
+            
+            if current_iteration > 1:
+                experiment_validation_results = state.get("experiment_validation_results", {})
+                
+                if experiment_validation_results:
+                    critical_issues = experiment_validation_results.get("critical_issues", [])
+                    improvement_recommendations = experiment_validation_results.get("improvement_recommendations", [])
+                    
+                    if critical_issues or improvement_recommendations:
+                        validation_feedback += f"\n\nCURRENT VALIDATION FEEDBACK (Iteration {current_iteration}):\n"
+                        
+                        if critical_issues:
+                            validation_feedback += f"❌ Critical Issues to Address: {'; '.join(critical_issues)}\n"
+                            
+                        if improvement_recommendations:
+                            validation_feedback += f"💡 Improvement Recommendations: {'; '.join(improvement_recommendations)}\n"
+                                        
+            print(f"📊 Clean Tree - Iteration {current_iteration}")
+            print(f"🔄 Has validation feedback: {bool(validation_feedback)}")
+            
+            # DEBUG: Check what papers are available in state
+            validated_papers = state.get("validated_papers", [])
+            experiment_papers = state.get("experiment_papers", [])
+            print(f"🔍 DEBUG - validated_papers count: {len(validated_papers) if validated_papers else 0}")
+            print(f"🔍 DEBUG - experiment_papers count: {len(experiment_papers) if experiment_papers else 0}")
+            print(f"🔍 DEBUG - validated_papers type: {type(validated_papers)}")
+            if validated_papers:
+                print(f"🔍 DEBUG - first paper type: {type(validated_papers[0])}")
+                print(f"🔍 DEBUG - first paper keys: {list(validated_papers[0].keys()) if isinstance(validated_papers[0], dict) else 'Not a dict'}")
+            
+            # Get existing papers from the workflow state and extract their content
+            literature_content = ""
+            
+            if validated_papers and len(validated_papers) > 0:
+                print(f"📚 Extracting content from {len(validated_papers)} validated papers...")
+                papers_to_use = validated_papers
+            elif experiment_papers and len(experiment_papers) > 0:
+                print(f"📚 Fallback: Using {len(experiment_papers)} experiment papers (validated_papers empty)...")
+                papers_to_use = experiment_papers
+            else:
+                papers_to_use = []
+                
+            if papers_to_use and len(papers_to_use) > 0:
+                print(f"📚 Processing {len(papers_to_use)} papers...")
+                
+                # Extract content from each paper
+                literature_parts = []
+                for i, paper in enumerate(papers_to_use[:10], 1):  # Limit to top 10 papers to avoid token limits
+                    try:
+                        if isinstance(paper, dict):
+                            title = paper.get("title", f"Paper {i}")
+                            abstract = paper.get("summary", paper.get("abstract", ""))
+                            content = paper.get("content", "")
+                            
+                            paper_content = f"[{i}] {title}\n"
+                            if abstract:
+                                paper_content += f"Abstract: {abstract}\n"
+                            if content:
+                                paper_content += f"Content:\n{content}\n"
+                            
+                            literature_parts.append(paper_content)
+                            
+                        elif hasattr(paper, 'title') and hasattr(paper, 'summary'):
+                            # Handle paper objects with attributes
+                            title = getattr(paper, 'title', f"Paper {i}")
+                            abstract = getattr(paper, 'summary', '')
+                            content = getattr(paper, 'content', '') if hasattr(paper, 'content') else ''
+                            
+                            paper_content = f"[{i}] {title}\n"
+                            if abstract:
+                                paper_content += f"Abstract: {abstract}\n"
+                            if content:
+                                paper_content += f"Content:\n{content}\n"
+                            
+                            literature_parts.append(paper_content)
+                            
+                        else:
+                            # Fallback for unknown paper format
+                            literature_parts.append(f"[{i}] {str(paper)}\n")
+                            
+                    except Exception as e:
+                        print(f"⚠️ Error extracting content from paper {i}: {e}")
+                        literature_parts.append(f"**Paper {i}**: Content extraction failed\n")
+                
+                literature_content = "\n\n".join(literature_parts)
+                print(f"✅ Extracted {len(literature_content)} characters of literature content")
+            
+            
+            if papers_to_use and len(papers_to_use) > 0:
+                print(f"📚 Using {len(papers_to_use)} existing papers from workflow (iteration {current_iteration})")
+                
+                # Use existing papers for experiment generation
+                experiment_plan = await self._generate_literature_grounded_experiments(
+                    original_prompt,
+                    state.get("research_direction", {}).get("direction_text", ""),
+                    state.get("research_direction", {}).get("key_questions", []),
+                    literature_content,  # Pass the extracted literature content
+                    papers_to_use,  # Use the papers we found (validated_papers or experiment_papers)
+                    validation_feedback,
+                    current_iteration
+                )
+                
+                print(f"✅ Generated clean tree experiments using {len(papers_to_use)} existing papers")
+                current_experiment_record = {
+                    "iteration": current_iteration,
+                    "experiments": experiment_plan[:500] if experiment_plan else "No experiment plan generated",
+                    "summary": {
+                        "format": "clean_tree_literature_grounded",
+                        "methodology": "existing_papers_analysis_clean",
+                        "papers_used": len(papers_to_use) if papers_to_use else 0,
+                        "iteration": current_iteration
+                    },
+                    "timestamp": __import__('datetime').datetime.now().isoformat()
+                }
+                
+                experiment_iterations.append(current_experiment_record)
+                print(f"🔍 DEBUG: About to return from clean tree success path with current_iteration={experiment_iterations}")
+                
+                return {
+                    **state,
+                    "experiment_suggestions": experiment_plan,
+                    "experiment_summary": {
+                        "format": "clean_tree_literature_grounded",
+                        "methodology": "existing_papers_analysis_clean",
+                        "papers_used": len(validated_papers),
+                        "iteration": iteration_from_state
+                    },
+                    "experiment_iterations": experiment_iterations,
+                    "current_experiment_iteration": iteration_from_state,
+                    "suggestion_source": "suggest_experiments_tree_2",
+                    "current_step": "clean_experiments_suggested",
+                    # 🆕 PRESERVE SOLVED ISSUES TRACKING
+                    "solved_issues_history": solved_issues_history,
+                    "generation_feedback_context": generation_feedback_context
+                }
+            else:
+                print("⚠️ No existing papers found, creating fallback experiments")
+                fallback_plan = self._create_fallback_tree_experiment(original_prompt)
+                
+                return {
+                    **state,
+                    "experiment_suggestions": fallback_plan,
+                    "experiment_summary": {
+                        "format": "clean_tree_fallback",
+                        "methodology": "basic_framework_clean",
+                        "iteration": current_iteration
+                    },
+                    "current_experiment_iteration": current_iteration,
+                    "suggestion_source": "suggest_experiments_tree_2_fallback",
+                    "current_step": "clean_fallback_experiments_suggested",
+                    # 🆕 PRESERVE SOLVED ISSUES TRACKING
+                    "solved_issues_history": solved_issues_history,
+                    "generation_feedback_context": generation_feedback_context
+                }
+                
+        except Exception as e:
+            print(f"❌ Error in clean tree node: {str(e)}")
+            return {
+                **state,
+                "experiment_suggestions": "Error in experiment generation",
+                "experiment_summary": {"format": "error", "error": str(e)},
+                "current_experiment_iteration": len(state.get("experiment_iterations", [])) + 1,
+                "suggestion_source": "suggest_experiments_tree_2_error",
+                "errors": state.get("errors", []) + [f"Clean tree error: {str(e)}"],
+                "current_step": "clean_tree_error",
+                # 🆕 PRESERVE SOLVED ISSUES TRACKING EVEN ON ERROR
+                "solved_issues_history": state.get("solved_issues_history", []),
+                "generation_feedback_context": state.get("generation_feedback_context", "")
+            }
+            
+            
+            
+    async def _validate_experiments_tree_2_node(self, state: ExperimentSuggestionState) -> ExperimentSuggestionState:
+        """NEW CLEAN VALIDATION NODE - Comprehensive validation with research direction alignment, hallucination detection, and novelty assessment."""
+        print("\n🧪 Clean Experiment Validation: Comprehensive evaluation of proposed experiments...")
+        
+        try:
+            # Extract current experiments and context
+            experiment_suggestions = state.get("experiment_suggestions", "")
+            experiment_summary = state.get("experiment_summary", {})
+            original_prompt = state.get("original_prompt", "")
+            findings_analysis = state.get("findings_analysis", {})
+            research_direction = state.get("research_direction", {})
+            validated_papers = state.get("validated_papers", [])
+            
+            # Extract research direction details for alignment checking
+            selected_direction = research_direction.get("selected_direction", {})
+            direction_text = selected_direction.get("direction", "")
+            key_questions = selected_direction.get("key_questions", [])
+            direction_justification = selected_direction.get("justification", "")
+            expected_impact = selected_direction.get("expected_impact", "")
+            
+            # Extract domain information for grounding validation
+            domain_analysis = findings_analysis.get("domain_analysis", {})
+            primary_domain = domain_analysis.get("primary_domain", "machine learning")
+            task_type = domain_analysis.get("task_type", "")
+            application_area = domain_analysis.get("application_area", "")
+            
+            
+            # Track iteration with clean state management
+            experiment_iterations = state.get("experiment_iterations", [])
+            
+            print(f"🐛 DEBUG _validate_experiments_tree_2_node ITERATION NUMBER:{experiment_iterations}")
+
+            iteration_from_state = state.get("current_experiment_iteration", 0)
+            print(f"   iteration_from_state: {iteration_from_state}")
+
+            # Build literature context for grounding verification
+            literature_context = ""
+            if validated_papers and len(validated_papers) > 0:
+                print(f"📚 Building literature context from {len(validated_papers)} papers for grounding verification...")
+                
+                literature_parts = []
+                for i, paper in enumerate(validated_papers[:10], 1):
+                    try:
+                        if isinstance(paper, dict):
+                            title = paper.get("title", f"Paper {i}")
+                            abstract = paper.get("summary", paper.get("abstract", ""))
+                            content = paper.get("content", "")
+                            
+                            paper_content = f"**Paper {i}: {title}**\n"
+                            if abstract:
+                                paper_content += f"Abstract: {abstract[:500]}...\n"
+                            if content:
+                                paper_content += f"Key Content: {content[:800]}...\n"
+                            
+                            literature_parts.append(paper_content)
+                            
+                    except Exception as e:
+                        print(f"⚠️ Error extracting content from paper {i}: {e}")
+                        continue
+                
+                literature_context = "\n\n".join(literature_parts)
+                print(f"✅ Built literature context ({len(literature_context)} characters)")
+
+
+            print(f"📊 Clean Validation - Iteration {iteration_from_state}")
+            print(f"📝 Experiment length: {len(str(experiment_suggestions))}")
+            print(f"🎯 Research Direction: {direction_text[:100]}...")
+            
+            # Add current experiments to history
+            current_experiment_record = {
+                "iteration": iteration_from_state,
+                "experiments": experiment_suggestions if isinstance(experiment_suggestions, str) else str(experiment_suggestions)[:500],
+                "summary": experiment_summary,
+                "timestamp": __import__('datetime').datetime.now().isoformat()
+            }
+            
+            experiment_iterations.append(current_experiment_record)
+            
+            # Enhanced validation prompt with comprehensive criteria
+            validation_prompt = f"""
+                You are a HYPER-STRICT experimental methodology validator with expertise in {primary_domain}. Your job is to rigorously evaluate the proposed experiments across MULTIPLE CRITICAL DIMENSIONS. You must be ruthless in your assessment - only experiments that are technically perfect, well-grounded, novel, and properly aligned should pass.
+
+                ORIGINAL RESEARCH REQUEST:
+                {original_prompt}
+
+                RESEARCH DIRECTION CONTEXT:
+                Direction: {direction_text}
+                Key Questions: {chr(10).join(f"• {q}" for q in key_questions)}
+                Expected Impact: {expected_impact}
+                Justification: {direction_justification}
+
+                DOMAIN CONTEXT:
+                Primary Domain: {primary_domain}
+                Task Type: {task_type}
+                Application Area: {application_area}
+
+                PROPOSED EXPERIMENTS:
+                {experiment_suggestions}
+
+                LITERATURE CONTEXT FOR GROUNDING VERIFICATION:
+                {literature_context if literature_context else "No literature context available - experiments must be self-evidently grounded"}
+
+                ITERATION: {iteration_from_state}
+
+                COMPREHENSIVE VALIDATION CRITERIA (ALL MUST BE SATISFIED):
+
+                1. **RESEARCH DIRECTION ALIGNMENT (35% weight)**
+                - Do experiments DIRECTLY address the specified research direction?
+                - Are the key research questions being systematically investigated?
+                - Does the approach align with the expected impact and justification?
+                - Are experiments relevant to the primary domain and task type?
+
+                2. **NOVELTY POTENTIAL (35% weight)**
+                - Do experiments propose genuinely new approaches or combinations?
+                - Are there novel applications of existing methods?
+                - Do experiments address unexplored aspects of the research direction?
+                - Is there clear differentiation from obvious or standard approaches?
+                - Are the proposed experiments innovative while remaining feasible?
+
+                3. **JUSTIFICATION QUALITY (30% weight)**
+                - Are experimental choices well-reasoned and logically sound?
+                - Is there clear rationale for methodology selections?
+                - Are resource estimates realistic and justified?
+                - Are potential outcomes and success criteria well-defined?
+                - Are experimental procedures implementable with stated resources?
+
+                MANDATORY TECHNICAL REQUIREMENTS:
+                - Every dataset MUST be real with proper citation format
+                - Every model MUST reference the original paper
+                - Every methodology MUST cite source papers
+                - Every metric MUST include definition source
+                - Every claim MUST be verifiable and realistic
+                - Every experimental procedure MUST be implementable
+
+                COMPREHENSIVE ROADMAP VALIDATION:
+                - **Complete Coverage**: ALL 5 mandatory sections must be present and detailed
+                - **Technical Depth**: Each section must have specific, actionable content
+                - **Integration**: Sections must be well-integrated and consistent
+                - **Practicality**: Plans must be realistic and implementable
+                - **Documentation**: Clear, professional presentation with proper formatting
+
+                DOMAIN-SPECIFIC VALIDATION ({primary_domain.upper()}):
+                - Are the proposed experiments appropriate for {primary_domain}?
+                - Do the evaluation frameworks match {primary_domain} standards?
+                - Are the datasets and benchmarks commonly used in {primary_domain}?
+                - Are the baselines and comparisons relevant to {task_type if task_type else primary_domain}?
+
+                RESEARCH DIRECTION COMPLIANCE CHECK:
+                - Does each experiment contribute to answering: "{direction_text}"?
+                - Are the key questions being systematically addressed?
+                - Does the overall experimental plan advance the stated research direction?
+                - Are experiments organized in a logical progression toward the expected impact?
+
+                Return your assessment in this exact JSON format:
+                {{
+                    "validation_result": "PASS" | "FAIL",
+                    "overall_score": 0.0-1.0,
+                    "detailed_scores": {{
+                        "research_direction_alignment": 0.0-1.0,
+                        "novelty_potential": 0.0-1.0,
+                        "justification_quality": 0.0-1.0
+                    }},
+                    "critical_issues": ["list", "of", "critical", "problems"],
+                    "direction_misalignment": ["ways", "experiments", "dont", "align", "with", "direction"],
+                    "novelty_concerns": ["lack", "of", "novelty", "or", "contribution", "issues"],
+                    "improvement_recommendations": ["specific", "actionable", "improvements"],
+                    "decision_rationale": "Clear explanation focusing on direction alignment, novelty, and justification quality"
+                }}
+
+                ULTRA-STRICT PASSING THRESHOLD:
+                - Overall score ≥ 0.90
+                - ALL detailed scores ≥ 0.85
+                - NO critical issues
+                - NO hallucination flags
+                - NO direction misalignment
+                - NO grounding violations
+                - NO roadmap completeness issues
+
+                COMPREHENSIVE ROADMAP REQUIREMENT:
+                Experiments MUST include ALL of these sections with substantive content:
+                1. **Objectives & Hypotheses** (with measurable goals and testable statements)
+                2. **Detailed Methodology & Procedures** (step-by-step reproducible protocols with metrics)
+                3. **Resource Requirements & Estimates** (compute, time, cost specifications)
+                4. **Risk Assessment & Mitigation** (technical risks with mitigation strategies)
+                5. **Timeline & Milestones** (realistic schedule with critical path)
+
+                BE ABSOLUTELY RUTHLESS: Only pass experiments that are:
+                1. **PERFECTLY ALIGNED** with the research direction
+                2. **COMPLETELY FREE** from hallucinations and inaccuracies
+                3. **TECHNICALLY SOUND** and properly grounded
+                4. **GENUINELY NOVEL** with clear contributions
+                5. **COMPREHENSIVELY COMPLETE** with all 5 mandatory roadmap sections
+                6. **IMPLEMENTABLE** with realistic resource requirements
+
+                If ANY criterion fails, the result must be FAIL. This is a zero-tolerance validation.
+                """
+
+            # Call LLM for comprehensive validation WITH STREAMING
+            print("🔄 Starting streaming validation...")
+            response_chunks = []
+            total_chars = 0
+
+            try:
+                response = await asyncio.wait_for(
+                    asyncio.get_event_loop().run_in_executor(
+                        None,
+                        lambda: self.client.chat.completions.create(
+                            model=self.model,
+                            temperature=0.1,  # Low temperature for consistent validation
+                            messages=[
+                                {"role": "system", "content": f"You are a ruthlessly strict experimental methodology validator specializing in {primary_domain}. Provide rigorous, objective assessments in valid JSON format. Be ultra-conservative - only pass experiments that meet ALL criteria perfectly."},
+                                {"role": "user", "content": validation_prompt}
+                            ],
+                            stream=True,  # Enable streaming for timeout prevention
+                            max_tokens=4000  # Limit response length
+                        )
+                    ),
+                    timeout=260  # 4 minutes for comprehensive validation
+                )
+
+                # Process streaming chunks
+                for chunk in response:
+                    if chunk.choices[0].delta.content:
+                        chunk_content = chunk.choices[0].delta.content
+                        response_chunks.append(chunk_content)
+                        total_chars += len(chunk_content)
+
+                        # Progress indicator every 200 characters
+                        if total_chars % 200 == 0:
+                            print(f"🔍 Validation progress: {total_chars} characters...")
+
+                validation_content = ''.join(response_chunks).strip()
+
+                if not validation_content:
+                    raise ValueError("Empty validation response")
+
+                print(f"✅ Validation streaming complete! Generated {len(validation_content)} characters")
+
+            except asyncio.TimeoutError:
+                print("⏰ Validation streaming timeout - using partial response...")
+                validation_content = ''.join(response_chunks) if response_chunks else ""
+
+                if not validation_content or len(validation_content) < 100:
+                    print("❌ Insufficient validation content - creating fallback assessment")
+                    validation_content = self._create_fallback_validation(experiment_suggestions, primary_domain)
+                else:
+                    print(f"📝 Using partial validation response ({len(validation_content)} characters)")
+
+            except Exception as e:
+                print(f"❌ Validation streaming error: {str(e)}")
+                print("🔄 Falling back to non-streaming validation...")
+
+                # Fallback to non-streaming with shorter timeout
+                try:
+                    response = await asyncio.wait_for(
+                        asyncio.get_event_loop().run_in_executor(
+                            None,
+                            lambda: self.client.chat.completions.create(
+                                model=self.model,
+                                temperature=0.1,
+                                messages=[
+                                    {"role": "system", "content": f"You are a ruthlessly strict experimental methodology validator specializing in {primary_domain}. Provide rigorous, objective assessments in valid JSON format."},
+                                    {"role": "user", "content": validation_prompt[:8000]}  # Truncate for fallback
+                                ],
+                                max_tokens=2000
+                            )
+                        ),
+                        timeout=120  # 2 minutes for fallback
+                    )
+                    validation_content = response.choices[0].message.content.strip()
+                    print(f"✅ Fallback validation successful ({len(validation_content)} characters)")
+
+                except Exception as fallback_error:
+                    print(f"❌ Fallback validation also failed: {str(fallback_error)}")
+                    validation_content = self._create_fallback_validation(experiment_suggestions, primary_domain)
+            
+            # Parse validation result with enhanced error handling
+            try:
+                # Clean and extract JSON
+                json_match = re.search(r'\{.*\}', validation_content, re.DOTALL)
+                if json_match:
+                    validation_json = json.loads(json_match.group(0))
+                else:
+                    raise json.JSONDecodeError("No JSON found", validation_content, 0)
+                
+                validation_result = validation_json.get("validation_result", "FAIL").upper()
+                overall_score = validation_json.get("overall_score", 0.0)
+                detailed_scores = validation_json.get("detailed_scores", {})
+                critical_issues = validation_json.get("critical_issues", [])
+                direction_misalignment = validation_json.get("direction_misalignment", [])
+                novelty_concerns = validation_json.get("novelty_concerns", [])
+                improvement_recommendations = validation_json.get("improvement_recommendations", [])
+                
+                # 🆕 SOLVED ISSUES TRACKING FOR LLM FEEDBACK LOOP
+                # Track which issues have been solved compared to previous iterations
+                previous_validation = state.get("experiment_validation_results", {})
+                previous_critical_issues = set(previous_validation.get("critical_issues", []))
+                previous_direction_misalignment = set(previous_validation.get("direction_misalignment", []))
+                previous_novelty_concerns = set(previous_validation.get("novelty_concerns", []))
+                
+                # Calculate solved issues
+                solved_critical_issues = previous_critical_issues - set(critical_issues)
+                solved_direction_misalignment = previous_direction_misalignment - set(direction_misalignment)
+                solved_novelty_concerns = previous_novelty_concerns - set(novelty_concerns)
+                
+                # Combine all solved issues
+                all_solved_issues = (solved_critical_issues | solved_direction_misalignment | solved_novelty_concerns)
+                
+                # Update state with solved issues tracking
+                solved_issues_history = state.get("solved_issues_history", [])
+                current_solved_issues = list(all_solved_issues)
+                
+                if current_solved_issues:
+                    solved_entry = {
+                        "iteration": iteration_from_state,
+                        "timestamp": __import__('datetime').datetime.now().isoformat(),
+                        "solved_issues": current_solved_issues,
+                        "solved_critical_issues": list(solved_critical_issues),
+                        "solved_direction_misalignment": list(solved_direction_misalignment),
+                        "solved_novelty_concerns": list(solved_novelty_concerns),
+                        "remaining_issues": {
+                            "critical_issues": critical_issues,
+                            "direction_misalignment": direction_misalignment,
+                            "novelty_concerns": novelty_concerns
+                        }
+                    }
+                    solved_issues_history.append(solved_entry)
+                    
+                    # Update validation issue patterns for pattern recognition
+                    validation_issue_patterns = state.get("validation_issue_patterns", {})
+                    for issue in current_solved_issues:
+                        validation_issue_patterns[issue] = validation_issue_patterns.get(issue, 0) + 1
+                    
+                    print(f"✅ SOLVED ISSUES TRACKED: {len(current_solved_issues)} issues resolved this iteration")
+                    for solved_issue in current_solved_issues[:3]:  # Show first 3
+                        print(f"   ✓ {solved_issue}")
+                
+                # Build generation feedback context from solved issues
+                generation_feedback_context = state.get("generation_feedback_context", "")
+                if current_solved_issues:
+                    feedback_update = f"""
+🧠 LEARNED FROM VALIDATION (Iteration {iteration_from_state}):
+✅ SUCCESSFULLY SOLVED ISSUES ({len(current_solved_issues)}):
+{chr(10).join(f"• {issue}" for issue in current_solved_issues)}
+
+🎯 KEY LESSONS FOR FUTURE GENERATION:
+• Avoid repeating these previously solved problems
+• Build upon successful patterns that led to these resolutions
+• Focus on remaining issue categories that still need attention
+"""
+                    generation_feedback_context += feedback_update
+                    
+                    print(f"📝 Updated generation feedback context with {len(current_solved_issues)} solved issues")
+                
+                # Add solved issues to validation JSON for reference
+                validation_json["solved_issues"] = current_solved_issues
+                validation_json["solved_issues_breakdown"] = {
+                    "critical_issues": list(solved_critical_issues),
+                    "direction_misalignment": list(solved_direction_misalignment),
+                    "novelty_concerns": list(solved_novelty_concerns)
+                }
+                
+                
+                # Enforce ULTRA-STRICT thresholds
+                min_scores = [score >= 0.85 for score in detailed_scores.values()]
+                if (overall_score < 0.90 or 
+                    not all(min_scores) or 
+                    len(critical_issues) > 0 or 
+                    len(direction_misalignment) > 0 or 
+                    len(novelty_concerns) > 0):
+                    validation_result = "FAIL"
+                
+                # Check iteration limit (max 3 iterations to prevent infinite loops)
+                if iteration_from_state >= 3 and validation_result == "FAIL":
+                    print(f"⚠️ Maximum experiment iterations reached ({iteration_from_state}). Forcing continuation with current experiments.")
+                    print(f"🚨 WARNING: Validation found multiple issues but forcing pass to prevent infinite loops!")
+                    validation_result = "PASS"
+                    validation_json["forced_pass"] = True
+                    validation_json["decision_rationale"] = f"Forced pass after {iteration_from_state} iterations to prevent infinite loop. Original validation failed due to multiple criteria violations."
+                
+                # Enhanced results display
+                print("\n" + "=" * 80)
+                print("🧪 COMPREHENSIVE EXPERIMENT VALIDATION RESULTS")
+                print("=" * 80)
+                print(f"📊 Iteration: {iteration_from_state}")
+                if validation_json.get("forced_pass"):
+                    print(f"🎯 Validation Result: {validation_result} (⚠️ FORCED PASS - VALIDATION FAILED)")
+                else:
+                    print(f"🎯 Validation Result: {validation_result}")
+                print(f"📈 Overall Score: {overall_score:.2f}/1.0 (Required: ≥0.90)")
+                
+                # Display detailed scores
+                print(f"\n📊 DETAILED DIMENSION SCORES:")
+                for dimension, score in detailed_scores.items():
+                    status = "✅ PASS" if score >= 0.85 else "❌ FAIL"
+                    print(f"   {dimension.replace('_', ' ').title()}: {score:.2f}/1.0 {status}")
+                
+                # Display all issue categories
+                if critical_issues:
+                    print(f"\n🔴 Critical Issues ({len(critical_issues)}):")
+                    for issue in critical_issues[:3]:
+                        print(f"  • {issue}")
+                
+                if direction_misalignment:
+                    print(f"\n🎯 Direction Misalignment ({len(direction_misalignment)}):")
+                    for misalign in direction_misalignment[:3]:
+                        print(f"  • {misalign}")
+                
+                if novelty_concerns:
+                    print(f"\n💡 Novelty Concerns ({len(novelty_concerns)}):")
+                    for concern in novelty_concerns[:3]:
+                        print(f"  • {concern}")
+                
+                if validation_result == "FAIL" and improvement_recommendations:
+                    print(f"\n🔧 Improvement Recommendations ({len(improvement_recommendations)}):")
+                    for rec in improvement_recommendations[:5]:
+                        print(f"  • {rec}")
+                
+                print(f"\n💭 Decision Rationale: {validation_json.get('decision_rationale', 'No rationale provided')}")
+                print("=" * 80)
+                
+                # Determine next step
+                forced_pass = validation_json.get("forced_pass", False)
+
+                if iteration_from_state >= 3:
+                    if forced_pass:
+                        print(f"🔄 Maximum experiment iterations reached ({iteration_from_state}). Forced pass due to iteration limit - finishing workflow despite validation issues.")
+                    else:
+                        print(f"🔄 Maximum experiment iterations reached ({iteration_from_state}). Finishing workflow.")
+                    next_node = "END"
+                elif validation_result == "PASS":
+                    if forced_pass:
+                        print(f"⚠️ Experiment validation was FORCED to pass after max iterations. Finishing workflow with unresolved issues.")
+                    else:
+                        print(f"✅ Experiment validation passed ALL criteria. Finishing workflow.")
+                    next_node = "END"
+                else:
+                    print(f"❌ Experiment validation failed multiple criteria. Iterating to improve experiments (iteration {iteration_from_state + 1}).")
+                    next_node = "suggest_experiments_tree_2"  # Loop back to same node
+                
+                return {
+                    **state,
+                    "experiment_validation_results": validation_json,
+                    "experiment_iterations": experiment_iterations,
+                    "experiment_validation_decision": validation_result,
+                    "current_experiment_iteration": iteration_from_state,
+                    "current_step": "clean_experiments_validated",
+                    "next_node": next_node,
+                    # 🆕 SOLVED ISSUES TRACKING FIELDS
+                    "solved_issues_history": solved_issues_history,
+                    "current_solved_issues": current_solved_issues,
+                    "validation_issue_patterns": validation_issue_patterns if 'validation_issue_patterns' in locals() else state.get("validation_issue_patterns", {}),
+                    "generation_feedback_context": generation_feedback_context
+                }
+                
+            except json.JSONDecodeError as e:
+                print(f"❌ Failed to parse validation JSON: {e}")
+                # Fallback validation with comprehensive assessment
+                fallback_validation = {
+                    "validation_result": "FAIL",
+                    "overall_score": 0.4,
+                    "detailed_scores": {
+                        "research_direction_alignment": 0.5,
+                        "novelty_potential": 0.5,
+                        "justification_quality": 0.5
+                    },
+                    "critical_issues": ["JSON parsing error in comprehensive validation"],
+                    "direction_misalignment": ["Unable to assess due to parsing error"],
+                    "novelty_concerns": ["Unable to assess due to parsing error"],
+                    "improvement_recommendations": ["Regenerate experiments with clearer structure and comprehensive criteria"],
+                    "decision_rationale": "Comprehensive validation failed due to parsing error",
+                    "error": str(e)
+                }
+                
+                return {
+                    **state,
+                    "experiment_validation_results": fallback_validation,
+                    "experiment_iterations": experiment_iterations,
+                    "experiment_validation_decision": "FAIL",
+                    "current_experiment_iteration": iteration_from_state,
+                    "current_step": "clean_validation_error",
+                    "next_node": "suggest_experiments_tree_2",  # Always retry on error
+                    # 🆕 PRESERVE SOLVED ISSUES TRACKING ON FALLBACK
+                    "solved_issues_history": state.get("solved_issues_history", []),
+                    "current_solved_issues": state.get("current_solved_issues", []),
+                    "validation_issue_patterns": state.get("validation_issue_patterns", {}),
+                    "generation_feedback_context": state.get("generation_feedback_context", "")
+                }
+                
+        except Exception as e:
+            print(f"❌ Error in clean comprehensive validation: {str(e)}")
+            return {
+                **state,
+                "experiment_validation_results": {"validation_result": "PASS", "error": str(e)},
+                "experiment_iterations": experiment_iterations if 'experiment_iterations' in locals() else [],
+                "experiment_validation_decision": "PASS",
+                "current_experiment_iteration": iteration_from_state if 'iteration_from_state' in locals() else 1,
+                "errors": state.get("errors", []) + [f"Clean comprehensive validation error: {str(e)}"],
+                "current_step": "clean_validation_error",
+                "next_node": "END",
+                # 🆕 PRESERVE SOLVED ISSUES TRACKING ON EXCEPTION
+                "solved_issues_history": state.get("solved_issues_history", []),
+                "current_solved_issues": state.get("current_solved_issues", []),
+                "validation_issue_patterns": state.get("validation_issue_patterns", {}),
+                "generation_feedback_context": state.get("generation_feedback_context", "")
+            }
+
+    async def _validate_experiments_tree_3_node(self, state: ExperimentSuggestionState) -> ExperimentSuggestionState:
+        """NEW CLEAN VALIDATION NODE - No dual edge conflicts."""
+        print("\n🧪 Clean Experiment Validation: Evaluating proposed experiments...")
+        
+        try:
+            # Extract current experiments and context
+            experiment_suggestions = state.get("experiment_suggestions", "")
+            experiment_summary = state.get("experiment_summary", {})
+            original_prompt = state.get("original_prompt", "")
+            findings_analysis = state.get("findings_analysis", {})
+            research_direction = state.get("research_direction", {})
+            validated_papers = state.get("validated_papers", [])
+            literature_content = ""
+            
+            if validated_papers and len(validated_papers) > 0:
+                print(f"📚 Extracting content from {len(validated_papers)} existing papers...")
+                
+                # Extract content from each paper
+                literature_parts = []
+                for i, paper in enumerate(validated_papers[:10], 1):  # Limit to top 10 papers to avoid token limits
+                    try:
+                        if isinstance(paper, dict):
+                            title = paper.get("title", f"Paper {i}")
+                         
+                            content = paper.get("content", "")
+                            
+                            paper_content = f"**Paper {i}: {title}**\n"
+                           
+                            if content:
+                                paper_content += f"Content: {content}"
+                            
+                            literature_parts.append(paper_content)
+                            
+                        elif hasattr(paper, 'title') and hasattr(paper, 'summary'):
+                            # Handle paper objects with attributes
+                            title = getattr(paper, 'title', f"Paper {i}")
+                           
+                            content = getattr(paper, 'content', '') if hasattr(paper, 'content') else ''
+                            
+                            paper_content = f"**Paper {i}: {title}**\n"
+                            
+                            if content:
+                                paper_content += f"Content: {content}"
+                            
+                            literature_parts.append(paper_content)
+                        else:
+                            print("DEBUG    : Unknown paper format encountered")
+                            # Fallback for unknown paper format
+                            literature_parts.append(f"**Paper {i}**: {str(paper)}...\n")
+
+                        print(content)
+
+                    except Exception as e:
+                        print(f"⚠️ Error extracting content from paper {i}: {e}")
+                        literature_parts.append(f"**Paper {i}**: Content extraction failed\n")
+                
+                literature_content = "\n\n".join(literature_parts)
+                print(f"✅ Extracted {len(literature_content)} characters of literature content")
+            
+            
+            
+            # Clean iteration tracking - no dual edge confusion
+            experiment_iterations = state.get("experiment_iterations", [])
+            current_iteration = state.get("current_experiment_iteration", len(experiment_iterations) + 1)
+            
+            print(f"📊 Clean Validation - Iteration {current_iteration}")
+            print(f"📝 Experiment length: {len(str(experiment_suggestions))}")
+            
+            # Add current experiments to history
+            current_experiment_record = {
+                "iteration": current_iteration,
+                "experiments": experiment_suggestions if isinstance(experiment_suggestions, str) else str(experiment_suggestions)[:500],
+                "summary": experiment_summary,
+                
+            }
+            experiment_iterations.append(current_experiment_record)
+            
+            # Simple validation prompt
+            validation_prompt = f"""
+                You are a strict experimental methodology validator. Evaluate these proposed experiments for accuracy, feasibility, and research grounding.
+                
+                ORIGINAL REQUEST: {original_prompt}
+                
+                PROPOSED EXPERIMENTS: {experiment_suggestions}
+                
+                ITERATION: {current_iteration}
+                
+                CONTENT PROVIDED: {literature_content if literature_content else 'No additional literature context provided.'}
+                
+                Provide a JSON response with:
+                {{
+                    "validation_result": "PASS" or "FAIL",
+                    "overall_score": 0.0-1.0,
+                    "critical_issues": [],
+                    "improvement_recommendations": [],
+                    "decision_rationale": "explanation"
+                }}
+                
+                PASS if score >= 0.85, otherwise FAIL.
+            """
+            print(validation_prompt)  # DEBUG: Print the full validation prompt
+            
+            # Call LLM for validation
+            response = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: self.client.chat.completions.create(
+                    model=self.model,
+                    temperature=0.1,
+                    messages=[{"content": validation_prompt, "role": "user"}]
+                )
+            )
+            
+            validation_content = response.choices[0].message.content.strip()
+            
+            # Parse validation result
+            try:
+                import json
+                # Extract JSON from response
+                json_start = validation_content.find('{')
+                json_end = validation_content.rfind('}') + 1
+                validation_json = json.loads(validation_content[json_start:json_end])
+            except:
+                # Fallback validation
+                validation_json = {
+                    "validation_result": "FAIL",
+                    "overall_score": 0.5,
+                    "critical_issues": ["JSON parsing error"],
+                    "improvement_recommendations": ["Regenerate experiments"],
+                    "decision_rationale": "Validation parsing failed"
+                }
+            
+            validation_result = validation_json.get("validation_result", "FAIL")
+            
+            # Determine next step
+            if current_iteration > 3:
+                print(f"🔄 Maximum iterations reached ({current_iteration}). Finishing workflow.")
+                next_node = "END"
+            elif validation_result == "PASS":
+                print(f"✅ Clean validation passed. Finishing workflow.")
+                next_node = "END"
+            else:
+                print(f"❌ Clean validation failed. Iterating to improve experiments (iteration {current_iteration + 1}).")
+                next_node = "suggest_experiments_tree_2"  # Loop back to same node
+            
+            return {
+                **state,
+                "experiment_validation_results": validation_json,
+                "experiment_iterations": experiment_iterations,
+                "experiment_validation_decision": validation_result,
+                "current_experiment_iteration": current_iteration,
+                "current_step": "clean_experiments_validated",
+                "next_node": next_node
+            }
+            
+        except Exception as e:
+            print(f"❌ Error in clean validation: {str(e)}")
+            return {
+                **state,
+                "experiment_validation_results": {"validation_result": "PASS", "error": str(e)},
+                "experiment_iterations": experiment_iterations,
+                "experiment_validation_decision": "PASS",
+                "current_experiment_iteration": current_iteration,
+                "errors": state.get("errors", []) + [f"Clean validation error: {str(e)}"],
+                "current_step": "clean_validation_error",
+                "next_node": "END"
+            }
     
     def _prepare_research_input_for_tree(self, original_prompt: str, experimental_results: dict, 
                                        findings_analysis: dict, research_direction: dict) -> str:
@@ -7911,135 +9491,154 @@ IMPORTANT: Address ALL the above issues in this iteration. Use only verified met
         
         return research_input.strip()
     
+    
+    
+    
+    
     async def _generate_literature_grounded_experiments(self, original_prompt: str, direction_text: str, 
                                                       key_questions: list, literature_context: str, 
                                                       validated_papers: list, validation_feedback: str = "",
                                                       current_iteration: int = 1) -> str:
+        
+        
         """Generate experiments grounded in existing literature without redundant ArXiv search."""
         
         iteration_context = f"ITERATION {current_iteration}" if current_iteration > 1 else "INITIAL GENERATION"
         
         experiment_prompt = f"""
-        You are an expert machine learning researcher. Based on the existing literature analysis and research direction, 
-        generate a comprehensive experimental roadmap that builds on the papers already reviewed.
+            You are an expert machine learning researcher tasked with creating FACT-BASED experiments that are DIRECTLY GROUNDED in the provided literature. Your experiments MUST be based on real, verified methodologies, datasets, and approaches from the reviewed papers.
 
-        **{iteration_context}**
-        {validation_feedback}
+            **{iteration_context}**
+            {validation_feedback}
 
-        **Research Request:** {original_prompt}
+            **CRITICAL: EXPERIMENT DIRECTION IS DICTATED BY ANALYSIS AND RESEARCH DIRECTION**
+            - Research Direction: {direction_text}
+            - Key Questions: {chr(10).join(f"• {q}" for q in key_questions[:3])}
+            - ALL experiments MUST directly address this research direction
+            - NO experiments outside this scope are allowed
 
-        **Research Direction:** {direction_text}
+            **MANDATORY: USE PAPERS AS REFERENCES FOR ALL EXPERIMENTS**
+            You have been provided with {len(validated_papers)} reviewed papers. These papers MUST serve as the FOUNDATION for your experimental design:
 
-        **Key Questions to Address:**
-        {chr(10).join(f"• {q}" for q in key_questions[:3])}
+            **LITERATURE CONTEXT (MANDATORY REFERENCE MATERIAL):**
+            {literature_context}
 
-        **Available Literature Context:**
-        {literature_context}
+            **EXPERIMENT CREATION RULES (ZERO TOLERANCE FOR VIOLATIONS):**
 
-        **Analysis:** {len(validated_papers)} relevant papers have been identified and reviewed for experimental guidance.
+            1. **EVERY EXPERIMENT MUST BE BASED ON PAPERS:**
+               - Reference specific papers for each experimental component
+               - Use methodologies, datasets, and approaches from the literature
+               - Cite the exact papers that support your experimental choices
+               - If a paper doesn't support an experiment idea, don't include it
 
-        MANDATORY CITATION REQUIREMENTS (ZERO TOLERANCE FOR VIOLATIONS):
-        1. **EVERY dataset mentioned** MUST include specific citation: "CIFAR-10 [Krizhevsky et al., 2009]"
-        2. **EVERY model/architecture** MUST include original paper: "ResNet-50 [He et al., 2016]"  
-        3. **EVERY optimization method** MUST cite source: "Adam optimizer [Kingma & Ba, 2014]"
-        4. **EVERY evaluation metric** MUST include definition source: "F1-score [van Rijsbergen, 1979]"
-        5. **EVERY experimental procedure** MUST reference methodology papers
-        6. **EVERY claim** MUST be backed by specific literature references
-        7. **NO vague references** - use exact paper titles and years when possible
+            2. **RESEARCH DIRECTION COMPLIANCE:**
+               - Every experiment must directly address the research direction: 
+               - Every experiment must help answer the key questions provided
+               - Experiments outside this scope will be rejected
 
-        CRITICAL TECHNICAL REQUIREMENTS:
-        1. **Use ONLY verified, real datasets** - no hypothetical or made-up data sources
-        2. **Specify EXACT model architectures** - layers, parameters, configurations
-        3. **Include precise resource estimates** - GPU hours, memory requirements, storage
-        4. **Provide step-by-step procedures** - reproducible implementation details
-        5. **Address ALL validation feedback** - fix every identified issue completely
-        6. **Ground ALL claims in literature** - every statement needs a citation
+            3. **LITERATURE CITATION REQUIREMENTS:**
+               - Cite specific papers for EVERY experimental component
+               - Use format: [Author et al., Year] or [Paper Title, Year]
+               - Include citations for datasets, models, methods, and metrics
+               - Reference the literature context provided above
 
-        Generate a comprehensive experimental plan in markdown format with the following sections:
+            **AVAILABLE LITERATURE FOR REFERENCE:**
+            {len(validated_papers)} papers have been reviewed and their content is provided above.
+            Use this literature as your PRIMARY REFERENCE for designing experiments.
 
-        # 🔬 Literature-Grounded Experimental Roadmap
+            Generate experiments that are:
+             **Literature-Grounded**: Based on real papers and methodologies
+             **Direction-Aligned**: Directly address the research direction and key questions
+             **Fact-Based**: Use only verified, real components from literature
+             **Citable**: Every component references specific papers
+             **No Hypothetical Elements**: Everything must be grounded in provided literature
 
-        ## 1. Literature-Informed Priority Experiments
-        *(Based on insights from the {len(validated_papers)} reviewed papers)*
+            **MANDATORY COMPREHENSIVE EXPERIMENTAL ROADMAP REQUIREMENTS:**
 
-        For each experiment (3-5 experiments):
-        - **Experiment Name & Objective**
-        - **Literature Support** (reference specific papers: [Smith et al., 2023], [Paper Title, Year])
-        - **Hypothesis being tested** (with supporting citations)
-        - **Methodology** (cite EVERY technique: "We use dropout [Srivastava et al., 2014]")
-        - **Datasets** (with EXACT citations: "MNIST [LeCun et al., 1998]")
-        - **Models** (with architecture papers: "Vision Transformer [Dosovitskiy et al., 2020]")
-        - **Evaluation metrics** (with definition sources)
-        - **Expected outcomes and success criteria**
-        - **Resources required** (specific compute, time, storage)
+            For each experiment, you MUST include ALL of the following sections:
 
-        ## 2. Literature-Guided Methodology Improvements
-        *(Key insights from existing research)*
+            ## 1. **EXPERIMENT OBJECTIVES & HYPOTHESES**
+            - **Primary Objective**: Clear, measurable goal aligned with research direction
+            - **Specific Hypotheses**: Testable statements with expected outcomes
+            - **Success Criteria**: Quantifiable measures of achievement
+            - **Expected Impact**: How results advance the research direction
 
-        - **Best practices identified** (cite supporting papers)
-        - **Common pitfalls to avoid** (reference failure analysis papers)
-        - **Validated approaches** (cite successful implementation papers)
-        - **Novel combinations** (reference foundational work for each component)
+            ## 2. **DETAILED METHODOLOGY & PROCEDURES**
+            - **Step-by-Step Protocol**: Reproducible implementation steps
+            - **Data Processing Pipeline**: Preprocessing, cleaning, feature engineering
+            - **Model Architecture**: Exact specifications with literature citations
+            - **Training Procedure**: Hyperparameters, optimization, regularization
+            - **Evaluation Protocol**: Cross-validation, test procedures, metrics
+            - **Primary Metrics**: Key performance indicators with baselines
+            - **Secondary Metrics**: Supporting evaluation measures
 
-        ## 3. Comparative Evaluation Framework
-        *(Benchmarking against literature)*
+            ## 3. **RESOURCE REQUIREMENTS & ESTIMATES**
+            - **Computational Resources**: GPU/CPU requirements, memory, storage
+            - **Time Estimates**: Training time, evaluation time, total duration
+            - **Data Requirements**: Dataset sizes, preprocessing time, storage needs
+            - **Software Dependencies**: Libraries, frameworks, versions
+            
+            ## 4. **RISK ASSESSMENT & MITIGATION**
+            - **Technical Risks**: Model convergence, overfitting, data quality issues
+            - **Data-Related Risks**: Bias, distribution shift, insufficient samples
+           
 
-        - **Baseline methods** (cite original papers for each baseline)
-        - **Evaluation metrics** (cite metric definition papers)
-        - **Statistical validation** (cite statistical method papers)
-        - **Reproducibility considerations** (reference reproducibility guidelines)
-
-        ## 4. Implementation Strategy
-        *(Prioritized based on literature evidence)*
-
-        - **Baseline methods** from literature to compare against
-        - **Evaluation metrics** used in similar studies
-        - **Statistical validation** approaches from reviewed papers
-        - **Reproducibility considerations**
-
-        ## 4. Implementation Strategy
-        *(Prioritized based on literature evidence)*
-
-        ### Phase 1: Literature-Validated Quick Wins (1-2 weeks)
-        - Experiments with strong literature support
-        - Well-established methodologies
-
-        ### Phase 2: Literature-Informed Innovations (1-2 months)  
-        - Novel combinations of validated approaches
-        - Improvements on existing methods
-
-        ### Phase 3: Literature-Guided Explorations (2-4 months)
-        - Address gaps identified in literature
-        - Test hypotheses suggested by reviewed papers
-
-        ## 5. Literature References Integration
-        
-        Based on the {len(validated_papers)} papers reviewed, this roadmap leverages:
-        - Proven experimental methodologies
-        - Validated evaluation frameworks  
-        - Known challenges and solutions
-        - Research gaps and opportunities
-
-        **Methodology:** This plan is grounded in existing literature analysis, avoiding redundant research and building on established knowledge.
-
-        Be specific and actionable. Reference the literature context where relevant using numbered citations [1], [2], etc.
-        """
-
-        response = await asyncio.get_event_loop().run_in_executor(
-            None,
-            lambda: self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": "You are an expert ML researcher who generates literature-grounded experimental plans. Use markdown formatting and cite literature appropriately."},
-                    {"role": "user", "content": experiment_prompt}
-                ],
-                temperature=0.3
-            )
-        )
-
-        return response.choices[0].message.content.strip()
+            ## 6. **TIMELINE & MILESTONES**
+            - **Phase Breakdown**: Setup, development, training, evaluation, analysis
+           
     
-    # --- EXPERIMENT TREE & FORMATTING HELPERS ---
+           
+            Now create your experimental roadmap:
+            """
+     
+        # print(experiment_prompt)  # DEBUG: Print the full prompt being sent to the LLM
+
+        print("🔄 Starting streaming experiment generation...")
+        response_chunks = []
+        total_chars = 0
+
+        try:
+            response = await asyncio.wait_for(
+                asyncio.get_event_loop().run_in_executor(
+                    None,
+                    lambda: self.client.chat.completions.create(
+                        model=self.model,
+                        messages=[
+                            {"role": "system", "content": "You are an expert ML researcher who generates literature-grounded experimental plans. Use markdown formatting and cite literature appropriately."},
+                            {"role": "user", "content": experiment_prompt}
+                        ],
+                        temperature=0.1,
+                        stream=True  # Enable streaming
+                    )
+                ),
+                timeout=200.0  # 3 minute timeout for experiment generation
+            )
+
+            # Process streaming response
+            for chunk in response:
+                if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
+                    content = chunk.choices[0].delta.content
+                    response_chunks.append(content)
+                    total_chars += len(content)
+                    
+                    # Print progress every 500 characters
+                    if total_chars % 500 == 0:
+                        print(f"📥 Generated {total_chars} characters...")
+
+            experiment_content = ''.join(response_chunks)
+            print(f"✅ Experiment generation completed: {total_chars} characters generated")
+            
+        except asyncio.TimeoutError:
+            print("⏰ Experiment generation timed out - using partial results")
+            experiment_content = ''.join(response_chunks)
+            if not experiment_content:
+                experiment_content = self._create_fallback_experiment_plan(original_prompt, {"selected_direction": {"direction": direction_text}})
+                
+        except Exception as e:
+            print(f"❌ Error in streaming experiment generation: {str(e)}")
+            experiment_content = self._create_fallback_experiment_plan(original_prompt, {"selected_direction": {"direction": direction_text}})
+
+        return experiment_content.strip()    # --- EXPERIMENT TREE & FORMATTING HELPERS ---
     
     def _format_tree_experiment_results(self, experiment_results: list, research_goal: str, original_prompt: str) -> str:
         """Format tree experiment results into a comprehensive markdown plan."""
@@ -8314,6 +9913,256 @@ IMPORTANT: Address ALL the above issues in this iteration. Use only verified met
         except Exception as e:
             return f"# Experiment Suggestions Generated\n\nMarkdown format experiment plan available.\n\nError creating summary: {str(e)}"
     
+    def _create_shorter_experiment_prompt(self, original_prompt: str, research_direction: dict, findings_analysis: dict) -> str:
+        """Create a shorter, more focused prompt for faster generation when streaming times out."""
+        selected_direction = research_direction.get("selected_direction", {})
+        direction_text = selected_direction.get("direction", "")
+        key_questions = selected_direction.get("key_questions", [])
+        
+        # Extract key findings if available
+        key_findings = ""
+        if findings_analysis and isinstance(findings_analysis, dict):
+            key_findings = str(findings_analysis).get("summary", "")[:300]
+        
+        return f"""
+You are an expert ML researcher. Generate a focused experimental plan (max 2500 words) for:
+
+**Research:** {original_prompt}...
+**Direction:** {direction_text}...
+**Key Questions:** {chr(10).join(f"• {q}" for q in key_questions[:3])}
+{f"**Key Findings:** {key_findings}..." if key_findings else ""}
+
+Provide these 5 essential sections:
+
+# 🎯 Priority Experiments (Top 4)
+For each: name, objective, methodology, success criteria, resources needed
+
+# 🔬 Critical Ablation Studies  
+3 most important components to investigate
+
+# ⚙️ Key Hyperparameters
+Most impactful parameters to tune with suggested ranges
+
+# 📋 Implementation Roadmap  
+Phase 1 (2 weeks), Phase 2 (1 month), Phase 3 (2 months)
+
+# 📊 Success Metrics
+Primary metrics and improvement thresholds
+
+Be concise but actionable. Focus on immediate next steps and clear success criteria.
+"""
+
+    def _create_fallback_experiment_plan(self, original_prompt: str, research_direction: dict) -> str:
+        """Create a basic fallback experiment plan when generation fails or times out."""
+        selected_direction = research_direction.get("selected_direction", {})
+        direction_text = selected_direction.get("direction", "Continue research")
+        
+        return f"""# 🧪 Experimental Roadmap (Fallback Plan)
+
+**Research Context:** {original_prompt[:200]}...
+**Direction:** {direction_text[:300]}...
+
+## 🎯 Priority Experiments
+
+### 1. Baseline Evaluation
+- **Objective:** Establish current performance baseline
+- **Methodology:** Run standard evaluation on current approach
+- **Success Criteria:** Document baseline metrics for comparison
+- **Resources:** 1-2 days, minimal compute
+- **Risk:** Low
+
+### 2. Hyperparameter Optimization  
+- **Objective:** Optimize key parameters
+- **Methodology:** Grid/random search on critical parameters
+- **Success Criteria:** 5-10% improvement over baseline
+- **Resources:** 1-2 weeks, moderate compute
+- **Risk:** Low
+
+### 3. Comparative Analysis
+- **Objective:** Compare against standard methods
+- **Methodology:** Implement 2-3 baseline methods for comparison
+- **Success Criteria:** Statistical significance testing
+- **Resources:** 2-4 weeks, moderate compute
+- **Risk:** Medium
+
+### 4. Architecture Exploration
+- **Objective:** Test architectural modifications
+- **Methodology:** Systematic variation of model components
+- **Success Criteria:** Identify best-performing variants
+- **Resources:** 3-6 weeks, high compute
+- **Risk:** Medium-High
+
+## 🔬 Critical Ablation Studies
+
+1. **Component Removal:** Remove key model components to understand contribution
+2. **Data Ablation:** Test with reduced/modified training data
+3. **Feature Ablation:** Identify most important input features
+
+## ⚙️ Key Hyperparameters
+
+- **Learning Rate:** Test range [1e-5, 1e-2] with log scale
+- **Batch Size:** Test [16, 32, 64, 128] based on memory
+- **Model Size:** Compare small, medium, large variants
+- **Regularization:** Tune dropout, weight decay parameters
+
+## 📋 Implementation Roadmap
+
+### Phase 1: Foundation (1-2 weeks)
+- Set up evaluation framework
+- Implement baseline model
+- Create data preprocessing pipeline
+- Establish metric tracking
+
+### Phase 2: Optimization (2-4 weeks)  
+- Hyperparameter tuning
+- Basic ablation studies
+- Initial comparative analysis
+- Performance profiling
+
+### Phase 3: Advanced Analysis (1-2 months)
+- Architecture experiments
+- Comprehensive comparisons
+- Statistical analysis
+- Documentation and reporting
+
+## 📊 Success Metrics
+
+### Primary Metrics
+- **Accuracy/F1 Score:** Target 5-15% improvement
+- **Training Efficiency:** Convergence speed
+- **Inference Speed:** Real-time performance if applicable
+
+### Secondary Metrics
+- **Robustness:** Performance on edge cases
+- **Generalization:** Cross-dataset validation
+- **Resource Usage:** Memory and compute efficiency
+
+## 💰 Resource Requirements
+
+- **Compute:** 50-200 GPU hours total
+- **Time:** 1-3 months researcher time
+- **Tools:** Standard ML framework (PyTorch/TensorFlow)
+- **Data:** Access to relevant datasets
+- **Storage:** 50-100GB for experiments and results
+
+## ⚠️ Risk Assessment
+
+### High Risk Items
+- Architecture experiments may not converge
+- Limited compute resources could extend timeline
+- Data quality issues might affect results
+
+### Mitigation Strategies
+- Start with proven baseline approaches
+- Implement checkpointing for long experiments
+- Plan for iterative refinement based on early results
+
+## 🎯 Immediate Next Steps
+
+1. **Week 1:** Set up baseline evaluation and metrics
+2. **Week 2:** Run initial hyperparameter sweep
+3. **Month 1:** Complete core ablation studies
+4. **Month 2-3:** Advanced experiments and analysis
+
+---
+
+*Note: This is a simplified fallback plan generated due to API constraints. For detailed experiments, consider re-running with more specific requirements or consulting domain experts.*
+"""
+
+    def _create_simple_experiment_structure(self, state: ExperimentSuggestionState) -> Dict[str, Any]:
+        """Create a simple fallback experiment structure when API calls fail."""
+        return {
+            "experiments": [
+                {
+                    "name": "Baseline Implementation",
+                    "description": "Implement and evaluate a baseline approach",
+                    "priority": "high",
+                    "estimated_duration": "1-2 weeks",
+                    "methodology": "Standard implementation following best practices"
+                },
+                {
+                    "name": "Hyperparameter Optimization",
+                    "description": "Systematic hyperparameter tuning",
+                    "priority": "medium", 
+                    "estimated_duration": "1 week",
+                    "methodology": "Grid search or Bayesian optimization"
+                },
+                {
+                    "name": "Ablation Study",
+                    "description": "Component-wise analysis of model performance",
+                    "priority": "medium",
+                    "estimated_duration": "1-2 weeks", 
+                    "methodology": "Systematic removal/modification of components"
+                }
+            ],
+            "metadata": {
+                "total_experiments": 3,
+                "estimated_total_duration": "3-5 weeks",
+                "complexity": "basic",
+                "fallback_reason": "API timeout - using simplified structure"
+            }
+        }
+
+    def _expand_structure_to_details(self, structure: Dict[str, Any], state: ExperimentSuggestionState) -> str:
+        """Expand a simple structure into detailed experiment descriptions."""
+        experiments = structure.get("experiments", [])
+        
+        detailed_text = "# Detailed Experiment Plan\n\n"
+        detailed_text += f"**Generated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+        
+        for i, exp in enumerate(experiments, 1):
+            detailed_text += f"## Experiment {i}: {exp['name']}\n\n"
+            detailed_text += f"**Description:** {exp['description']}\n\n"
+            detailed_text += f"**Priority:** {exp['priority']}\n\n"
+            detailed_text += f"**Estimated Duration:** {exp['estimated_duration']}\n\n"
+            detailed_text += f"**Methodology:** {exp['methodology']}\n\n"
+            
+            # Add generic implementation details
+            detailed_text += "### Implementation Steps:\n"
+            detailed_text += "1. Literature review and baseline establishment\n"
+            detailed_text += "2. Data preparation and preprocessing\n"
+            detailed_text += "3. Model implementation and training\n"
+            detailed_text += "4. Evaluation and analysis\n"
+            detailed_text += "5. Documentation and reporting\n\n"
+            
+            detailed_text += "### Expected Outcomes:\n"
+            detailed_text += f"- Quantitative results for {exp['name'].lower()}\n"
+            detailed_text += "- Performance metrics and comparisons\n"
+            detailed_text += "- Insights for future experiments\n\n"
+            
+            detailed_text += "---\n\n"
+        
+        # Add summary
+        metadata = structure.get("metadata", {})
+        detailed_text += "## Summary\n\n"
+        detailed_text += f"- **Total Experiments:** {metadata.get('total_experiments', len(experiments))}\n"
+        detailed_text += f"- **Estimated Duration:** {metadata.get('estimated_total_duration', 'TBD')}\n"
+        detailed_text += f"- **Complexity Level:** {metadata.get('complexity', 'standard')}\n\n"
+        
+        if metadata.get('fallback_reason'):
+            detailed_text += f"*Note: {metadata['fallback_reason']}*\n"
+        
+        return detailed_text
+
+
+    def _create_fallback_validation(self, experiment_suggestions: str, primary_domain: str) -> str:
+        """Create a fallback validation response when streaming fails."""
+        return f'''{{
+            "validation_result": "FAIL",
+            "overall_score": 0.3,
+            "detailed_scores": {{
+                "research_direction_alignment": 0.4,
+                "novelty_potential": 0.4,
+                "justification_quality": 0.4
+            }},
+            "critical_issues": ["Validation timeout - unable to perform comprehensive assessment"],
+            "direction_misalignment": [],
+            "novelty_concerns": [],
+            "improvement_recommendations": ["Retry validation with shorter prompts", "Break down experiments into smaller components"],
+            "decision_rationale": "Validation failed due to timeout - experiments may be valid but could not be assessed"
+        }}'''
+
+
 class MLResearcherTool:
     """🆕 Simplified wrapper for easy access to all workflows."""
     
@@ -8337,6 +10186,24 @@ class MLResearcherTool:
     async def analyze_task(self, prompt: str) -> Dict[str, Any]:
         """Analyze any research task using intelligent routing."""
         return await self.core.analyze_research_task(prompt, [])
+
+
+    def _create_fallback_validation(self, experiment_suggestions: str, primary_domain: str) -> str:
+        """Create a fallback validation response when streaming fails."""
+        return f'''{{
+            "validation_result": "FAIL",
+            "overall_score": 0.3,
+            "detailed_scores": {{
+                "research_direction_alignment": 0.4,
+                "novelty_potential": 0.4,
+                "justification_quality": 0.4
+            }},
+            "critical_issues": ["Validation timeout - unable to perform comprehensive assessment"],
+            "direction_misalignment": [],
+            "novelty_concerns": [],
+            "improvement_recommendations": ["Retry validation with shorter prompts", "Break down experiments into smaller components"],
+            "decision_rationale": "Validation failed due to timeout - experiments may be valid but could not be assessed"
+        }}'''
 
 
 async def main():
