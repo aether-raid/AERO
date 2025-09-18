@@ -1,30 +1,44 @@
+"""
+Automated Experiment Design Workflow (experiment.py)
+====================================================
+- Extracts research context and relevant literature from user input
+- Plans experiment requirements and structure
+- Generates and iteratively refines detailed experiment designs using LLMs
+- Evaluates and scores designs, suggesting targeted improvements
+- Produces executable code for experiment steps
+- Outputs a comprehensive experiment plan with inline code and references
+"""
+
 from __future__ import annotations
-from dataclasses import dataclass, field
-from typing import Dict, List, Any
-import asyncio
 import re
-from langgraph.graph import StateGraph, END
-from design_experiment.init_utils import get_llm_response
-from design_experiment.search import build_experiment_search_workflow, search_dataset_online
 import json
+import asyncio
+from dataclasses import dataclass, field
+from langgraph.graph import StateGraph, END
+import os
+import sys
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from design_experiment.init_utils import get_llm_response, get_gpt_llm_response
+from design_experiment.search import build_experiment_search_workflow, search_dataset_online
+from design_experiment.code import build_codegen_graph, CodeGenState
+from langchain_core.messages import AIMessage
 
 MAX_REFINEMENT_ROUNDS = 2
 
 @dataclass
 class ExperimentState:
     user_input: str
-    summary_query: str = ""
-    literature_chunks: list = field(default_factory=list)
-    literature_context: str = ""
     plan_content: str = ""
     full_design_content: str = ""
+    literature_chunks: list = field(default_factory=list)
+    literature_context: str = ""
     scores: dict = field(default_factory=dict)
-    explanations: dict = field(default_factory=dict)
-    refinement_suggestions: list = field(default_factory=list)
     refined_design_content: str = ""
+    refinement_suggestions: list = field(default_factory=list)
     refinement_round: int = 0
-    plan_state: Any = None
-    full_design_state: Any = None
+    summary_query: str = ""
+    generated_code: str = ""  
+    messages: list = field(default_factory=list)  
 
 # --- Node: Summarize experiment design for FAISS search ---
 async def summarize_node(state: ExperimentState) -> ExperimentState:
@@ -115,6 +129,7 @@ async def enrich_datasets_with_links(text):
 
 # --- Node: Plan experiment requirements ---
 async def plan_node(state: ExperimentState) -> ExperimentState:
+    state.messages.append(AIMessage(content="📝 Generating experiment plan requirements..."))
     print("📝 Generating experiment plan requirements...")
     prompt = f"""
         You are an expert researcher. Given the following experiment description and relevant literature, create a PLAN listing everything needed to execute the experiment.
@@ -139,9 +154,47 @@ async def plan_node(state: ExperimentState) -> ExperimentState:
 
 # --- Node: Generate (or refine) experiment design ---
 async def design_node(state: ExperimentState) -> ExperimentState:
+    """
+    Generates or refines a detailed experiment design.
+    Adds [CODE_NEEDED: ...] tags for steps that can be executed in code.
+    """
+    # Helper: augmentation instructions to add code tags
+    code_tag_instructions = """
+    You are an expert researcher generating a detailed, step-by-step experiment design.
+
+    For every major section or subsection (e.g., "Preprocessing", "Modeling", "Evaluation") that can be implemented in code, insert a single [CODE_NEEDED: <short description>] tag at the BOTTOM of that section or subsection. Do NOT add a tag for every individual step or bullet point—only one tag per self-contained, runnable section.
+
+    - The description inside the tag must clearly state what code is needed (e.g., [CODE_NEEDED: Load EEG data from .edf files using MNE-Python]).
+    - Do NOT use [CODE_NEEDED] without a description.
+    - After the main design, provide a summary list of all [CODE_NEEDED] tags and their descriptions.
+
+    Follow these rules:
+    1. Only place one tag per major section or subsection that represents a logical, runnable code block.
+    2. Do NOT place a tag after every bullet or micro-step.
+    3. Nested tags are allowed for multi-step procedures, but each snippet must be independently executable.
+    4. Include all sentences necessary for the code in the same tag.
+    5. Provide a concise description for each tag.
+    6. After generating the full plan with tags, return a summary list of tags and their descriptions.
+    """
+    formatting_instructions = """    
+    Format your output using clear Markdown:
+    - Use `##` for main sections (e.g., "## Datasets", "## Data Preprocessing", "## Experimental Procedures").
+    - Use `###` for subsections (e.g., "### Source Domain (EEG)", "### Target Domain (fNIRS)").
+    - Use bullet points for lists.
+    - Always ensure there is a blank line before any bullet list in your Markdown output.
+    - Do not wrap lists in code blocks.
+    - For dataset links, use `[Dataset Name](URL)` or state "N/A (custom collection)" if not available.
+    - For citations, use `[1]` style and include a "## References" section at the end.
+    - For code, always use triple backticks with `python` (e.g., ```python ... ```).
+    - Do **not** use excessive indentation or nested lists.
+    - Do **not** restate the experiment description at the top.
+    - Ensure all sections are clearly separated and easy to read.
+    """
+
     # Use refined design and suggestions if this is a refinement round
     if state.refinement_round > 0:
         state.refinement_round += 1
+        state.messages.append(AIMessage(content="🔧 Refining experiment design..."))
         print("🔧 Refining experiment design...")
         prev_design = state.refined_design_content or state.full_design_content
         suggestions = "\n".join(f"- {s.strip('- ')}" for s in state.refinement_suggestions if s.strip())
@@ -157,11 +210,15 @@ async def design_node(state: ExperimentState) -> ExperimentState:
 
             Instructions:
             - Output ONLY the improved experiment design, starting directly with the required sections.
+            
+            {code_tag_instructions}
+
             """
         content = await get_llm_response([{"role": "user", "content": prompt}])
         state.refined_design_content = content.strip()
     else:
         state.refinement_round += 1
+        state.messages.append(AIMessage(content="💡 Generating initial experiment design..."))
         print("💡 Generating initial experiment design...")
         prompt = f"""
             You are an expert researcher. Given the following context (experiment description, relevant literature, and experiment plan), generate a DETAILED, step-by-step experiment design.
@@ -192,6 +249,9 @@ async def design_node(state: ExperimentState) -> ExperimentState:
                 5. Experimental Conditions and Controls
                 6. Evaluation Metrics and Success Criteria
                 7. References (numbered, matching citations in the text)
+                  
+            {code_tag_instructions}
+
             """
     content = await get_llm_response([{"role": "user", "content": prompt}])
     if state.refinement_round > 0:
@@ -202,6 +262,7 @@ async def design_node(state: ExperimentState) -> ExperimentState:
 
 # --- Node: Score experiment design and suggest refinements ---
 async def score_node(state: ExperimentState) -> ExperimentState:
+    state.messages.append(AIMessage(content="💯 Evaluating experiment design..."))
     print("💯 Evaluating experiment design...")
     design = state.refined_design_content if state.refinement_round > 0 else state.full_design_content
     prompt = f"""
@@ -212,9 +273,7 @@ async def score_node(state: ExperimentState) -> ExperimentState:
             - Goal & Hypothesis Alignment: Is the outcome of the design well aligned with the research goal/hypothesis?
             - Level of Detail: Is the experiment sufficiently detailed, including datasets, tools, variables, and procedures?
 
-            2. For each score, provide a brief explanation of why it did not receive 100.
-
-            3. Suggest specific refinements to improve the experiment design, focusing on:
+            2. Suggest specific refinements to improve the experiment design, focusing on:
             - Adding or specifying relevant example datasets (with names if possible)
             - Clarifying or detailing any vague steps
             - Improving reproducibility or feasibility
@@ -224,7 +283,6 @@ async def score_node(state: ExperimentState) -> ExperimentState:
             - Return a structured output in JSON format with the following fields:
             {{
                 "scores": {{"feasibility": int, "goal_alignment": int, "detail": int}},
-                "explanations": {{"feasibility": str, "goal_alignment": str, "detail": str}},
                 "refinements": [str]
             }}
 
@@ -237,17 +295,70 @@ async def score_node(state: ExperimentState) -> ExperimentState:
     if isinstance(response, list) and len(response) == 1:
         response = response[0]
     response = response.strip()
+    # Remove code block markers if present
     if response.startswith("```"):
-        response = response.split("```")[-2] if "```" in response else response
+        response = re.sub(r"^```[a-zA-Z]*\n?", "", response)
+        response = response.rstrip("`").strip()
+    # Extract the first {...} JSON object if extra text is present
+    json_match = re.search(r"\{.*\}", response, re.DOTALL)
+    if json_match:
+        response = json_match.group(0)
+    
     try:
         parsed = json.loads(response)
         state.scores = parsed.get("scores", {})
-        state.explanations = parsed.get("explanations", {})
         state.refinement_suggestions = parsed.get("refinements", [])
     except Exception as e:
+        print("Scoring JSON parse error:", e)
         state.scores = None
-        state.explanations = None
         state.refinement_suggestions = [response.strip()]
+
+    print("Scores:")
+    if state.scores:
+        for criterion, score in state.scores.items():
+            print(f" - {criterion}: {score}")
+    else:
+        print("No scores available.")
+    return state
+
+async def generate_code_node(state: ExperimentState) -> ExperimentState:
+    # Use the most refined design if available
+    design = state.refined_design_content or state.full_design_content
+    if design:
+        code_state = CodeGenState(user_input=design)
+        code_graph = build_codegen_graph()
+        final_code_state = await code_graph.ainvoke(code_state)
+        # --- Fix: handle dict fallback ---
+        if hasattr(final_code_state, "final_output"):
+            state.generated_code = final_code_state.final_output
+        elif isinstance(final_code_state, dict) and "final_output" in final_code_state:
+            state.generated_code = final_code_state["final_output"]
+        else:
+            state.generated_code = "❌ Code generation failed or returned unexpected output."
+    else:
+        state.generated_code = "❌ No valid experiment design available for code generation."
+    return state
+
+async def cleanup_code_tags_node(state: ExperimentState) -> ExperimentState:
+    """
+    Removes all [CODE_NEEDED: ...] tags, their descriptions, and the summary list of code tags from the experiment plan.
+    """
+    def remove_code_tags(text):
+        # Remove [CODE_NEEDED: ...] and [CODE_NEEDED] ... tags (entire line)
+        text = re.sub(r'\[CODE_NEEDED(?::[^\]]*)?\][^\n]*\n?', '', text)
+        # Remove summary list section (header and following bullets)
+        text = re.sub(
+            r'(?i)Summary List of \[CODE_NEEDED\][^\n]*\n(?:\s*[\d\-\*\.]+\s*[^\n]+\n?)*', 
+            '', text
+        )
+        # Remove any leftover "Summary List of ..." header on its own line
+        text = re.sub(r'(?i)^Summary List of.*$', '', text, flags=re.MULTILINE)
+        return text.strip()
+
+    if state.refined_design_content:
+        state.refined_design_content = remove_code_tags(state.refined_design_content)
+    if state.full_design_content:
+        state.full_design_content = remove_code_tags(state.full_design_content)
     return state
 
 # --- LangGraph workflow with cyclic refinement ---
@@ -258,22 +369,27 @@ def build_experiment_graph():
     graph.add_node("plan", plan_node)
     graph.add_node("design", design_node)
     graph.add_node("score", score_node)
+    graph.add_node("generate_code", generate_code_node)  # Add code generation node
+    graph.add_node("cleanup", cleanup_code_tags_node)    # Add cleanup node
 
     graph.add_edge("summarize", "literature")
     graph.add_edge("literature", "plan")
     graph.add_edge("plan", "design")
     graph.add_edge("design", "score")
+    graph.add_edge("score", "generate_code")     # Score to code generation
+    graph.add_edge("generate_code", "cleanup")   # Code generation to cleanup
+    graph.add_edge("cleanup", END)               # Cleanup to END
 
     # Conditional edge: if refinement_round < MAX_REFINEMENT_ROUNDS and suggestions exist, go back to design
     async def refinement_decision(state: ExperimentState):
-    # Only refine if: suggestions exist, and refinement_round < MAX_REFINEMENT_ROUNDS
-    # refinement_round starts at 0 (initial), so allow up to MAX_REFINEMENT_ROUNDS total
+        min_score = min(state.scores.values()) if state.scores else 100
         if (state.refinement_suggestions and
             any(s.strip() for s in state.refinement_suggestions) and
-            state.refinement_round < MAX_REFINEMENT_ROUNDS):
+            state.refinement_round < MAX_REFINEMENT_ROUNDS and
+            min_score < 70):  # Only refine if any score is below 70
             return "design"
         else:
-            return END
+            return "generate_code"  # Go to code generation, not END
 
     graph.add_conditional_edges("score", refinement_decision)
     graph.set_entry_point("summarize")

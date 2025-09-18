@@ -1,28 +1,26 @@
 """
-Experiment Design Tree System (experiment_tree.py)
-==================================================
-
-This module implements an automated experiment design tree search system that leverages literature retrieval and LLM-based node generation. The workflow:
-
-1. Extracts research context and hypotheses from user input.
-2. Retrieves and formats relevant literature with numbered citations for LLM prompting.
-3. Generates experiment tree nodes (strategy, methodology, implementation) using LLMs, referencing the literature context.
-4. Scores each node on multiple criteria (clarity, feasibility, novelty, soundness) with weighted aggregation.
-5. Tracks citations and references for each node, outputting a references section with arXiv links.
-6. Performs tree search (via treequest) to explore and evaluate experiment designs.
-7. Identifies and displays the highest-scoring implementation-level experiment design.
+Automated Idea Tree System (idea_tree.py)
+======================================================
+- Extracts research context and hypotheses from user input
+- Retrieves relevant literature for context
+- Uses LLMs to generate and score experiment strategies and methodologies
+- Builds and searches a tree of possible experiment designs
+- Outputs the best-scoring experiment idea with references
 
 """
+
 from __future__ import annotations
 import re
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Any
-import treequest as tq
-from design_experiment.search import build_experiment_search_workflow
-from design_experiment.init_utils import get_llm_response, extract_research_components
-
 import sys
 from io import StringIO
+import treequest as tq
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Any
+import os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from design_experiment.search import build_experiment_search_workflow
+from design_experiment.init_utils import get_llm_response, extract_research_components
+from langchain_core.messages import AIMessage
 
 class FilteredStringIO(StringIO):
     def write(self, s):
@@ -67,11 +65,13 @@ class ExperimentTreeSystem:
         self.research_context = {}
         self.strategy_cache = {}
         self.methodology_cache = {}
+        self.messages = []
         
     async def initialize(self):
         """Initialize search workflow and retrieve literature context"""
+        self.messages.append(AIMessage(content="🔍 Initializing literature search and context..."))
         print("🔍 Initializing literature search and context...")
-        
+
         # Extract research components from user input
         self.research_context = await extract_research_components(self.user_input)
         
@@ -392,6 +392,7 @@ async def run_experiment_tree_search(user_input: str, num_iterations: int):
     # Initialize system with literature context
     tree_system = await ExperimentTreeSystem(user_input).initialize()
     hypothesis = tree_system.research_context.get('hypotheses', [user_input])[0]
+    tree_system.messages.append(AIMessage(content=f"🧪 Starting experiment tree search for: {hypothesis}"))
     
     print(f"🧪 Starting experiment tree search for: {hypothesis}")
     print(f"📖 Using {len(tree_system.literature_context)} literature chunks as context")
@@ -407,7 +408,7 @@ async def run_experiment_tree_search(user_input: str, num_iterations: int):
         "strategy": strategy_gen,
         "methodology": methodology_gen,
     }
-
+    tree_system.messages.append(AIMessage(content=f"🌲 Building experiment design tree...(this may take a few mins)"))
     print("🌲 Building experiment design tree...(this may take a few mins)")
     
     # Monkey patch print to filter sampling messages

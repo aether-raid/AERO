@@ -1,9 +1,7 @@
 """
 Experiment Design Utilities (init_utils.py)
 ===========================================
-
 This module provides utility functions and configuration for the experiment design tree system, including:
-
 1. Environment and logging setup for LLM and API usage.
 2. Asynchronous LLM response handling using OpenAI API.
 3. Extraction and structuring of research components (goal, hypotheses, variables, constraints) from user input via LLM.
@@ -33,6 +31,9 @@ primary_client = AsyncOpenAI(
 PRIMARY_MODEL = os.getenv("DEFAULT_MODEL", "gemini/gemini-2.5-flash")
 arxiv_processor = None
 
+GPT_MODEL = os.getenv("DEFAULT_MODEL", "gpt-4o")
+arxiv_processor = None
+
 # --- LLM response ---
 async def get_llm_response(messages, temperature=0.2, max_tokens=None):
     """Get LLM response using OpenAI API with cost tracking"""
@@ -54,6 +55,27 @@ async def get_llm_response(messages, temperature=0.2, max_tokens=None):
     except Exception as e:
         return f"Error: API call failed (e: {e})"
 
+
+# --- GPT LLM response ---
+async def get_gpt_llm_response(messages, temperature=0.2, max_tokens=None):
+    """Get LLM response using OpenAI API with cost tracking"""
+    
+    await asyncio.sleep(0.02)
+    
+    try:
+        kwargs = {"model": GPT_MODEL, "messages": messages, "temperature": temperature}
+        if max_tokens:
+            kwargs["max_tokens"] = max_tokens
+
+        response = await primary_client.chat.completions.create(**kwargs)
+        content = response.choices[0].message.content
+        if content is None:
+            content = "No response"
+                
+        return content.strip()
+                                    
+    except Exception as e:
+        return f"Error: API call failed (e: {e})"
 
 # --- Research Plan Understanding ---
 async def extract_research_components(user_input):

@@ -6,12 +6,13 @@ Machine Learning Researcher Tool - LangGraph Compatible Version
 A comprehensive tool that uses LangGraph to orchestrate:
 1. Task decomposition using LLM via LiteLLM
 2. Property extraction from user prompts
-3. ArXiv paper search and analysis
-4. Model recommendation
-5. Open research problem identification
+3. Web search and literature analysis via Tavily
+4. Model recommendation with ArXiv integration
+5. Open research problem identification via web search
 6. Comprehensive research plan generation
 
 This version leverages LangGraph for state management and workflow orchestration.
+Research planning workflow uses Tavily web search for optimal performance.
 
 Usage:
     python ml_researcher_langgraph.py
@@ -62,8 +63,7 @@ from tavily import TavilyClient
 
 # Local imports
 from Report_to_txt import extract_pdf_text
-from arxiv import format_search_string
-from arxiv_paper_utils import ArxivPaperProcessor
+# Note: arxiv imports removed for research planning workflow - using Tavily web search instead
 
 import os
 import pickle
@@ -294,12 +294,14 @@ class MLResearcherLangGraph:
             print(f"Tavily client initialization failed: {e}")
         
         try:
-            # Initialize ArXiv paper processor
-            self.arxiv_processor = ArxivPaperProcessor(self.client, self.model_cheap)
-            # print("ArXiv paper processor initialized successfully.")  # Suppressed to avoid cluttering output
+            # ArXiv processor - only needed for model suggestion workflow, not research planning
+            # Research planning workflow uses Tavily web search instead
+            self.arxiv_processor = None  # Disabled for research planning optimization
+            # self.arxiv_processor = ArxivPaperProcessor(self.client, self.model_cheap)
+            print("ArXiv processor disabled for research planning workflow - using Tavily web search")
         except Exception as e:
             self.arxiv_processor = None
-            print(f"Loading ArXiv paper processor failed: {e}")
+            print(f"ArXiv processor initialization skipped: {e}")
 
         # Build the workflows
         self.router_graph = self._build_router_graph()
@@ -615,59 +617,62 @@ class MLResearcherLangGraph:
         return workflow.compile()
     
     def _build_research_planning_graph(self) -> StateGraph:
-        """🆕 SMART WORKFLOW: Build the research planning workflow with intelligent feedback learning."""
+        """🚀 STREAMLINED WORKFLOW: Generate one problem, validate with Tavily, create research plan automatically.
+        
+        Workflow Steps:
+        1. Generate a single research problem statement
+        2. Validate with Tavily web search (check if solved/novel)
+        3. If valid -> auto-select and proceed to research plan
+        4. If invalid -> process feedback and retry generation
+        5. Generate comprehensive research plan automatically  
+        6. Critique plan and refine if needed
+        7. Finalize plan
+        
+        Key Benefits:
+        - No manual problem selection step
+        - Single problem focus for efficiency
+        - Automatic progression to research planning
+        - Tavily validation ensures novelty
+        """
         workflow = StateGraph(ResearchPlanningState)
         
-        # Add nodes for iterative research planning pipeline with smart feedback
+        # Simplified workflow: generate -> validate -> plan (with refinement support)
         workflow.add_node("generate_problem", self._generate_problem_node)
         workflow.add_node("validate_problem", self._validate_problem_node)
-        workflow.add_node("process_rejection_feedback", self._process_rejection_feedback_node)  # 🆕 SMART FEEDBACK NODE
-        workflow.add_node("collect_problem", self._collect_problem_node)
-        workflow.add_node("select_problem", self._select_problem_node)
+        workflow.add_node("process_rejection_feedback", self._process_rejection_feedback_node)  # For rejected problems
         workflow.add_node("create_research_plan", self._create_research_plan_node)
         workflow.add_node("critique_plan", self._critique_plan_node)
         workflow.add_node("finalize_plan", self._finalize_plan_node)
         
-        # Define the flow with smart conditional edges
+        # Entry point: generate a single problem
         workflow.set_entry_point("generate_problem")
         workflow.add_edge("generate_problem", "validate_problem")
         
-        # 🆕 SMART ROUTING: After validation, use intelligent decision logic
+        # After validation: either proceed to research plan or retry with feedback
         workflow.add_conditional_edges(
             "validate_problem",
-            self._smart_validation_decision,  # 🆕 Enhanced decision function
+            self._streamlined_validation_decision,
             {
-                "collect_problem": "collect_problem",                    # Accept: collect the problem
-                "process_feedback": "process_rejection_feedback",       # Reject: process feedback first
-                "continue_generation": "generate_problem"               # Fallback: direct generation
+                "create_plan": "create_research_plan",           # Problem validated - proceed directly to plan
+                "process_feedback": "process_rejection_feedback", # Problem rejected - get feedback
+                "retry_generation": "generate_problem"           # Retry generation with feedback
             }
         )
         
-        # 🆕 SMART FEEDBACK: After processing feedback, always go back to generation
+        # After feedback processing, try generating a new problem
         workflow.add_edge("process_rejection_feedback", "generate_problem")
         
-        # After collecting, decide if we should continue generating or move to selection
-        workflow.add_conditional_edges(
-            "collect_problem", 
-            self._should_continue_generating,
-            {
-                "generate_problem": "generate_problem",    # Generate more if need more problems
-                "select_problem": "select_problem"         # Move to selection if enough problems collected
-            }
-        )
-        
-        workflow.add_edge("select_problem", "create_research_plan")
+        # After plan creation, critique it
         workflow.add_edge("create_research_plan", "critique_plan")
         
-        # After critique, decide what to do based on issues
+        # After critique, decide what to do based on quality
         workflow.add_conditional_edges(
             "critique_plan",
             self._determine_refinement_path,
             {
-                "finalize_plan": "finalize_plan",      # No major issues - finalize
-                "refine_plan": "create_research_plan", # Has issues - regenerate with critique context
-                "select_problem": "select_problem",    # Problem issues - select different
-                "generate_problem": "generate_problem" # Fundamental issues - restart
+                "finalize_plan": "finalize_plan",         # No major issues - finalize
+                "refine_plan": "create_research_plan",    # Has issues - regenerate with critique context
+                "retry_problem": "generate_problem"       # Fundamental issues - try new problem
             }
         )
         
@@ -892,24 +897,28 @@ class MLResearcherLangGraph:
                 
                 decision_data = json.loads(router_response)
                 
-                workflow_decision = decision_data.get("workflow", "MODEL_SUGGESTION")
+
+                workflow_decision_raw = decision_data.get("workflow", "MODEL_SUGGESTION")
                 confidence = decision_data.get("confidence", 0.5)
                 reasoning = decision_data.get("reasoning", "Default routing decision")
-                
-                # Normalize workflow decision
-                if workflow_decision.upper() in ["MODEL_SUGGESTION", "MODEL_SUGGESTIONS"]:
-                    workflow_decision = "model_suggestion"
-                elif workflow_decision.upper() in ["RESEARCH_PLANNING", "RESEARCH_PLAN"]:
-                    workflow_decision = "research_planning"
-                elif workflow_decision.upper() in ["PAPER_WRITING", "PAPER_WRITE", "REPORT_GENERATION"]:
-                    workflow_decision = "paper_writing"
-                if workflow_decision.upper() in ["EXPERIMENT_DESIGN", "EXPERIMENT_DESIGNS"]:
-                    workflow_decision = "experiment_design"
-                elif workflow_decision.upper() in ["ADDITIONAL_EXPERIMENT_SUGGESTION", "EXPERIMENT_SUGGESTION", "EXPERIMENT_PLANNING"]:
-                    workflow_decision = "additional_experiment_suggestion"
-                else:
-                    workflow_decision = "model_suggestion"  # Default fallback
-                
+
+                # Normalize workflow decision with proper fallback
+                workflow_map = {
+                    "MODEL_SUGGESTION": "model_suggestion",
+                    "MODEL_SUGGESTIONS": "model_suggestion",
+                    "RESEARCH_PLANNING": "research_planning",
+                    "RESEARCH_PLAN": "research_planning",
+                    "PAPER_WRITING": "paper_writing",
+                    "PAPER_WRITE": "paper_writing",
+                    "REPORT_GENERATION": "paper_writing",
+                    "EXPERIMENT_DESIGN": "experiment_design",
+                    "EXPERIMENT_DESIGNS": "experiment_design",
+                    "ADDITIONAL_EXPERIMENT_SUGGESTION": "additional_experiment_suggestion",
+                    "EXPERIMENT_SUGGESTION": "additional_experiment_suggestion",
+                    "EXPERIMENT_PLANNING": "additional_experiment_suggestion"
+                }
+                workflow_decision = workflow_map.get(workflow_decision_raw.upper(), "model_suggestion")
+
                 state["routing_decision"] = workflow_decision
                 state["routing_confidence"] = confidence
                 state["routing_reasoning"] = reasoning
@@ -2803,15 +2812,16 @@ Return only the JSON object, no additional text.
     # --- PHASE 1: PROBLEM GENERATION & VALIDATION ---
 
     async def _generate_problem_node(self, state: ResearchPlanningState) -> ResearchPlanningState:
-        """🆕 SMART GENERATION: Node for generating research problems with rejection feedback learning."""
+        """🚀 STREAMLINED GENERATION: Generate a single research problem for Tavily validation and automatic research planning."""
         current_iter = state.get("iteration_count", 0) + 1
         state["iteration_count"] = current_iter
         
-        # 🆕 Track generation attempts (different from iteration count)
+        # Track generation attempts
         generation_attempts = state.get("generation_attempts", 0) + 1
         state["generation_attempts"] = generation_attempts
         
-        print(f"\n🎯 Step {current_iter}: Generating research problem statement (attempt #{generation_attempts})...")
+        print(f"\n🎯 Step {current_iter}: Generating research problem for auto-validation (attempt #{generation_attempts})...")
+        print(f"🚀 Streamlined workflow: One problem → Tavily validation → Automatic research planning")
         state["current_step"] = "generate_problem"
         
         try:
@@ -2864,11 +2874,11 @@ Return only the JSON object, no additional text.
                     approach_guidance = "\n🔍 FOCUS: Consider technical implementation challenges or novel applications."
 
             content = f"""
-                You are an expert research problem generator with ADAPTIVE LEARNING capabilities. Your task is to generate a SINGLE, specific, novel research problem statement.
+                You are an expert research problem generator for STREAMLINED RESEARCH PLANNING. Your task is to generate a SINGLE, high-quality research problem that will be automatically validated with Tavily web search and then used for immediate research plan generation.
 
                 Research Domain: {state["original_prompt"]}
-                Current Progress: {validated_count}/3 validated open problems found
                 Generation attempt: #{generation_attempts} (iteration {current_iter})
+                Workflow: Single Problem → Tavily Validation → Auto Research Planning
 
                 {feedback_context}
 
@@ -2876,21 +2886,23 @@ Return only the JSON object, no additional text.
 
                 {approach_guidance}
 
-                Requirements for the problem statement:
-                1. **SPECIFIC**: Clearly defined scope and objectives (avoid being too broad)
-                2. **NOVEL**: Not obviously solved or well-established (check uniqueness)
-                3. **FEASIBLE**: Can realistically be addressed with current technology
-                4. **IMPACTFUL**: Would advance the field if solved
-                5. **MEASURABLE**: Success can be quantified or evaluated
-                6. **AVOID REPETITION**: Must be different from all previously generated problems
-                7. **ENSURE IT IS WITHIN 400 CHARACTERS**
+                Requirements for the research problem (STREAMLINED WORKFLOW):
+                1. **HIGH QUALITY**: Must be excellent since it will be auto-used for research planning
+                2. **SPECIFIC**: Clearly defined scope and objectives (avoid being too broad)
+                3. **NOVEL**: Not obviously solved (will be verified by Tavily web search)
+                4. **FEASIBLE**: Can realistically be addressed with current technology
+                5. **IMPACTFUL**: Would advance the field if solved
+                6. **MEASURABLE**: Success can be quantified or evaluated
+                7. **CONCISE**: Must be within 400 characters for efficiency
+                8. **RESEARCH-READY**: Should immediately lead to actionable research plan
 
-                Generate ONE specific research problem statement that:
-                - Addresses a concrete gap or limitation in the field
-                - Can be formulated as a clear research question
-                - Is different from previously generated problems
+                Generate ONE exceptional research problem that will automatically proceed to research planning:
+                - Addresses a concrete, specific gap or limitation
+                - Can be formulated as a clear, focused research question  
                 - Is narrow enough to be tackled in a research project
-                - Incorporates lessons learned from previous rejections
+                - Is different from any previously generated problems
+                - Incorporates lessons learned from previous rejections (if any)
+                - Will survive Tavily web validation for novelty
 
                 Respond with a JSON object containing:
                 {{
@@ -3460,6 +3472,16 @@ Specific improvements needed:
             # Increment refinement count
             state["refinement_count"] = state.get("refinement_count", 0) + 1
             print(f"🎯 Addressing critique feedback...")
+            
+            # Verify critique data is available for refinement
+            critique = state.get("critique_results", {})
+            if not critique:
+                print("⚠️  WARNING: No critique results found - this may indicate a state management issue")
+                print("⚠️  Proceeding with limited refinement capability")
+            else:
+                major_issues = critique.get("major_issues", [])
+                score = critique.get("overall_score", 0)
+                print(f"🎯 REFINEMENT TARGET: Improve score from {score:.1f}/10 by addressing {len(major_issues)} major issues")
         else:
             print(f"\n�📋 Step 4: Generating comprehensive research plan for selected problem...")
             print(f"🎯 Selected Problem: {selected_problem.get('statement', 'N/A')[:100]}...")
@@ -3474,11 +3496,21 @@ Specific improvements needed:
             # Clean all text inputs to avoid encoding issues
             clean_prompt = self._clean_text_for_encoding(state["original_prompt"])
             
-            if not selected_problem:
-                error_msg = "No problem selected for research plan generation"
-                state["errors"].append(error_msg)
-                print(f"❌ {error_msg}")
-                return state
+            # Validate that we have a proper selected problem
+            if not selected_problem or not selected_problem.get('statement'):
+                # Try to get from current_problem as fallback
+                current_problem = state.get("current_problem", {})
+                if current_problem and current_problem.get('statement'):
+                    selected_problem = current_problem
+                    state["selected_problem"] = current_problem  # Store it properly
+                    print(f"✅ Using current_problem as selected_problem: {current_problem.get('statement', 'N/A')[:80]}...")
+                else:
+                    error_msg = "No valid problem selected for research plan generation"
+                    state["errors"].append(error_msg)
+                    print(f"❌ {error_msg}")
+                    print(f"🔍 Debug - selected_problem: {selected_problem}")
+                    print(f"🔍 Debug - current_problem: {current_problem}")
+                    return state
             
             # Format the selected problem for the prompt
             problems_text = "\n**Selected Research Problem:**\n"
@@ -3539,30 +3571,79 @@ Specific improvements needed:
             if is_refinement:
                 critique = state.get("critique_results", {})
                 previous_plan = state.get("research_plan", {}).get("research_plan", "")
+                major_issues = critique.get("major_issues", [])
+                suggestions = critique.get("suggestions", [])
+                strengths = critique.get("strengths", [])
                 
+                # Format major issues with high priority
+                issues_text = ""
+                if major_issues:
+                    issues_text = "\n".join([f"    ❌ CRITICAL ISSUE {i+1}: {issue}" for i, issue in enumerate(major_issues)])
+                
+                # Format specific suggestions
+                suggestions_text = ""
+                if suggestions:
+                    suggestions_text = "\n".join([f"    💡 SUGGESTION {i+1}: {suggestion}" for i, suggestion in enumerate(suggestions)])
+                
+                # Format strengths to preserve
+                strengths_text = ""
+                if strengths:
+                    strengths_text = "\n".join([f"    ✅ PRESERVE: {strength}" for strength in strengths])
+
                 refinement_context = f"""
 
-                    **REFINEMENT CONTEXT:**
-                    This is refinement iteration {state['refinement_count']}. You are improving a previous research plan based on expert critique feedback.
+⚠️⚠️⚠️ CRITICAL REFINEMENT MODE - ITERATION {state['refinement_count']} ⚠️⚠️⚠️
 
-                    **PREVIOUS RESEARCH PLAN:**
-                    {previous_plan}...
+**PREVIOUS PLAN CRITIQUE RESULTS:**
+- Overall Score: {critique.get('overall_score', 0):.1f}/10 (NEEDS IMPROVEMENT)
+- Number of Major Issues: {len(major_issues)}
 
-                    **CRITIQUE FEEDBACK TO ADDRESS:**
-                    - Overall Score: {critique.get('overall_score', 0)}/10
-                    - Major Issues: {critique.get('major_issues', [])}
-                    - Specific Suggestions: {critique.get('suggestions', [])}
-                    - Identified Strengths to Preserve: {critique.get('strengths', [])}
+**🚨 HIGH PRIORITY: MAJOR ISSUES TO FIX IMMEDIATELY:**
+{issues_text}
 
-                    **REFINEMENT INSTRUCTIONS:**
-                    1. Address each major issue mentioned in the critique
-                    2. Implement the specific improvement suggestions
-                    3. Preserve and build upon the identified strengths
-                    4. Maintain the overall structure but enhance problematic areas
-                    5. Focus on making the plan more feasible, detailed, and academically rigorous
+**💡 SPECIFIC IMPROVEMENT REQUIREMENTS:**
+{suggestions_text}
+
+**✅ SUCCESSFUL ELEMENTS TO PRESERVE AND BUILD UPON:**
+{strengths_text}
+
+**📋 PREVIOUS RESEARCH PLAN (FOR REFERENCE AND IMPROVEMENT):**
+{previous_plan}
+
+**🎯 REFINEMENT INSTRUCTIONS (CRITICAL PRIORITIES):**
+1. 🚨 HIGHEST PRIORITY: Address EVERY major issue listed above explicitly
+2. 💡 IMPLEMENT: Follow each specific suggestion to enhance the plan
+3. ✅ PRESERVE: Maintain and expand upon identified strengths
+4. 🔄 IMPROVE: Make substantial improvements to low-scoring sections
+5. 📊 ENHANCE: Ensure significantly better quality than previous iteration
+6. 🎯 FOCUS: Be more specific, detailed, and academically rigorous
+
+**⚡ CRITICAL SUCCESS CRITERIA:**
+- Must address all {len(major_issues)} major issues identified
+- Must implement specific suggestions for improvement
+- Must significantly improve overall quality and feasibility
+- Must maintain academic rigor while being more practical
 
               """
 
+            task_description = ""
+            if is_refinement:
+                task_description = f"""
+**🚨 PRIMARY TASK: CRITICAL REFINEMENT - ITERATION {state['refinement_count']}**
+You MUST significantly improve the previous research plan by addressing all critique feedback. This is NOT a new plan - this is a targeted improvement of an existing plan that scored {critique.get('overall_score', 0):.1f}/10.
+
+**REFINEMENT SUCCESS CRITERIA:**
+- Address EVERY major issue explicitly
+- Implement ALL improvement suggestions  
+- Achieve significantly higher quality than previous iteration
+- Maintain successful elements while fixing problems
+
+**SECONDARY TASK:** Create a comprehensive research plan that leverages both the selected problem AND the web search findings."""
+            else:
+                task_description = """
+**YOUR TASK:**
+Create a comprehensive research plan that leverages both the selected problem AND the web search findings. The plan should focus deeply on this specific problem, utilizing its research potential, feasibility, and the current state of research as revealed by web analysis."""
+            
             content = f"""
                 You are an expert research project manager and academic research planner. Your task is to create a comprehensive, actionable research plan based on a specifically selected research problem that has been systematically identified and verified through web search analysis.
                 {refinement_context}
@@ -3579,8 +3660,7 @@ Specific improvements needed:
                 - Current research state information is based on actual web findings
                 - Use the provided URLs and existing approaches as starting points for literature review
 
-**YOUR TASK:**
-Create a comprehensive research plan that leverages both the selected problem AND the web search findings. The plan should focus deeply on this specific problem, utilizing its research potential, feasibility, and the current state of research as revealed by web analysis.
+{task_description}
 
 **CITATION AND SOURCE INTEGRATION REQUIREMENTS:**
 - Reference the discovered URLs throughout the plan using [1], [2], [3] format
@@ -3741,12 +3821,19 @@ Use the following web-discovered sources as starting points for literature revie
             # Store previous plan if this is a refinement
             if is_refinement:
                 current_plan = state.get("research_plan", {})
+                critique = state.get("critique_results", {})
+                major_issues = critique.get("major_issues", [])
+                
                 if current_plan and "previous_plans" not in state:
                     state["previous_plans"] = []
                 if current_plan:
                     state["previous_plans"].append(current_plan)
+                
                 print(f"✅ Research plan refined (iteration {state['refinement_count']})")
-                print(f"📊 Addressing critique feedback...")
+                print(f"🎯 TARGETED IMPROVEMENTS - Addressed {len(major_issues)} major critique issues:")
+                for i, issue in enumerate(major_issues, 1):
+                    print(f"   {i}. {issue}")
+                print(f"📊 Previous score: {critique.get('overall_score', 0):.1f}/10 - expecting significant improvement")
             else:
                 print("✅ Initial research plan generated")
                 print(f"📊 Based on selected problem: {selected_problem.get('statement', 'N/A')[:100]}...")
@@ -3924,8 +4011,21 @@ Return only a JSON object with this exact structure. For 'major_issues' and 'sug
                 
                 state["critique_history"].append(historical_entry)
                 
-                # Store critique results (current format for compatibility)
+                # Store critique results (current format for compatibility) - CRITICAL for refinement
                 state["critique_results"] = critique_data
+                
+                # Ensure critique data persists across refinement iterations
+                state["latest_critique"] = {
+                    "timestamp": datetime.now().isoformat(),
+                    "iteration": state.get("refinement_count", 0),
+                    "results": critique_data,
+                    "major_issues_count": len(major_issues)
+                }
+                
+                print(f"\n🔍 CRITIQUE STORED FOR REFINEMENT:")
+                print(f"   ✅ Critique results stored in state['critique_results']")
+                print(f"   ✅ Latest critique stored with timestamp")
+                print(f"   ✅ Ready for refinement iteration {state.get('refinement_count', 0) + 1}")
                 
                 # Track score history
                 overall_score = critique_data.get("overall_score", 0.0)
@@ -4259,25 +4359,25 @@ Provide the complete refined research plan:
                 print(f"⚠️  DECISION: {decision.upper()} ({num_issues} issues - trying refinement once)")
                 return decision
             else:
-                decision = "select_problem"
-                print(f"❌ DECISION: {decision.upper()} (Too many persistent issues: {num_issues})")
+                decision = "retry_problem"
+                print(f"❌ DECISION: {decision.upper()} (Too many persistent issues: {num_issues}) - trying new problem")
                 return decision
         
         else:  # 7+ major issues
             print(f"❌ Fundamental problems detected ({num_issues} major issues)")
             if score < 3.0:
-                decision = "generate_problem"
-                print(f"🔄 DECISION: {decision.upper()} (Score critically low)")
+                decision = "retry_problem"
+                print(f"🔄 DECISION: {decision.upper()} (Score critically low) - trying new problem")
                 return decision
             else:
-                decision = "select_problem"
-                print(f"🔄 DECISION: {decision.upper()} (Too many issues)")
+                decision = "retry_problem"
+                print(f"🔄 DECISION: {decision.upper()} (Too many issues) - trying new problem")
                 return decision
         
         # Fallback safety checks
         if score < 2.0:
-            print("⚠️  Critical score failure - restarting")
-            return "generate_problem"
+            print("⚠️  Critical score failure - trying new problem")
+            return "retry_problem"
         
         # Check score improvement if this is a refinement (secondary consideration)
         if refinement_count > 0:
@@ -4286,7 +4386,7 @@ Provide the complete refined research plan:
                 improvement = score_history[-1] - score_history[-2]
                 if improvement < 0.1 and num_issues >= 3:  # Not improving and still has issues
                     print(f"📈 Insufficient improvement ({improvement:.1f}) with {num_issues} issues remaining")
-                    return "select_problem"
+                    return "retry_problem"
         
         # Default fallback
         return "refine_plan"
@@ -4595,81 +4695,62 @@ Provide the complete refined research plan:
                 }
             }
             
-        elif workflow_decision == "paper_writing":
-            print("\n📝 STEP 2: EXECUTING PAPER WRITING WORKFLOW")
-            print("=" * 50)
-            
-            # Initialize paper writing state
-            paper_state: PaperWritingState = {
-                "messages": [HumanMessage(content=user_query)],
-                "original_prompt": user_query,
-                "uploaded_data": uploaded_data,
-                "experimental_results": {},  # Could be extracted from uploaded data
-                "research_context": user_query,
-                "target_venue": "general",  # Could be extracted from user_query
-                "research_analysis": {},
-                "paper_structure": {},
-                "template_config": {},
-                "section_content": {},
-                "formatted_paper": "",
-                "critique_results": {},
-                "revision_count": 0,
-                "quality_score": 0.0,
-                "final_outputs": {},
-                "current_step": "",
-                "errors": [],
-                "workflow_type": "paper_writing"
-            }
-            
-            # Run the paper writing workflow
-            final_paper_state = await self.paper_writing_graph.ainvoke(paper_state)
-            
-            # Compile results
-            results = {
-                "workflow_type": "paper_writing",
-                "router_decision": {
-                    "decision": final_router_state["routing_decision"],
-                    "confidence": final_router_state["routing_confidence"],
-                    "reasoning": final_router_state["routing_reasoning"]
-                },
-                "original_prompt": final_paper_state["original_prompt"],
-                "research_analysis": final_paper_state.get("research_analysis", {}),
-                "paper_structure": final_paper_state.get("paper_structure", {}),
-                "template_config": final_paper_state.get("template_config", {}),
-                "formatted_paper": final_paper_state.get("formatted_paper", ""),
-                "final_outputs": final_paper_state.get("final_outputs", {}),
-                "errors": final_router_state["errors"] + final_paper_state["errors"],
-                "summary": {
-                    "workflow_used": "Paper Writing Pipeline",
-                    "paper_generated": bool(final_paper_state.get("formatted_paper", "")),
-                    "sections_generated": len(final_paper_state.get("section_content", {})),
-                    "paper_length": len(final_paper_state.get("formatted_paper", "")),
-                    "output_file": final_paper_state.get("final_outputs", {}).get("file_path", ""),
-                    "total_errors": len(final_router_state["errors"]) + len(final_paper_state["errors"])
-                }
-            }
-
         elif workflow_decision == "experiment_design":
             print("\n🧪 STEP 2: EXECUTING EXPERIMENT DESIGN WORKFLOW")
             experiment_state = {
                 "user_input": user_query,
             }
             final_experiment_state = await self.experiment_design_graph.ainvoke(experiment_state)
-            # Extract plain text output from all_designs
             all_designs = final_experiment_state.get("all_designs", [])
+             
+            # Create plain text output for frontend consistency
             if all_designs:
-                # Concatenate all experiment designs as plain text
-                plain_text_output = "\n\n".join(
-                    f"Experiment Idea: {d.get('experiment_idea', '')}\n\n{d.get('design', '')}"
-                    for d in all_designs if d.get('design')
+                experiment_designs = "\n\n".join(
+                    d.get('design', '') for d in all_designs if d.get('design', '')
                 )
             else:
-                plain_text_output = ""
+                experiment_designs = ""
+
+            # If no designs were generated, provide a fallback message
+            if not experiment_designs.strip():
+                experiment_designs = "No experiment designs generated."
+
+            # Aggregate all code blocks into one cell for the Code tab
+            if all_designs:
+                code_output = "\n\n".join(
+                    d.get('code', '') for d in all_designs if d.get('code', '')
+                )
+            else:
+                code_output = ""
+
+            # If no code was generated, provide a fallback message
+            if not code_output.strip():
+                code_output = "No code generated for these experiment designs."
+                        
+            # Compile results for experiment design
             results = {
-                **final_experiment_state,
-                "plain_text_output": plain_text_output
+                "workflow_type": "experiment_design",
+                "router_decision": {
+                    "decision": final_router_state["routing_decision"],
+                    "confidence": final_router_state["routing_confidence"],
+                    "reasoning": final_router_state["routing_reasoning"]
+                },
+                "original_prompt": final_experiment_state.get("original_prompt", user_query),
+                "all_designs": all_designs,
+                "experiment_designs": experiment_designs,
+                "code_output": code_output,  # <-- Add this line
+                "errors": final_router_state["errors"] + final_experiment_state.get("errors", []),
+                "messages": [
+                    m.content if hasattr(m, "content") else str(m)
+                    for m in final_experiment_state.get("messages", [])
+                ],
+                "summary": {
+                    "workflow_used": "Experiment Design Pipeline",
+                    "experiment_ideas_generated": len(all_designs),
+                    "designs_generated": sum(1 for d in all_designs if d.get("design")),
+                    "total_errors": len(final_router_state["errors"]) + len(final_experiment_state.get("errors", []))
+                }
             }
-                
             
         elif workflow_decision == "additional_experiment_suggestion":
             print("\n🔬 STEP 2: EXECUTING EXPERIMENT SUGGESTION WORKFLOW")
@@ -4764,41 +4845,54 @@ Provide the complete refined research plan:
             print(f"🔄 Continue generating: {len(validated_problems)}/{target_problems} problems, iteration {iteration_count}/{max_iterations}")
             return "generate_problem"
 
-    def _smart_validation_decision(self, state: ResearchPlanningState) -> str:
-        """🆕 SMART DECISION: Determine next step after problem validation with intelligent routing."""
+    def _streamlined_validation_decision(self, state: ResearchPlanningState) -> str:
+        """🚀 STREAMLINED DECISION: Simple validation routing for single-problem workflow."""
         validation_results = state.get("validation_results", {})
         recommendation = validation_results.get("recommendation", "reject")
         iteration_count = state.get("iteration_count", 0)
-        validated_problems = state.get("validated_problems", [])
-        max_iterations = 10  # Safety limit to prevent infinite loops
+        max_attempts = 5  # Limit attempts to prevent infinite loops
         
-        print(f"🧠 Smart validation decision: {recommendation} (iteration {iteration_count}/{max_iterations})")
+        print(f"🎯 Streamlined validation decision: {recommendation} (attempt {iteration_count}/{max_attempts})")
         
-        # Safety check: If we've hit max iterations, force selection even with limited problems
-        if iteration_count >= max_iterations:
-            print(f"⏹️  Max iterations reached ({iteration_count}/{max_iterations}). Forcing selection with {len(validated_problems)} problems.")
-            if len(validated_problems) > 0:
-                return "collect_problem"  # Collect the current problem if possible and move to selection
-            else:
-                # No validated problems at all - this shouldn't happen but handle gracefully
-                print("❌ No validated problems found after max iterations. This indicates a serious issue.")
-                return "collect_problem"  # Force collection anyway to break the loop
+        # Safety check: If we've tried too many times, proceed anyway
+        if iteration_count >= max_attempts:
+            print(f"⏰ Max attempts reached ({iteration_count}/{max_attempts}). Proceeding with current problem.")
+            # Store the current problem as "selected" and proceed
+            current_problem = state.get("current_problem", {})
+            if current_problem:
+                state["selected_problem"] = current_problem
+                print(f"✅ Auto-selected problem after {max_attempts} attempts: {current_problem.get('statement', 'N/A')[:80]}...")
+            return "create_plan"
         
         # Check if validation passed
         if recommendation == "accept":
-            # Problem is valid - collect it
-            return "collect_problem"
+            # Problem is valid - store it as selected and proceed directly to research plan
+            current_problem = state.get("current_problem", {})
+            
+            # Ensure we have a valid problem with required fields
+            if current_problem and current_problem.get('statement'):
+                state["selected_problem"] = current_problem
+                state["validated_problems"] = [current_problem]  # Store for compatibility
+                
+                print(f"✅ Problem validated and auto-selected: {current_problem.get('statement', 'N/A')[:80]}...")
+                print(f"🚀 Proceeding directly to research plan generation...")
+                return "create_plan"
+            else:
+                print(f"⚠️  Warning: current_problem missing or incomplete: {current_problem}")
+                print(f"🔄 Retrying generation to get valid problem...")
+                return "retry_generation"
         
-        # Problem was rejected - check if we have feedback to process intelligently
+        # Problem was rejected - check if we should process feedback or retry
         rejection_feedback = state.get("rejection_feedback", [])
-        if rejection_feedback:
-            # We have rejection feedback to process - use smart feedback
-            print(f"🔄 Processing {len(rejection_feedback)} rejection feedback entries")
-            return "process_feedback"
         
-        # No feedback yet - continue with basic generation (fallback)
-        print("⚡ Fallback to basic generation")
-        return "continue_generation"
+        # For the first few attempts, use feedback processing
+        if iteration_count < 3 and len(rejection_feedback) < 3:
+            print(f"� Processing rejection feedback (attempt {iteration_count + 1})")
+            return "process_feedback"
+        else:
+            # For later attempts, just retry generation directly
+            print(f"🔄 Direct retry generation (attempt {iteration_count + 1})")
+            return "retry_generation"
 
     def _check_completion(self, state: ResearchPlanningState) -> str:
         """Check if problem validation passed and should be collected."""
@@ -5273,7 +5367,15 @@ Provide the complete refined research plan:
             selected_problem = state.get("selected_problem", {})
             critique_results = state.get("critique_results", {})
             validated_problems = state.get("validated_problems", [])
-            arxiv_results = state.get("arxiv_results", {})
+            
+            # Get web search results instead of ArXiv
+            web_search_results = []
+            total_web_sources = 0
+            for problem in validated_problems:
+                validation = problem.get("validation", {})
+                if validation.get("detailed_sources"):
+                    web_search_results.extend(validation["detailed_sources"])
+                    total_web_sources += validation.get("search_results_count", 0)
             
             # Create document title
             safe_prompt = "".join(c for c in original_prompt if c.isalnum() or c in (' ', '-', '_')).strip()[:50]
@@ -5291,7 +5393,7 @@ Provide the complete refined research plan:
             
             exec_summary = f"""This document presents a **comprehensive research plan** developed through systematic analysis of current literature and identification of open research problems. The plan was generated through {refinement_count} refinement iteration(s) and achieved a final quality score of **{final_score:.1f}/10.0** with {quality_status} quality status.
 
-**Research Foundation**: The analysis processed {arxiv_results.get('papers_returned', 0)} research papers from ArXiv to identify genuine research gaps and formulate actionable research directions. The selected research problem addresses a significant gap in current literature and provides clear pathways for novel contributions.
+**Research Foundation**: The analysis processed {total_web_sources} web sources using Tavily search to identify genuine research gaps and formulate actionable research directions. The selected research problem addresses a significant gap in current literature and provides clear pathways for novel contributions.
 
 **Plan Structure**: The research plan follows a systematic 4-phase approach with defined milestones, risk mitigation strategies, and measurable outcomes designed for practical implementation in an academic research setting."""
             
@@ -5429,7 +5531,7 @@ Provide the complete refined research plan:
                 ["Quality Status", quality_status.title()],
                 ["Refinement Iterations", str(refinement_count)],
                 ["Problems Evaluated", str(len(validated_problems))],
-                ["ArXiv Papers Analyzed", str(arxiv_results.get('papers_returned', 0))],
+                ["Web Sources Analyzed", str(total_web_sources)],
                 ["Final Recommendation", critique_results.get("recommendation", "finalize")]
             ]
             
