@@ -288,6 +288,12 @@ class MLResearcherLangGraph:
             base_url=self.base_url
         )
         
+        # Initialize cheap model client for cost-efficient tasks
+        self.client_cheap = openai.OpenAI(
+            api_key=self.api_key,
+            base_url=self.base_url
+        )
+        
         
         # Initialize Tavily client for web search
         try:
@@ -8208,87 +8214,18 @@ This approach ensures both strategic coherence and practical actionability, whil
             """
             print(f'📝 Generated experiment suggestions prompt ({len(suggestions_prompt)} characters)')
             
-            # Use streaming for better timeout handling
-            print("🔄 Starting streaming response generation...")
-            response_chunks = []
-            total_chars = 0
-            
-            try:
-                # Create streaming response with timeout
-                response = await asyncio.wait_for(
-                    asyncio.get_event_loop().run_in_executor(
-                        None,
-                        lambda: self.client.chat.completions.create(
-                            model=self.model,
-                            messages=[
-                                {"role": "system", "content": "You are an expert ML researcher. Provide comprehensive experiment plans in clear, well-formatted Markdown."},
-                                {"role": "user", "content": suggestions_prompt}
-                            ],
-                            temperature=0.2,
-                            max_tokens=6000,  # Increased for comprehensive plans
-                            stream=True
-                        )
-                    ),
-                    timeout=180  # 3 minutes timeout
-                )
-                
-                # Process streaming chunks
-                for chunk in response:
-                    if chunk.choices[0].delta.content:
-                        chunk_content = chunk.choices[0].delta.content
-                        response_chunks.append(chunk_content)
-                        total_chars += len(chunk_content)
-                        
-                        # Progress indicator every 500 characters
-                        if total_chars % 500 == 0:
-                            print(f"📝 Generated {total_chars} characters...")
-                
-                # Combine all chunks
-                suggestions_markdown = ''.join(response_chunks)
-                
-                if not suggestions_markdown.strip():
-                    raise ValueError("Empty response received from streaming")
-                    
-                print(f"✅ Streaming complete! Generated {len(suggestions_markdown)} characters")
-                
-            except asyncio.TimeoutError:
-                print("⏰ Streaming timeout - using partial response...")
-                suggestions_markdown = ''.join(response_chunks) if response_chunks else None
-                
-                if not suggestions_markdown or len(suggestions_markdown) < 500:
-                    # If we don't have enough content, create a fallback
-                    print("⚠️ Insufficient content from timeout, creating fallback plan...")
-                    suggestions_markdown = self._create_fallback_experiment_plan(original_prompt, research_direction)
-                else:
-                    print(f"📝 Using partial response ({len(suggestions_markdown)} characters)")
-                    
-            except Exception as e:
-                print(f"❌ Streaming error: {str(e)}")
-                print("🔄 Falling back to non-streaming request...")
-                
-                # Fallback to non-streaming with shorter timeout
-                try:
-                    response = await asyncio.wait_for(
-                        asyncio.get_event_loop().run_in_executor(
-                            None,
-                            lambda: self.client.chat.completions.create(
-                                model=self.model,
-                                messages=[
-                                    {"role": "system", "content": "You are an expert ML researcher. Provide comprehensive experiment plans in clear, well-formatted Markdown."},
-                                    {"role": "user", "content": self._create_shorter_experiment_prompt(original_prompt, research_direction, findings_analysis)}
-                                ],
-                                temperature=0.2,
-                                max_tokens=3000
-                            )
-                        ),
-                        timeout=90  # Shorter timeout for fallback
-                    )
-                    suggestions_markdown = response.choices[0].message.content.strip()
-                    print(f"✅ Fallback request successful ({len(suggestions_markdown)} characters)")
-                    
-                except Exception as fallback_error:
-                    print(f"❌ Fallback also failed: {str(fallback_error)}")
-                    suggestions_markdown = self._create_fallback_experiment_plan(original_prompt, research_direction)
+            # Use robust LLM call for experiment suggestions (non-streaming for reliability)
+            print("🔄 Starting experiment suggestions generation...")
+            suggestions_markdown = await self._robust_llm_call(
+                messages=[
+                    {"role": "system", "content": "You are an expert ML researcher. Provide comprehensive experiment plans in clear, well-formatted Markdown."},
+                    {"role": "user", "content": suggestions_prompt}
+                ],
+                max_tokens=6000,
+                temperature=0.2,
+                operation_name="experiment_suggestions",
+                max_retries=3
+            )
             print(f"📝 Generated comprehensive experiment plan ({len(suggestions_markdown)} characters)")
             
             # Create a structured summary for state management while keeping the full markdown
@@ -8359,11 +8296,94 @@ This approach ensures both strategic coherence and practical actionability, whil
                 "current_step": "suggestion_error"
             }
 
+    async def _extract_methodologies_from_papers(self, papers: list, research_direction: str, key_questions: list) -> str:
+        """Extract experiment methodologies from papers using cheap LLM calls for optimal context."""
+        print(f"🔬 Extracting methodologies from {len(papers)} papers...")
+
+        methodologies = []
+        max_chars_per_paper = 1200  # Increased character limit for more comprehensive methodology extraction
+
+        for i, paper in enumerate(papers, 1):
+            try:
+                title = paper.get('title', 'Unknown Title')
+                content = paper.get('content', paper.get('abstract', ''))
+
+                if not content or len(content.strip()) < 100:
+                    print(f"⚠️ Paper {i} has insufficient content, skipping...")
+                    continue
+
+                # Use cheap LLM to extract methodologies
+                extraction_prompt = f"""
+                Extract ONLY the experiment methodologies, approaches, and techniques from this research paper.
+                Focus on: experimental setup, methods used, evaluation protocols, datasets, and key findings.
+                Keep response under {max_chars_per_paper} characters. Be concise but complete.
+
+                RESEARCH DIRECTION: {research_direction}
+                KEY QUESTIONS: {chr(10).join(f"• {q}" for q in key_questions[:2])}
+
+                PAPER TITLE: {title}
+                PAPER CONTENT: {content}  # Full paper content available for comprehensive extraction
+
+                Extract methodologies relevant to the research direction above.
+                """
+
+                response = await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    lambda: self.client_cheap.chat.completions.create(
+                        model=self.model_cheap,
+                        messages=[{"role": "user", "content": extraction_prompt}],
+                        temperature=0.1,
+                        max_tokens=500  # Increased to accommodate 1200 character limit
+                    )
+                )
+
+                methodology = response.choices[0].message.content.strip()
+
+                # Ensure we don't exceed character limit
+                if len(methodology) > max_chars_per_paper:
+                    methodology = methodology[:max_chars_per_paper] + "..."
+
+                methodologies.append(f"PAPER {i}: {title}\nMETHODOLOGY: {methodology}\n")
+                print(f"✅ Extracted methodology from paper {i} ({len(methodology)} chars)")
+
+            except Exception as e:
+                print(f"❌ Failed to extract methodology from paper {i}: {str(e)}")
+                # Add basic fallback
+                title = paper.get('title', f'Paper {i}')
+                methodologies.append(f"PAPER {i}: {title}\nMETHODOLOGY: Content extraction failed, paper appears relevant to research direction.\n")
+
+        # Combine all methodologies with optimal formatting
+        combined_methodologies = "\n".join(methodologies)
+
+        # Final optimization: if too long, prioritize most relevant papers
+        if len(combined_methodologies) > 4000:  # Optimal total limit
+            print(f"📏 Trimming methodologies to optimal length...")
+            # Keep first 3 papers fully, summarize the rest
+            primary_papers = methodologies[:3]
+            remaining_count = len(methodologies) - 3
+            if remaining_count > 0:
+                combined_methodologies = "\n".join(primary_papers) + f"\n\nADDITIONAL PAPERS: {remaining_count} more papers with relevant methodologies available for reference."
+
+        print(f"📋 Final methodologies context: {len(combined_methodologies)} characters from {len(methodologies)} papers")
+        return combined_methodologies
+
     async def _suggest_experiments_tree_node(self, state: ExperimentSuggestionState) -> ExperimentSuggestionState:
         """Node for generating validated experiments using the experiment tree approach."""
         print("\n🌳 Experiment Tree: Generating validated experiments using tree search approach...")
         
         try:
+            # Extract context from state FIRST (before any other operations that might fail)
+            original_prompt = state.get("original_prompt", "")
+            experimental_results = state.get("experimental_results", {})
+            findings_analysis = state.get("findings_analysis", {})
+            research_context = state.get("research_context", {})
+            research_direction = state.get("research_direction", {})
+            validated_papers = state.get("experiment_papers", [])
+            
+            # Check for previous experiment iterations and validation feedback
+            experiment_iterations = state.get("experiment_iterations", [])
+            experiment_validation_results = state.get("experiment_validation_results", {})
+            
             # Store current environment variables
             import os
             original_api_key = os.environ.get("OPENAI_API_KEY")
@@ -8389,18 +8409,6 @@ This approach ensures both strategic coherence and practical actionability, whil
             except ImportError as e:
                 print(f"⚠️ Could not import research components: {e}")
                 research_components_available = False
-            
-            # Extract context from state
-            original_prompt = state.get("original_prompt", "")
-            experimental_results = state.get("experimental_results", {})
-            findings_analysis = state.get("findings_analysis", {})
-            research_context = state.get("research_context", {})
-            research_direction = state.get("research_direction", {})
-            validated_papers = state.get("experiment_papers", [])
-            
-            # Check for previous experiment iterations and validation feedback
-            experiment_iterations = state.get("experiment_iterations", [])
-            experiment_validation_results = state.get("experiment_validation_results", {})
             
             # CRITICAL FIX: Handle dual edge state conflict
             # If we're in an iteration step but experiment_iterations is empty, use stored iteration
@@ -8469,22 +8477,23 @@ IMPORTANT: Address ALL the above issues in this iteration. Use only verified met
                 direction_text = selected_direction.get("direction", "Continue current research")
                 key_questions = selected_direction.get("key_questions", [])
                 
-                # Create literature context from existing papers
-                literature_context = ""
-                for i, paper in enumerate(validated_papers[:5], 1):
-                    title = paper.get('title', 'Unknown Title')
-                    content = paper.get('content', paper.get('abstract', ''))
-                    literature_context += f"[{i}] {title}\nContent: {content}\n"
+                # Extract methodologies from papers using cheap LLM calls
+                print(f"🔬 Extracting methodologies from {len(validated_papers[:5])} papers using cheap LLM...")
+                methodologies_context = await self._extract_methodologies_from_papers(
+                    validated_papers[:5],  # Limit to top 5 papers
+                    direction_text,
+                    key_questions
+                )
                 
-                # Generate experiments using existing literature without redundant search
+                # Generate experiments using extracted methodologies as reference
                 experiment_plan = await self._generate_literature_grounded_experiments(
                     original_prompt,
                     direction_text, 
                     key_questions,
-                    literature_context,
-                    validated_papers,
-                    validation_feedback,
-                    current_iteration
+                    literature_context=methodologies_context,  # Use extracted methodologies instead of raw content
+                    validated_papers=validated_papers,
+                    validation_feedback=validation_feedback,
+                    current_iteration=current_iteration
                 )
                 
                 experiment_summary = {
@@ -8566,24 +8575,74 @@ IMPORTANT: Address ALL the above issues in this iteration. Use only verified met
             except:
                 pass  # Ignore cleanup errors
 
+    async def _robust_llm_call(self, messages, max_tokens=4000,
+                              temperature=0.1, operation_name="LLM_call",
+                              max_retries=3):
+        """Robust LLM call with Cloudflare 524 error handling and exponential backoff (no timeouts)."""
+        import time
+        import random
+
+        for attempt in range(max_retries + 1):
+            try:
+                print(f"🔄 {operation_name} attempt {attempt + 1}/{max_retries + 1} (no timeout)")
+
+                # Make the LLM call without timeout constraints
+                response = await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    lambda: self.client.chat.completions.create(
+                        model=self.model,
+                        messages=messages,
+                        max_tokens=max_tokens,
+                        temperature=temperature
+                    )
+                )
+
+                content = response.choices[0].message.content.strip()
+                print(f"✅ {operation_name} successful! Generated {len(content)} characters")
+                return content
+
+            except Exception as e:
+                error_str = str(e).lower()
+
+                # Check for specific Cloudflare 524 error or connection issues
+                if "524" in error_str or "timeout" in error_str or "connection" in error_str or "network" in error_str:
+                    if attempt < max_retries:
+                        wait_time = min(45 + (attempt * 20) + random.uniform(0, 10), 180)
+                        print(f"🌐 {operation_name} Cloudflare/connection error (attempt {attempt + 1}). Waiting {wait_time:.1f}s before retry...")
+                        await asyncio.sleep(wait_time)
+                        continue
+                    else:
+                        print(f"❌ {operation_name} failed after {max_retries + 1} attempts due to Cloudflare/connection errors")
+                        raise
+
+                # For other errors, don't retry
+                print(f"❌ {operation_name} failed with non-retryable error: {str(e)}")
+                raise
+
+        raise Exception(f"{operation_name} failed after all retry attempts")
+
     async def _suggest_experiments_tree_2_node(self, state: ExperimentSuggestionState) -> ExperimentSuggestionState:
         """NEW CLEAN EXPERIMENT SUGGESTION NODE - No dual edge conflicts."""
         print("\n🌳 Clean Experiment Tree: Generating validated experiments...")
         
         try:
+            # Extract context from state FIRST (before any other operations that might fail)
             original_prompt = state.get("original_prompt", "")
+            experimental_results = state.get("experimental_results", {})
+            findings_analysis = state.get("findings_analysis", {})
+            research_context = state.get("research_context", {})
+            research_direction = state.get("research_direction", {})
+            validated_papers = state.get("experiment_papers", [])
             
             # Track iteration with clean state management
             experiment_iterations = state.get("experiment_iterations", [])
             
-            iteration_from_state = state.get("current_experiment_iteration", 0)
-        
-            iteration_from_state += 1
-           
-            current_iteration = iteration_from_state
+            # Use consistent iteration tracking like other experiment nodes
+            current_iteration = len(experiment_iterations) + 1
+            
             print(f"🐛 DEBUG _suggest_experiments_tree_2_node ITERATION NUMBER:{experiment_iterations}")
             print(f"   calculated current_iteration: {current_iteration}")
-            print(f"   iteration_from_state: {iteration_from_state}")
+            print(f"   experiment_iterations length: {len(experiment_iterations)}")
             print(f"   stored current_experiment_iteration: {state.get('current_experiment_iteration')}")
             # Extract validation feedback for improvement
             validation_feedback = ""
@@ -8638,8 +8697,7 @@ We have successfully solved {len(solved_issues_history)} categories of issues ac
             print(f"🔄 Has validation feedback: {bool(validation_feedback)}")
             
             # DEBUG: Check what papers are available in state
-            validated_papers = state.get("validated_papers", [])
-            experiment_papers = state.get("experiment_papers", [])
+            experiment_papers = state.get("experiment_papers", [])  # Get additional papers if available
             print(f"🔍 DEBUG - validated_papers count: {len(validated_papers) if validated_papers else 0}")
             print(f"🔍 DEBUG - experiment_papers count: {len(experiment_papers) if experiment_papers else 0}")
             print(f"🔍 DEBUG - validated_papers type: {type(validated_papers)}")
@@ -8660,63 +8718,30 @@ We have successfully solved {len(solved_issues_history)} categories of issues ac
                 papers_to_use = []
                 
             if papers_to_use and len(papers_to_use) > 0:
-                print(f"📚 Processing {len(papers_to_use)} papers...")
-                
-                # Extract content from each paper
-                literature_parts = []
-                for i, paper in enumerate(papers_to_use[:10], 1):  # Limit to top 10 papers to avoid token limits
-                    try:
-                        if isinstance(paper, dict):
-                            title = paper.get("title", f"Paper {i}")
-                            abstract = paper.get("summary", paper.get("abstract", ""))
-                            content = paper.get("content", "")
-                            
-                            paper_content = f"[{i}] {title}\n"
-                            if abstract:
-                                paper_content += f"Abstract: {abstract}\n"
-                            if content:
-                                paper_content += f"Content:\n{content}\n"
-                            
-                            literature_parts.append(paper_content)
-                            
-                        elif hasattr(paper, 'title') and hasattr(paper, 'summary'):
-                            # Handle paper objects with attributes
-                            title = getattr(paper, 'title', f"Paper {i}")
-                            abstract = getattr(paper, 'summary', '')
-                            content = getattr(paper, 'content', '') if hasattr(paper, 'content') else ''
-                            
-                            paper_content = f"[{i}] {title}\n"
-                            if abstract:
-                                paper_content += f"Abstract: {abstract}\n"
-                            if content:
-                                paper_content += f"Content:\n{content}\n"
-                            
-                            literature_parts.append(paper_content)
-                            
-                        else:
-                            # Fallback for unknown paper format
-                            literature_parts.append(f"[{i}] {str(paper)}\n")
-                            
-                    except Exception as e:
-                        print(f"⚠️ Error extracting content from paper {i}: {e}")
-                        literature_parts.append(f"**Paper {i}**: Content extraction failed\n")
-                
-                literature_content = "\n\n".join(literature_parts)
-                print(f"✅ Extracted {len(literature_content)} characters of literature content")
-            
-            
-            if papers_to_use and len(papers_to_use) > 0:
                 print(f"📚 Using {len(papers_to_use)} existing papers from workflow (iteration {current_iteration})")
                 
-                # Use existing papers for experiment generation
+                # Extract research direction for methodology extraction
+                selected_direction = research_direction.get("selected_direction", {})
+                direction_text = selected_direction.get("direction", "Continue current research")
+                key_questions = selected_direction.get("key_questions", [])
+                
+                # Extract methodologies from papers using cheap LLM calls (same as first path)
+                print(f"🔬 Extracting methodologies from {len(papers_to_use[:5])} papers using cheap LLM...")
+                methodologies_context = await self._extract_methodologies_from_papers(
+                    papers_to_use[:5],  # Limit to top 5 papers
+                    direction_text,
+                    key_questions
+                )
+                
+                # Use existing papers for experiment generation with extracted methodologies
                 experiment_plan = await self._generate_literature_grounded_experiments(
                     original_prompt,
-                    state.get("research_direction", {}).get("direction_text", ""),
-                    state.get("research_direction", {}).get("key_questions", []),
-                    literature_content,  # Pass the extracted literature content
-                    papers_to_use,  # Use the papers we found (validated_papers or experiment_papers)
-                    validation_feedback,
-                    current_iteration
+                    direction_text,
+                    key_questions,
+                    literature_context=methodologies_context,  # Use extracted methodologies instead of raw content
+                    validated_papers=papers_to_use,  # Use the papers we found
+                    validation_feedback=validation_feedback,
+                    current_iteration=current_iteration
                 )
                 
                 print(f"✅ Generated clean tree experiments using {len(papers_to_use)} existing papers")
@@ -8742,10 +8767,10 @@ We have successfully solved {len(solved_issues_history)} categories of issues ac
                         "format": "clean_tree_literature_grounded",
                         "methodology": "existing_papers_analysis_clean",
                         "papers_used": len(validated_papers),
-                        "iteration": iteration_from_state
+                        "iteration": current_iteration
                     },
                     "experiment_iterations": experiment_iterations,
-                    "current_experiment_iteration": iteration_from_state,
+                    "current_experiment_iteration": current_iteration,
                     "suggestion_source": "suggest_experiments_tree_2",
                     "current_step": "clean_experiments_suggested",
                     # 🆕 PRESERVE SOLVED ISSUES TRACKING
@@ -8819,47 +8844,65 @@ We have successfully solved {len(solved_issues_history)} categories of issues ac
             # Track iteration with clean state management
             experiment_iterations = state.get("experiment_iterations", [])
             
+            # Use consistent iteration tracking like generation nodes
+            current_iteration = len(experiment_iterations)
+            
             print(f"🐛 DEBUG _validate_experiments_tree_2_node ITERATION NUMBER:{experiment_iterations}")
+            print(f"   current_iteration: {current_iteration}")
+            print(f"   experiment_iterations length: {len(experiment_iterations)}")
+            print(f"   stored current_experiment_iteration: {state.get('current_experiment_iteration')}")
 
-            iteration_from_state = state.get("current_experiment_iteration", 0)
-            print(f"   iteration_from_state: {iteration_from_state}")
-
-            # Build literature context for grounding verification
+            # Build literature context using extracted methodologies (consistent with generation nodes)
             literature_context = ""
             if validated_papers and len(validated_papers) > 0:
-                print(f"📚 Building literature context from {len(validated_papers)} papers for grounding verification...")
-                
-                literature_parts = []
-                for i, paper in enumerate(validated_papers[:10], 1):
-                    try:
-                        if isinstance(paper, dict):
-                            title = paper.get("title", f"Paper {i}")
-                            abstract = paper.get("summary", paper.get("abstract", ""))
-                            content = paper.get("content", "")
-                            
-                            paper_content = f"**Paper {i}: {title}**\n"
-                            if abstract:
-                                paper_content += f"Abstract: {abstract[:500]}...\n"
-                            if content:
-                                paper_content += f"Key Content: {content[:800]}...\n"
-                            
-                            literature_parts.append(paper_content)
-                            
-                    except Exception as e:
-                        print(f"⚠️ Error extracting content from paper {i}: {e}")
-                        continue
-                
-                literature_context = "\n\n".join(literature_parts)
-                print(f"✅ Built literature context ({len(literature_context)} characters)")
+                print(f"📚 Building literature context from {len(validated_papers)} papers using extracted methodologies...")
+
+                # Extract methodologies using the same cheap LLM approach as generation nodes
+                selected_direction = research_direction.get("selected_direction", {})
+                direction_text_for_extraction = selected_direction.get("direction", "Continue current research")
+                key_questions_for_extraction = selected_direction.get("key_questions", [])
+
+                try:
+                    literature_context = await self._extract_methodologies_from_papers(
+                        validated_papers[:5],  # Limit to top 5 papers for efficiency
+                        direction_text_for_extraction,
+                        key_questions_for_extraction
+                    )
+                    print(f"✅ Built literature context using extracted methodologies ({len(literature_context)} characters)")
+                except Exception as e:
+                    print(f"⚠️ Failed to extract methodologies for validation: {e}")
+                    # Fallback to basic content extraction
+                    literature_parts = []
+                    for i, paper in enumerate(validated_papers[:5], 1):
+                        try:
+                            if isinstance(paper, dict):
+                                title = paper.get("title", f"Paper {i}")
+                                abstract = paper.get("summary", paper.get("abstract", ""))
+                                content = paper.get("content", "")
+
+                                paper_content = f"**Paper {i}: {title}**\n"
+                                if abstract:
+                                    paper_content += f"Abstract: {abstract[:300]}...\n"
+                                if content:
+                                    paper_content += f"Key Content: {content[:800]}...\n"
+
+                                literature_parts.append(paper_content)
+
+                        except Exception as e:
+                            print(f"⚠️ Error extracting content from paper {i}: {e}")
+                            continue
+
+                    literature_context = "\n\n".join(literature_parts)
+                    print(f"📝 Built fallback literature context ({len(literature_context)} characters)")
 
 
-            print(f"📊 Clean Validation - Iteration {iteration_from_state}")
+            print(f"📊 Clean Validation - Iteration {current_iteration}")
             print(f"📝 Experiment length: {len(str(experiment_suggestions))}")
             print(f"🎯 Research Direction: {direction_text[:100]}...")
             
             # Add current experiments to history
             current_experiment_record = {
-                "iteration": iteration_from_state,
+                "iteration": current_iteration,
                 "experiments": experiment_suggestions if isinstance(experiment_suggestions, str) else str(experiment_suggestions)[:500],
                 "summary": experiment_summary,
                 "timestamp": __import__('datetime').datetime.now().isoformat()
@@ -8891,7 +8934,7 @@ We have successfully solved {len(solved_issues_history)} categories of issues ac
                 LITERATURE CONTEXT FOR GROUNDING VERIFICATION:
                 {literature_context if literature_context else "No literature context available - experiments must be self-evidently grounded"}
 
-                ITERATION: {iteration_from_state}
+                ITERATION: {current_iteration}
 
                 COMPREHENSIVE VALIDATION CRITERIA (ALL MUST BE SATISFIED):
 
@@ -8986,84 +9029,21 @@ We have successfully solved {len(solved_issues_history)} categories of issues ac
                 If ANY criterion fails, the result must be FAIL. This is a zero-tolerance validation.
                 """
 
-            # Call LLM for comprehensive validation WITH STREAMING
-            print("🔄 Starting streaming validation...")
-            response_chunks = []
-            total_chars = 0
+            # Call LLM for comprehensive validation with robust timeout handling
+            print("🔄 Starting validation...")
+            print(f"📝 Validation prompt length: {len(validation_prompt)} characters")
 
-            try:
-                response = await asyncio.wait_for(
-                    asyncio.get_event_loop().run_in_executor(
-                        None,
-                        lambda: self.client.chat.completions.create(
-                            model=self.model,
-                            temperature=0.1,  # Low temperature for consistent validation
-                            messages=[
-                                {"role": "system", "content": f"You are a ruthlessly strict experimental methodology validator specializing in {primary_domain}. Provide rigorous, objective assessments in valid JSON format. Be ultra-conservative - only pass experiments that meet ALL criteria perfectly."},
-                                {"role": "user", "content": validation_prompt}
-                            ],
-                            stream=True,  # Enable streaming for timeout prevention
-                            max_tokens=4000  # Limit response length
-                        )
-                    ),
-                    timeout=260  # 4 minutes for comprehensive validation
-                )
-
-                # Process streaming chunks
-                for chunk in response:
-                    if chunk.choices[0].delta.content:
-                        chunk_content = chunk.choices[0].delta.content
-                        response_chunks.append(chunk_content)
-                        total_chars += len(chunk_content)
-
-                        # Progress indicator every 200 characters
-                        if total_chars % 200 == 0:
-                            print(f"🔍 Validation progress: {total_chars} characters...")
-
-                validation_content = ''.join(response_chunks).strip()
-
-                if not validation_content:
-                    raise ValueError("Empty validation response")
-
-                print(f"✅ Validation streaming complete! Generated {len(validation_content)} characters")
-
-            except asyncio.TimeoutError:
-                print("⏰ Validation streaming timeout - using partial response...")
-                validation_content = ''.join(response_chunks) if response_chunks else ""
-
-                if not validation_content or len(validation_content) < 100:
-                    print("❌ Insufficient validation content - creating fallback assessment")
-                    validation_content = self._create_fallback_validation(experiment_suggestions, primary_domain)
-                else:
-                    print(f"📝 Using partial validation response ({len(validation_content)} characters)")
-
-            except Exception as e:
-                print(f"❌ Validation streaming error: {str(e)}")
-                print("🔄 Falling back to non-streaming validation...")
-
-                # Fallback to non-streaming with shorter timeout
-                try:
-                    response = await asyncio.wait_for(
-                        asyncio.get_event_loop().run_in_executor(
-                            None,
-                            lambda: self.client.chat.completions.create(
-                                model=self.model,
-                                temperature=0.1,
-                                messages=[
-                                    {"role": "system", "content": f"You are a ruthlessly strict experimental methodology validator specializing in {primary_domain}. Provide rigorous, objective assessments in valid JSON format."},
-                                    {"role": "user", "content": validation_prompt[:8000]}  # Truncate for fallback
-                                ],
-                                max_tokens=2000
-                            )
-                        ),
-                        timeout=120  # 2 minutes for fallback
-                    )
-                    validation_content = response.choices[0].message.content.strip()
-                    print(f"✅ Fallback validation successful ({len(validation_content)} characters)")
-
-                except Exception as fallback_error:
-                    print(f"❌ Fallback validation also failed: {str(fallback_error)}")
-                    validation_content = self._create_fallback_validation(experiment_suggestions, primary_domain)
+            # Robust validation with Cloudflare 524 error handling
+            validation_content = await self._robust_llm_call(
+                messages=[
+                    {"role": "system", "content": f"You are a ruthlessly strict experimental methodology validator specializing in {primary_domain}. Provide rigorous, objective assessments in valid JSON format."},
+                    {"role": "user", "content": validation_prompt[:8000]}  # Truncate for safety
+                ],
+                max_tokens=4000,
+                temperature=0.1,
+                operation_name="validation",
+                max_retries=3
+            )
             
             # Parse validation result with enhanced error handling
             try:
@@ -9103,7 +9083,7 @@ We have successfully solved {len(solved_issues_history)} categories of issues ac
                 
                 if current_solved_issues:
                     solved_entry = {
-                        "iteration": iteration_from_state,
+                        "iteration": current_iteration,
                         "timestamp": __import__('datetime').datetime.now().isoformat(),
                         "solved_issues": current_solved_issues,
                         "solved_critical_issues": list(solved_critical_issues),
@@ -9130,7 +9110,7 @@ We have successfully solved {len(solved_issues_history)} categories of issues ac
                 generation_feedback_context = state.get("generation_feedback_context", "")
                 if current_solved_issues:
                     feedback_update = f"""
-🧠 LEARNED FROM VALIDATION (Iteration {iteration_from_state}):
+🧠 LEARNED FROM VALIDATION (Iteration {current_iteration}):
 ✅ SUCCESSFULLY SOLVED ISSUES ({len(current_solved_issues)}):
 {chr(10).join(f"• {issue}" for issue in current_solved_issues)}
 
@@ -9162,18 +9142,18 @@ We have successfully solved {len(solved_issues_history)} categories of issues ac
                     validation_result = "FAIL"
                 
                 # Check iteration limit (max 3 iterations to prevent infinite loops)
-                if iteration_from_state >= 3 and validation_result == "FAIL":
-                    print(f"⚠️ Maximum experiment iterations reached ({iteration_from_state}). Forcing continuation with current experiments.")
+                if current_iteration >= 3 and validation_result == "FAIL":
+                    print(f"⚠️ Maximum experiment iterations reached ({current_iteration}). Forcing continuation with current experiments.")
                     print(f"🚨 WARNING: Validation found multiple issues but forcing pass to prevent infinite loops!")
                     validation_result = "PASS"
                     validation_json["forced_pass"] = True
-                    validation_json["decision_rationale"] = f"Forced pass after {iteration_from_state} iterations to prevent infinite loop. Original validation failed due to multiple criteria violations."
+                    validation_json["decision_rationale"] = f"Forced pass after {current_iteration} iterations to prevent infinite loop. Original validation failed due to multiple criteria violations."
                 
                 # Enhanced results display
                 print("\n" + "=" * 80)
                 print("🧪 COMPREHENSIVE EXPERIMENT VALIDATION RESULTS")
                 print("=" * 80)
-                print(f"📊 Iteration: {iteration_from_state}")
+                print(f"📊 Iteration: {current_iteration}")
                 if validation_json.get("forced_pass"):
                     print(f"🎯 Validation Result: {validation_result} (⚠️ FORCED PASS - VALIDATION FAILED)")
                 else:
@@ -9213,11 +9193,11 @@ We have successfully solved {len(solved_issues_history)} categories of issues ac
                 # Determine next step
                 forced_pass = validation_json.get("forced_pass", False)
 
-                if iteration_from_state >= 3:
+                if current_iteration >= 3:
                     if forced_pass:
-                        print(f"🔄 Maximum experiment iterations reached ({iteration_from_state}). Forced pass due to iteration limit - finishing workflow despite validation issues.")
+                        print(f"🔄 Maximum experiment iterations reached ({current_iteration}). Forced pass due to iteration limit - finishing workflow despite validation issues.")
                     else:
-                        print(f"🔄 Maximum experiment iterations reached ({iteration_from_state}). Finishing workflow.")
+                        print(f"🔄 Maximum experiment iterations reached ({current_iteration}). Finishing workflow.")
                     next_node = "END"
                 elif validation_result == "PASS":
                     if forced_pass:
@@ -9226,7 +9206,7 @@ We have successfully solved {len(solved_issues_history)} categories of issues ac
                         print(f"✅ Experiment validation passed ALL criteria. Finishing workflow.")
                     next_node = "END"
                 else:
-                    print(f"❌ Experiment validation failed multiple criteria. Iterating to improve experiments (iteration {iteration_from_state + 1}).")
+                    print(f"❌ Experiment validation failed multiple criteria. Iterating to improve experiments (iteration {current_iteration + 1}).")
                     next_node = "suggest_experiments_tree_2"  # Loop back to same node
                 
                 return {
@@ -9234,7 +9214,7 @@ We have successfully solved {len(solved_issues_history)} categories of issues ac
                     "experiment_validation_results": validation_json,
                     "experiment_iterations": experiment_iterations,
                     "experiment_validation_decision": validation_result,
-                    "current_experiment_iteration": iteration_from_state,
+                    "current_experiment_iteration": current_iteration,
                     "current_step": "clean_experiments_validated",
                     "next_node": next_node,
                     # 🆕 SOLVED ISSUES TRACKING FIELDS
@@ -9268,7 +9248,7 @@ We have successfully solved {len(solved_issues_history)} categories of issues ac
                     "experiment_validation_results": fallback_validation,
                     "experiment_iterations": experiment_iterations,
                     "experiment_validation_decision": "FAIL",
-                    "current_experiment_iteration": iteration_from_state,
+                    "current_experiment_iteration": current_iteration,
                     "current_step": "clean_validation_error",
                     "next_node": "suggest_experiments_tree_2",  # Always retry on error
                     # 🆕 PRESERVE SOLVED ISSUES TRACKING ON FALLBACK
@@ -9285,7 +9265,7 @@ We have successfully solved {len(solved_issues_history)} categories of issues ac
                 "experiment_validation_results": {"validation_result": "PASS", "error": str(e)},
                 "experiment_iterations": experiment_iterations if 'experiment_iterations' in locals() else [],
                 "experiment_validation_decision": "PASS",
-                "current_experiment_iteration": iteration_from_state if 'iteration_from_state' in locals() else 1,
+                "current_experiment_iteration": current_iteration if 'current_iteration' in locals() else 1,
                 "errors": state.get("errors", []) + [f"Clean comprehensive validation error: {str(e)}"],
                 "current_step": "clean_validation_error",
                 "next_node": "END",
@@ -9591,52 +9571,20 @@ We have successfully solved {len(solved_issues_history)} categories of issues ac
             Now create your experimental roadmap:
             """
      
-        # print(experiment_prompt)  # DEBUG: Print the full prompt being sent to the LLM
+        # Use robust LLM call for experiment generation (non-streaming for reliability)
+        print("🔄 Starting experiment generation...")
+        print(f"📝 Experiment prompt length: {len(experiment_prompt)} characters")
 
-        print("🔄 Starting streaming experiment generation...")
-        response_chunks = []
-        total_chars = 0
-
-        try:
-            response = await asyncio.wait_for(
-                asyncio.get_event_loop().run_in_executor(
-                    None,
-                    lambda: self.client.chat.completions.create(
-                        model=self.model,
-                        messages=[
-                            {"role": "system", "content": "You are an expert ML researcher who generates literature-grounded experimental plans. Use markdown formatting and cite literature appropriately."},
-                            {"role": "user", "content": experiment_prompt}
-                        ],
-                        temperature=0.1,
-                        stream=True  # Enable streaming
-                    )
-                ),
-                timeout=200.0  # 3 minute timeout for experiment generation
-            )
-
-            # Process streaming response
-            for chunk in response:
-                if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
-                    content = chunk.choices[0].delta.content
-                    response_chunks.append(content)
-                    total_chars += len(content)
-                    
-                    # Print progress every 500 characters
-                    if total_chars % 500 == 0:
-                        print(f"📥 Generated {total_chars} characters...")
-
-            experiment_content = ''.join(response_chunks)
-            print(f"✅ Experiment generation completed: {total_chars} characters generated")
-            
-        except asyncio.TimeoutError:
-            print("⏰ Experiment generation timed out - using partial results")
-            experiment_content = ''.join(response_chunks)
-            if not experiment_content:
-                experiment_content = self._create_fallback_experiment_plan(original_prompt, {"selected_direction": {"direction": direction_text}})
-                
-        except Exception as e:
-            print(f"❌ Error in streaming experiment generation: {str(e)}")
-            experiment_content = self._create_fallback_experiment_plan(original_prompt, {"selected_direction": {"direction": direction_text}})
+        experiment_content = await self._robust_llm_call(
+            messages=[
+                {"role": "system", "content": "You are an expert ML researcher who generates literature-grounded experimental plans. Use markdown formatting and cite literature appropriately."},
+                {"role": "user", "content": experiment_prompt}
+            ],
+            max_tokens=6000,  # Larger token limit for experiments
+            temperature=0.1,
+            operation_name="experiment_generation",
+            max_retries=3
+        )
 
         return experiment_content.strip()    # --- EXPERIMENT TREE & FORMATTING HELPERS ---
     
