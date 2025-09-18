@@ -19,6 +19,8 @@ Usage:
 """
 
 import os
+
+from arxiv_paper_utils import ArxivPaperProcessor
 # Disable TensorFlow oneDNN optimization messages and other warnings
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Suppress all TensorFlow warnings and info messages
@@ -63,8 +65,9 @@ from tavily import TavilyClient
 
 # Local imports
 from Report_to_txt import extract_pdf_text
+from arxiv import format_search_string
 # Note: arxiv imports removed for research planning workflow - using Tavily web search instead
-
+from arxiv import explore_atom_elements  # Kept for potential XML exploration needs
 import os
 import pickle
 import faiss
@@ -285,6 +288,7 @@ class MLResearcherLangGraph:
             base_url=self.base_url
         )
         
+        
         # Initialize Tavily client for web search
         try:
             self.tavily_client = TavilyClient(api_key=self.tavily_api_key)
@@ -296,8 +300,8 @@ class MLResearcherLangGraph:
         try:
             # ArXiv processor - only needed for model suggestion workflow, not research planning
             # Research planning workflow uses Tavily web search instead
-            self.arxiv_processor = None  # Disabled for research planning optimization
-            # self.arxiv_processor = ArxivPaperProcessor(self.client, self.model_cheap)
+            #self.arxiv_processor = None  # Disabled for research planning optimization
+            self.arxiv_processor = ArxivPaperProcessor(self.client, self.model_cheap)
             print("ArXiv processor disabled for research planning workflow - using Tavily web search")
         except Exception as e:
             self.arxiv_processor = None
