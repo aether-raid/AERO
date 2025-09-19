@@ -28,13 +28,14 @@ class CodeGenState:
     generated_code: List[str] = field(default_factory=list)
     validation_results: List[Any] = field(default_factory=list)
     final_output: str = ""
-
 def extract_code_tags(text: str):
-    pattern = r"\[CODE_NEEDED(?::\s*([^\]]+))?\](?:\s*Description:\s*([^\n]+))?"
+
+    # Match [CODE_NEEDED: ...], [CODE_NEEDED] Description: ..., or [CODE_NEEDED] description
+    pattern = r"\[CODE_NEEDED(?::\s*([^\]]+))?\](?:\s*Description:\s*([^\n]+)|\s*([^\n]+))?"
     tags = []
     for m in re.finditer(pattern, text):
         full_tag = m.group(0)
-        description = m.group(1) or m.group(2) or "No description provided"
+        description = m.group(1) or m.group(2) or m.group(3) or "No description provided"
         tags.append((full_tag, description.strip()))
     return tags
 
@@ -68,11 +69,11 @@ async def extract_tags_node(state: CodeGenState) -> CodeGenState:
     state.tags = extract_code_tags(state.user_input)
     return state
 
-# Node 2: Generate code for each tag
+# Node 2: Generate code for each tag (in parallel)
 async def generate_code_node(state: CodeGenState) -> CodeGenState:
     print(f"🤖 Performing {len(state.tags)} code generation tasks...")
-    generated = []
-    for full_tag, description in state.tags:
+
+    async def generate_for_tag(full_tag, description):
         messages = [
             {"role": "system", "content": (
                 "You are a coding assistant. Generate only the minimal, essential Python code needed to execute the described steps. "
@@ -83,8 +84,11 @@ async def generate_code_node(state: CodeGenState) -> CodeGenState:
             {"role": "user", "content": f"Task: {description}\n\nGenerate only the minimal Python code required for this step. No error handling, no alternatives, no explanations, only the essential code."}
         ]
         code_snippet = await get_llm_response(messages)
-        code_snippet = strip_code_fence(code_snippet)
-        generated.append(code_snippet)
+        return strip_code_fence(code_snippet)
+
+    # Launch all code generation tasks in parallel
+    tasks = [generate_for_tag(full_tag, description) for full_tag, description in state.tags]
+    generated = await asyncio.gather(*tasks)
     state.generated_code = generated
     return state
 
@@ -132,10 +136,11 @@ async def refine_code_node(state: CodeGenState) -> CodeGenState:
     state.generated_code = refined_code
     return state
 
-# Node 5: Assemble final output
+# Node 5: Assemble final output (all code in one cell, with section comments)
 async def assemble_output_node(state: CodeGenState) -> CodeGenState:
-    output = state.user_input
-    for idx, ((full_tag, _), code, val) in enumerate(zip(state.tags, state.generated_code, state.validation_results)):
+    code_blocks = []
+    for idx, ((full_tag, description), code, val) in enumerate(zip(state.tags, state.generated_code, state.validation_results)):
+        section_comment = f"# --- {description} ---"
         validation_msg = ""
         if val["is_valid"]:
             unresolved = []
@@ -144,12 +149,13 @@ async def assemble_output_node(state: CodeGenState) -> CodeGenState:
                 if pip_comment not in code:
                     unresolved.append(mod)
             if unresolved:
-                validation_msg = f"\n\n⚠️ Missing imports: {', '.join(unresolved)}"
+                validation_msg = f"\n# ⚠️ Missing imports: {', '.join(unresolved)}"
         else:
-            validation_msg = f"\n\n❌ Code validation failed: {val['error']}"
-        replacement = f"\n\n```python\n{code}\n```\n{validation_msg}"
-        output = output.replace(full_tag, replacement, 1)
-    state.final_output = output
+            validation_msg = f"\n# ❌ Code validation failed: {val['error']}"
+        code_block = f"{section_comment}\n{code}{validation_msg}"
+        code_blocks.append(code_block)
+    # Join all code blocks into one code cell
+    state.final_output = f"```python\n" + "\n\n".join(code_blocks) + "\n```"
     return state
 
 # Conditional: If any errors or missing imports, refine; else assemble
