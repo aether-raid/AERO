@@ -63,7 +63,8 @@ from tavily import TavilyClient
 # Local imports
 from Report_to_txt import extract_pdf_text
 # Note: arxiv imports removed for research planning workflow - using Tavily web search instead
-
+from arxiv import format_search_string
+from arxiv import explore_atom_elements  # For XML exploration if needed
 import os
 import pickle
 import faiss
@@ -194,6 +195,12 @@ class PaperWritingState(BaseState):
     template_config: Dict[str, Any]           # Selected template settings
     section_content: Dict[str, str]           # Content by section
     formatted_paper: str                      # Complete formatted paper
+    
+    # Source collection and citations (Tavily integration)
+    supporting_sources: List[Dict[str, Any]]  # Sources found via Tavily search
+    citation_database: Dict[str, Any]         # Organized citations by topic/section
+    source_search_queries: List[str]          # Queries used for source discovery
+    source_validation_results: Dict[str, Any] # Quality assessment of found sources
     
     # Quality control
     critique_results: Dict[str, Any]          # AI feedback (for future use)
@@ -672,14 +679,16 @@ class MLResearcherLangGraph:
         # Add nodes for paper writing pipeline
         workflow.add_node("analyze_results", self._analyze_results_node)
         workflow.add_node("setup_paper", self._setup_paper_node)
+        workflow.add_node("find_sources", self._find_supporting_sources_node)  # New Tavily-powered node
         workflow.add_node("generate_content", self._generate_content_node)
         workflow.add_node("format_paper", self._format_paper_node)
         workflow.add_node("finalize_paper", self._finalize_paper_node)
         
-        # Define the linear flow (no critique for now)
+        # Define the enhanced flow with source finding
         workflow.set_entry_point("analyze_results")
         workflow.add_edge("analyze_results", "setup_paper")
-        workflow.add_edge("setup_paper", "generate_content")
+        workflow.add_edge("setup_paper", "find_sources")        # Find sources before content generation
+        workflow.add_edge("find_sources", "generate_content")   # Use sources during content generation
         workflow.add_edge("generate_content", "format_paper")
         workflow.add_edge("format_paper", "finalize_paper")
         workflow.add_edge("finalize_paper", END)
@@ -1455,6 +1464,11 @@ class MLResearcherLangGraph:
             print(f"📚 Preserving {len(existing_papers)} papers from previous search")
         
         try:
+            # Import required modules for ArXiv search
+            import urllib.request as libreq
+            import xml.etree.ElementTree as ET
+            from arxiv import format_search_string
+            
             search_query = state["arxiv_search_query"]
             original_prompt = state["original_prompt"]
             
@@ -4744,6 +4758,86 @@ Provide the complete refined research plan:
                 }
             }
             
+        elif workflow_decision == "paper_writing":
+            print("\n📝 STEP 2: EXECUTING PAPER WRITING WORKFLOW")
+            print("=" * 50)
+            
+            # Initialize paper writing state
+            paper_state: PaperWritingState = {
+                "messages": [HumanMessage(content=user_query)],
+                "original_prompt": user_query,
+                "uploaded_data": uploaded_data,
+                "experimental_results": {},  # Could be extracted from uploaded data
+                "research_analysis": {},
+                "paper_structure": {},
+                "template_config": {},
+                "section_content": {},
+                "formatted_paper": "",
+                "final_outputs": {},
+                "target_venue": "general",
+                
+                # Tavily integration fields
+                "supporting_sources": [],
+                "citation_database": {},
+                "source_search_queries": [],
+                "source_validation_results": {},
+                
+                "current_step": "",
+                "errors": [],
+                "workflow_type": "paper_writing"
+            }
+            
+            # Run the paper writing workflow
+            final_paper_state = await self.paper_writing_graph.ainvoke(paper_state)
+            
+            # Extract Tavily-enhanced content
+            formatted_paper = final_paper_state.get("formatted_paper", "")
+            supporting_sources = final_paper_state.get("supporting_sources", [])
+            citation_database = final_paper_state.get("citation_database", {})
+            source_validation = final_paper_state.get("source_validation_results", {})
+            
+            # Ensure we have a string output for the frontend (similar to research_plan)
+            if not formatted_paper.strip():
+                formatted_paper = "No paper content generated."
+            
+            # Compile results with enhanced Tavily integration details
+            results = {
+                "workflow_type": "paper_writing",
+                "router_decision": {
+                    "decision": final_router_state["routing_decision"],
+                    "confidence": final_router_state["routing_confidence"],
+                    "reasoning": final_router_state["routing_reasoning"]
+                },
+                "original_prompt": final_paper_state["original_prompt"],
+                "research_analysis": final_paper_state.get("research_analysis", {}),
+                "paper_structure": final_paper_state.get("paper_structure", {}),
+                "research_plan": formatted_paper,  # Use same field name as research planning for frontend compatibility
+                "formatted_paper": formatted_paper,  # Keep original field for internal use
+                "final_outputs": final_paper_state.get("final_outputs", {}),
+                
+                # Tavily integration results
+                "supporting_sources": supporting_sources,
+                "citation_database": citation_database,
+                "source_validation_results": source_validation,
+                "source_search_queries": final_paper_state.get("source_search_queries", []),
+                
+                "errors": final_router_state["errors"] + final_paper_state["errors"],
+                "summary": {
+                    "workflow_used": "Tavily-Enhanced Paper Writing Pipeline",
+                    "analysis_successful": bool(final_paper_state.get("research_analysis", {})),
+                    "structure_created": bool(final_paper_state.get("paper_structure", {})),
+                    "content_generated": bool(final_paper_state.get("section_content", {})),
+                    "paper_formatted": bool(formatted_paper.strip()),
+                    "paper_finalized": bool(final_paper_state.get("final_outputs", {})),
+                    "sources_found": len(supporting_sources),
+                    "citations_integrated": sum(len(sources) for sources in citation_database.values()),
+                    "sections_with_sources": len(citation_database),
+                    "academic_sources_used": len([s for s in supporting_sources if any(domain in s.get('url', '').lower() for domain in ['arxiv.org', 'doi.org', 'ieee.org', 'acm.org'])]),
+                    "total_errors": len(final_router_state["errors"]) + len(final_paper_state["errors"]),
+                    "tavily_integration_successful": len(supporting_sources) > 0
+                }
+            }
+            
         else:
             # Unknown workflow decision
             results = {
@@ -4863,13 +4957,71 @@ Provide the complete refined research plan:
     # ==================================================================================
     
     async def _analyze_results_node(self, state: PaperWritingState) -> PaperWritingState:
-        """Node for analyzing experimental results and research context."""
+        """Node for analyzing experimental results and research context, including uploaded file data."""
         print("\n📊 Paper Writing: Analyzing experimental results and research context...")
         
         try:
             # Extract research context from the original prompt and any provided data
             original_prompt = state.get("original_prompt", "")
             experimental_results = state.get("experimental_results", {})
+            uploaded_data = state.get("uploaded_data", [])
+            
+            # Process uploaded file data
+            uploaded_context = ""
+            data_analysis = ""
+            
+            if uploaded_data:
+                print(f"📎 Processing {len(uploaded_data)} uploaded files...")
+                uploaded_context = "\n\nUPLOADED FILE DATA:\n"
+                
+                for i, file_content in enumerate(uploaded_data, 1):
+                    # Extract file info from the formatted content
+                    if file_content.startswith('[CSV:'):
+                        file_info = file_content.split('\n')[0]
+                        csv_data = '\n'.join(file_content.split('\n')[1:])
+                        uploaded_context += f"\n{file_info}\n"
+                        
+                        # Analyze CSV data structure
+                        lines = csv_data.strip().split('\n')
+                        if len(lines) > 1:
+                            headers = lines[0].split(',')
+                            data_rows = len(lines) - 1
+                            uploaded_context += f"Headers: {', '.join(headers[:10])}{'...' if len(headers) > 10 else ''}\n"
+                            uploaded_context += f"Data rows: {data_rows}\n"
+                            uploaded_context += f"Sample data:\n{chr(10).join(lines[1:4])}\n"
+                            
+                            data_analysis += f"CSV file with {len(headers)} columns, {data_rows} rows. "
+                    
+                    elif file_content.startswith('[XLSX:'):
+                        file_info = file_content.split('\n')[0]
+                        xlsx_data = '\n'.join(file_content.split('\n')[1:])
+                        uploaded_context += f"\n{file_info}\n"
+                        
+                        # Analyze Excel data
+                        lines = xlsx_data.strip().split('\n')
+                        if len(lines) > 1:
+                            headers = lines[0].split(',')
+                            data_rows = len(lines) - 1
+                            uploaded_context += f"Headers: {', '.join(headers[:10])}{'...' if len(headers) > 10 else ''}\n"
+                            uploaded_context += f"Data rows: {data_rows}\n"
+                            
+                            data_analysis += f"Excel sheet with {len(headers)} columns, {data_rows} rows. "
+                    
+                    elif file_content.startswith('[DOCX:'):
+                        file_info = file_content.split('\n')[0] 
+                        doc_text = '\n'.join(file_content.split('\n')[1:])
+                        uploaded_context += f"\n{file_info}\n"
+                        uploaded_context += f"Document content preview:\n{doc_text[:500]}{'...' if len(doc_text) > 500 else ''}\n"
+                        
+                        data_analysis += f"Document with {len(doc_text)} characters. "
+                    
+                    else:
+                        uploaded_context += f"\nFile {i}: {file_content[:200]}{'...' if len(file_content) > 200 else ''}\n"
+                        data_analysis += f"Additional file data. "
+                
+                print(f"📋 Processed file data: {data_analysis}")
+            else:
+                print("📝 No uploaded files to process")
             
             analysis_prompt = f"""
             Analyze the following experimental results and research context to prepare for paper writing:
@@ -4878,13 +5030,22 @@ Provide the complete refined research plan:
             
             Experimental Results: {experimental_results if experimental_results else "No structured experimental data provided"}
             
+            {uploaded_context}
+            
+            Data Analysis Summary: {data_analysis if data_analysis else "No uploaded data files"}
+            
             Please analyze and extract:
             1. Research Type: (experimental, theoretical, survey, case study)
             2. Domain: (machine learning, computer vision, NLP, etc.)
-            3. Key Findings: Main experimental results and insights
-            4. Data Types: (tables, figures, metrics, code, datasets)
-            5. Contributions: Novel aspects and significance
+            3. Key Findings: Main experimental results and insights from uploaded data
+            4. Data Types: (tables, figures, metrics, code, datasets, documents)
+            5. Contributions: Novel aspects and significance based on data
             6. Research Context: Background and motivation
+            7. Data Description: Summary of uploaded files and their relevance
+            8. Methodology: Approach used based on available data
+            
+            If uploaded files contain experimental data (CSV/Excel), extract specific metrics, results, and findings.
+            If uploaded documents exist, summarize their research content and relevance.
             
             Respond with a JSON object containing this analysis.
             """
@@ -4911,29 +5072,52 @@ Provide the complete refined research plan:
                 if start != -1 and end != -1:
                     analysis_json = json.loads(analysis_text[start:end])
                 else:
-                    # Fallback: create basic analysis
+                    # Fallback: create basic analysis with uploaded data context
+                    data_types = ["text"]
+                    if uploaded_data:
+                        if any('[CSV:' in data for data in uploaded_data):
+                            data_types.append("tables")
+                        if any('[XLSX:' in data for data in uploaded_data):
+                            data_types.append("spreadsheets")
+                        if any('[DOCX:' in data for data in uploaded_data):
+                            data_types.append("documents")
+                    
                     analysis_json = {
-                        "research_type": "experimental",
+                        "research_type": "experimental" if uploaded_data else "theoretical",
                         "domain": "machine learning",
-                        "key_findings": "Experimental results analysis",
-                        "data_types": ["text"],
+                        "key_findings": data_analysis if data_analysis else "Experimental results analysis",
+                        "data_types": data_types,
                         "contributions": ["Novel approach"],
-                        "research_context": original_prompt
+                        "research_context": original_prompt,
+                        "data_description": f"Analysis of {len(uploaded_data)} uploaded files" if uploaded_data else "No uploaded files",
+                        "methodology": "Data-driven analysis" if uploaded_data else "Theoretical approach"
                     }
             except:
-                # Fallback analysis
+                # Fallback analysis with uploaded data awareness
+                data_types = ["text"]
+                if uploaded_data:
+                    if any('[CSV:' in data for data in uploaded_data):
+                        data_types.append("tables")
+                    if any('[XLSX:' in data for data in uploaded_data):
+                        data_types.append("spreadsheets")
+                    if any('[DOCX:' in data for data in uploaded_data):
+                        data_types.append("documents")
+                
                 analysis_json = {
-                    "research_type": "experimental",
+                    "research_type": "experimental" if uploaded_data else "theoretical",
                     "domain": "machine learning", 
-                    "key_findings": "Experimental results analysis",
-                    "data_types": ["text"],
+                    "key_findings": data_analysis if data_analysis else "Experimental results analysis",
+                    "data_types": data_types,
                     "contributions": ["Novel approach"],
-                    "research_context": original_prompt
+                    "research_context": original_prompt,
+                    "data_description": f"Analysis of {len(uploaded_data)} uploaded files" if uploaded_data else "No uploaded files",
+                    "methodology": "Data-driven analysis" if uploaded_data else "Theoretical approach"
                 }
             
             return {
                 **state,
                 "research_analysis": analysis_json,
+                "research_context": analysis_json.get("research_context", original_prompt),  # Ensure research_context is available for Tavily
                 "current_step": "results_analyzed"
             }
             
@@ -5071,55 +5255,333 @@ Provide the complete refined research plan:
                 "errors": state.get("errors", []) + [f"Setup error: {str(e)}"],
                 "current_step": "setup_error"
             }
+
+    async def _find_supporting_sources_node(self, state: PaperWritingState) -> PaperWritingState:
+        """🔍 Find supporting sources and citations using Tavily web search, enhanced with uploaded file context."""
+        print("\n🔍 Step: Finding supporting sources and citations...")
+        
+        try:
+            # Check if Tavily client is available
+            if not hasattr(self, 'tavily_client') or self.tavily_client is None:
+                print("⚠️ Tavily client not initialized. Skipping source finding.")
+                return {
+                    **state,
+                    "supporting_sources": [],
+                    "citation_database": {},
+                    "source_search_queries": [],
+                    "current_step": "sources_skipped"
+                }
+            
+            # Extract research context and analysis
+            research_analysis = state.get("research_analysis", {})
+            experimental_results = state.get("experimental_results", {})
+            paper_structure = state.get("paper_structure", {})
+            research_context = state.get("research_context", "")
+            uploaded_data = state.get("uploaded_data", [])
+            
+            # Extract file-specific context for enhanced search queries
+            file_context = ""
+            if uploaded_data:
+                print(f"📎 Incorporating {len(uploaded_data)} uploaded files into search strategy...")
+                
+                # Extract key terms and context from uploaded files
+                csv_keywords = []
+                doc_keywords = []
+                
+                for file_content in uploaded_data:
+                    if '[CSV:' in file_content or '[XLSX:' in file_content:
+                        # Extract column headers as potential search terms
+                        lines = file_content.split('\n')
+                        if len(lines) > 1:
+                            headers = lines[1].split(',') if len(lines) > 1 else []
+                            csv_keywords.extend([h.strip().replace('"', '') for h in headers[:10]])
+                    
+                    elif '[DOCX:' in file_content:
+                        # Extract key phrases from document content
+                        doc_text = '\n'.join(file_content.split('\n')[1:])
+                        # Simple keyword extraction (could be enhanced)
+                        words = doc_text.lower().split()
+                        # Look for technical terms (longer words, mixed case)
+                        doc_keywords.extend([w for w in words if len(w) > 6 and any(c.isupper() for c in w)])
+                
+                if csv_keywords:
+                    file_context += f" Data includes metrics: {', '.join(csv_keywords[:8])}"
+                if doc_keywords:
+                    file_context += f" Document keywords: {', '.join(doc_keywords[:8])}"
+            
+            # Generate search queries based on research content
+            key_findings = research_analysis.get("key_findings", [])
+            methodology = research_analysis.get("methodology", "")
+            domain_context = research_analysis.get("domain_analysis", {})
+            data_description = research_analysis.get("data_description", "")
+            
+            # Create targeted search queries for citations
+            search_queries = []
+            
+            # Query 1: Background and related work (enhanced with file context)
+            domain = domain_context.get("primary_domain") if isinstance(domain_context, dict) else research_analysis.get("domain", "machine learning")
+            background_query = f"{domain} recent advances state of the art{file_context}"
+            search_queries.append({
+                "query": background_query,
+                "purpose": "background_literature",
+                "section": "introduction_related_work"
+            })
+            
+            # Query 2: Methodology and techniques (enhanced with data types)
+            method_context = methodology or research_analysis.get("research_type", "experimental")
+            if uploaded_data:
+                method_context += f" {data_description}"
+            method_query = f"{method_context} methodology techniques recent papers"
+            search_queries.append({
+                "query": method_query,
+                "purpose": "methodology_validation", 
+                "section": "methodology"
+            })
+            
+            # Query 3: Results validation and comparison (enhanced with findings)
+            findings_text = key_findings if isinstance(key_findings, str) else ' '.join(key_findings) if key_findings else research_analysis.get("key_findings", "")
+            if file_context:
+                findings_text += file_context
+            findings_query = f"{findings_text} results comparison evaluation"
+            search_queries.append({
+                "query": findings_query,
+                "purpose": "results_validation",
+                "section": "results_discussion"
+            })
+            
+            # Query 4: Data-specific search (if files uploaded)
+            if uploaded_data:
+                data_query = f"{research_context} {data_description} dataset analysis"
+                search_queries.append({
+                    "query": data_query,
+                    "purpose": "data_validation",
+                    "section": "data_analysis"
+                })
+            else:
+                # General domain research (fallback)
+                context_query = f"{research_context[:100]} recent research papers"
+                search_queries.append({
+                    "query": context_query,
+                    "purpose": "general_context",
+                    "section": "general"
+                })
+            
+            # Perform Tavily searches
+            all_sources = []
+            citation_database = {}
+            
+            print(f"🔍 Performing {len(search_queries)} targeted searches for citations...")
+            
+            for i, search_item in enumerate(search_queries[:4]):  # Limit to 4 searches
+                query = search_item["query"]
+                purpose = search_item["purpose"]
+                section = search_item["section"]
+                
+                try:
+                    print(f"   📚 Search {i+1}: {purpose} - {query[:50]}...")
+                    
+                    # Execute Tavily search
+                    search_response = await asyncio.get_event_loop().run_in_executor(
+                        None,
+                        lambda q=query: self.tavily_client.search(q, max_results=8)
+                    )
+                    
+                    if search_response and "results" in search_response:
+                        sources_found = 0
+                        for result in search_response["results"]:
+                            # Extract citation information
+                            source_info = {
+                                "title": result.get("title", ""),
+                                "url": result.get("url", ""),
+                                "content": result.get("content", "")[:500],  # Limit content
+                                "published_date": result.get("published_date", ""),
+                                "purpose": purpose,
+                                "section": section,
+                                "relevance_score": result.get("score", 0.5),
+                                "search_query": query
+                            }
+                            
+                            # Filter for academic/research sources
+                            url_lower = source_info["url"].lower()
+                            title_lower = source_info["title"].lower()
+                            
+                            # Prioritize academic sources
+                            is_academic = any(domain in url_lower for domain in [
+                                'arxiv.org', 'doi.org', 'ieee.org', 'acm.org', 'springer.com',
+                                'elsevier.com', 'nature.com', 'science.org', 'plos.org'
+                            ])
+                            
+                            # Check if content seems research-related
+                            has_research_keywords = any(keyword in title_lower for keyword in [
+                                'research', 'study', 'analysis', 'method', 'algorithm',
+                                'evaluation', 'experiment', 'approach', 'framework'
+                            ])
+                            
+                            if is_academic or has_research_keywords:
+                                all_sources.append(source_info)
+                                sources_found += 1
+                                
+                                # Organize by section for easy citation
+                                if section not in citation_database:
+                                    citation_database[section] = []
+                                citation_database[section].append(source_info)
+                        
+                        print(f"   ✅ Found {sources_found} relevant sources for {purpose}")
+                    
+                except Exception as e:
+                    print(f"   ❌ Search failed for {purpose}: {str(e)}")
+                    continue
+            
+            # Summary
+            total_sources = len(all_sources)
+            sections_with_sources = len(citation_database)
+            
+            print(f"🎯 Source finding complete:")
+            print(f"   📚 Total sources found: {total_sources}")
+            print(f"   📋 Sections with sources: {sections_with_sources}")
+            print(f"   🔍 Search queries used: {len(search_queries)}")
+            
+            return {
+                **state,
+                "supporting_sources": all_sources,
+                "citation_database": citation_database,
+                "source_search_queries": [sq["query"] for sq in search_queries],
+                "source_validation_results": {
+                    "total_sources": total_sources,
+                    "sections_covered": list(citation_database.keys()),
+                    "search_success_rate": sections_with_sources / len(search_queries) if search_queries else 0
+                },
+                "current_step": "sources_found"
+            }
+            
+        except Exception as e:
+            print(f"❌ Error in find_supporting_sources_node: {str(e)}")
+            return {
+                **state,
+                "errors": state.get("errors", []) + [f"Source finding error: {str(e)}"],
+                "supporting_sources": [],
+                "citation_database": {},
+                "current_step": "source_finding_error"
+            }
     
     async def _generate_content_node(self, state: PaperWritingState) -> PaperWritingState:
-        """Node for generating content for each paper section."""
-        print("\n✍️ Paper Writing: Generating content for each section...")
+        """Node for generating content for each paper section with Tavily-sourced citations."""
+        print("\n✍️ Paper Writing: Generating content with citations for each section...")
         
         try:
             research_analysis = state.get("research_analysis", {})
             paper_structure = state.get("paper_structure", {})
             experimental_results = state.get("experimental_results", {})
             
+            # Get Tavily-sourced citations and supporting sources
+            supporting_sources = state.get("supporting_sources", [])
+            citation_database = state.get("citation_database", {})
+            source_validation = state.get("source_validation_results", {})
+            
             sections = paper_structure.get("sections", [])
             section_content = {}
+            
+            print(f"📚 Using {len(supporting_sources)} sources for citations across {len(citation_database)} sections")
             
             for section in sections:
                 section_name = section.get("name", "Unknown")
                 section_focus = section.get("focus", "general")
                 section_length = section.get("length", "1 page")
                 
-                print(f"📝 Generating {section_name} section...")
+                print(f"📝 Generating {section_name} section with citations...")
+                
+                # Find relevant sources for this section
+                section_sources = []
+                section_key = section_name.lower().replace(" ", "_")
+                
+                # Look for section-specific sources
+                for source_key, sources in citation_database.items():
+                    if (section_key in source_key.lower() or 
+                        section_focus in source_key.lower() or
+                        source_key == "general"):
+                        section_sources.extend(sources[:3])  # Limit to 3 sources per category
+                
+                # If no specific sources, use general sources
+                if not section_sources and supporting_sources:
+                    section_sources = supporting_sources[:4]  # Use first 4 general sources
+                
+                # Prepare citation context for LLM
+                citations_context = ""
+                if section_sources:
+                    citations_context = "\n\nAVAILABLE SOURCES FOR CITATION:\n"
+                    for i, source in enumerate(section_sources[:5], 1):  # Limit to 5 sources max
+                        citations_context += f"\n[{i}] {source.get('title', 'Unknown Title')}\n"
+                        citations_context += f"    URL: {source.get('url', 'No URL')}\n"
+                        citations_context += f"    Content: {source.get('content', '')[:200]}...\n"
+                        citations_context += f"    Relevance: {source.get('purpose', 'general')}\n"
+                    
+                    citations_context += "\n📝 CITATION INSTRUCTIONS:\n"
+                    citations_context += "- Reference sources using [1], [2], etc. format\n"
+                    citations_context += "- Use citations to support claims, methods, and comparisons\n"
+                    citations_context += "- Integrate citations naturally into the text\n"
+                    citations_context += "- Prioritize academic and research sources\n"
                 
                 content_prompt = f"""
-                Write the {section_name} section for an academic research paper.
-                
-                Research Context: {research_analysis}
-                Experimental Results: {experimental_results}
-                Section Focus: {section_focus}
-                Target Length: {section_length}
-                
-                Guidelines:
-                - Use formal academic tone
-                - Include specific details from the research
-                - Follow standard academic writing conventions
-                - Make it publication-ready
-                
-                Write a complete {section_name} section:
+Write the {section_name} section for an academic research paper with proper citations.
+
+**Research Context**: {research_analysis}
+
+**Experimental Results**: {experimental_results}
+
+**Section Focus**: {section_focus}
+**Target Length**: {section_length}
+
+{citations_context}
+
+**Guidelines:**
+- Use formal academic tone appropriate for {section_name}
+- Include specific details from the research
+- Follow standard academic writing conventions
+- Make it publication-ready
+- Integrate citations naturally to support claims
+- Use [1], [2], etc. format for in-text citations
+- Ensure claims are backed by appropriate sources
+
+Write a complete {section_name} section with integrated citations:
                 """
                 
                 response = await asyncio.get_event_loop().run_in_executor(
                     None,
-                    lambda p=content_prompt: self.client.chat.completions.create(
+                    lambda: self.client.chat.completions.create(
                         model=self.model,
-                        messages=[{"role": "user", "content": p}],
-                        temperature=0.4
+                        messages=[
+                            {"role": "system", "content": "You are an expert academic writer specializing in research papers with proper citation integration."},
+                            {"role": "user", "content": content_prompt}
+                        ],
+                        temperature=0.3
                     )
                 )
                 
                 section_text = response.choices[0].message.content.strip()
                 section_content[section_name] = section_text
-                print(f"✅ {section_name} section generated ({len(section_text)} chars)")
+                
+                # Track which sources were used
+                used_citations = []
+                for i, source in enumerate(section_sources[:5], 1):
+                    if f"[{i}]" in section_text:
+                        used_citations.append(source)
+                
+                print(f"   ✅ Generated {section_name} ({len(section_text)} chars, {len(used_citations)} citations)")
+            
+            # Generate reference list from all used sources
+            reference_list = self._generate_reference_list(supporting_sources)
+            if reference_list:
+                section_content["References"] = reference_list
+                print(f"📚 Generated References section with {len(supporting_sources)} sources")
+            
+            total_sources_used = len([s for s in supporting_sources if any(
+                f"[{i}]" in content for i, content in enumerate(section_content.values(), 1)
+            )])
+            
+            print(f"🎯 Content generation complete:")
+            print(f"   📝 Sections written: {len(section_content)}")
+            print(f"   📚 Sources integrated: {total_sources_used}/{len(supporting_sources)}")
+            print(f"   🔗 Citation coverage: {source_validation.get('search_success_rate', 0):.1%}")
             
             return {
                 **state,
@@ -5132,26 +5594,49 @@ Provide the complete refined research plan:
             return {
                 **state,
                 "errors": state.get("errors", []) + [f"Content generation error: {str(e)}"],
-                "current_step": "content_error"
+                "current_step": "content_generation_error"
             }
+
+    def _generate_reference_list(self, sources: List[Dict[str, Any]]) -> str:
+        """Generate a properly formatted reference list from Tavily sources."""
+        if not sources:
+            return ""
+        
+        references = []
+        for i, source in enumerate(sources, 1):
+            title = source.get('title', 'Unknown Title')
+            url = source.get('url', '')
+            published_date = source.get('published_date', '')
+            
+            # Basic citation format (could be enhanced for specific styles)
+            if published_date:
+                ref = f"[{i}] {title}. {published_date}. Available: {url}"
+            else:
+                ref = f"[{i}] {title}. Available: {url}"
+            
+            references.append(ref)
+        
+        return "## References\n\n" + "\n\n".join(references)
     
     async def _format_paper_node(self, state: PaperWritingState) -> PaperWritingState:
-        """Node for formatting the paper according to template requirements."""
-        print("\n📄 Paper Writing: Formatting paper...")
+        """Node for formatting the paper according to template requirements with enhanced citation support."""
+        print("\n📄 Paper Writing: Formatting paper with citations...")
         
         try:
             section_content = state.get("section_content", {})
             template_config = state.get("template_config", {})
             research_analysis = state.get("research_analysis", {})
+            supporting_sources = state.get("supporting_sources", [])
+            source_validation = state.get("source_validation_results", {})
             
             # Combine all sections into a complete paper
             paper_parts = []
             
-            # Add title
+            # Add title with enhanced metadata
             title = f"Research Paper: {research_analysis.get('research_context', 'Untitled Research')[:80]}"
             paper_parts.append(f"# {title}\n")
             
-            # Add venue info
+            # Add venue info and citation summary
             venue = template_config.get("venue", "General")
             format_type = template_config.get("format", "academic")
             page_limit = template_config.get("page_limit", 8)
@@ -5159,10 +5644,16 @@ Provide the complete refined research plan:
             paper_parts.append(f"**Target Venue**: {venue}")
             paper_parts.append(f"**Format**: {format_type}")
             paper_parts.append(f"**Page Limit**: {page_limit} pages")
+            
+            # Add source summary
+            if supporting_sources:
+                paper_parts.append(f"**Citations**: {len(supporting_sources)} sources integrated")
+                paper_parts.append(f"**Research Coverage**: {source_validation.get('search_success_rate', 0):.1%}")
+            
             paper_parts.append("\n\n")
             
-            # Add each section
-            section_order = ["Abstract", "Introduction", "Related Work", "Methods", "Results", "Discussion", "Conclusion"]
+            # Add each section in proper order
+            section_order = ["Abstract", "Introduction", "Related Work", "Methods", "Results", "Discussion", "Conclusion", "References"]
             
             for section_name in section_order:
                 if section_name in section_content:
@@ -5177,9 +5668,29 @@ Provide the complete refined research plan:
                     paper_parts.append(content)
                     paper_parts.append("\n\n")
             
+            # Add source metadata footer
+            if supporting_sources:
+                paper_parts.append("---\n\n")
+                paper_parts.append("## Source Metadata\n\n")
+                paper_parts.append(f"This paper was enhanced with {len(supporting_sources)} sources ")
+                paper_parts.append(f"found through Tavily web search across {len(source_validation.get('sections_covered', []))} research areas.\n\n")
+                
+                # Add search queries used
+                search_queries = state.get("source_search_queries", [])
+                if search_queries:
+                    paper_parts.append("**Search Queries Used:**\n")
+                    for i, query in enumerate(search_queries, 1):
+                        paper_parts.append(f"{i}. {query}\n")
+                    paper_parts.append("\n")
+            
             formatted_paper = "".join(paper_parts)
             
-            print(f"✅ Paper formatted ({len(formatted_paper)} characters)")
+            total_citations = len([line for line in formatted_paper.split('\n') if '[' in line and ']' in line])
+            
+            print(f"✅ Paper formatted:")
+            print(f"   📄 Total length: {len(formatted_paper)} characters")
+            print(f"   📚 Citations integrated: {total_citations}")
+            print(f"   📋 Sections included: {len(section_content)}")
             
             return {
                 **state,

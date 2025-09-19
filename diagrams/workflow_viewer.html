@@ -97,37 +97,56 @@ graph TB
         
         C -->|🔍 Model Query| D[📊 Model Suggestion Pipeline]
         C -->|🔬 Research Query| E[🧪 Research Planning Pipeline]
+        C -->|📝 Paper Writing| F[📝 Paper Writing Pipeline]
+        C -->|🧪 Experiment Ideas| G[🧪 Experiment Suggestion Pipeline]
+        C -->|⚗️ Design Request| H[⚗️ Experiment Design Pipeline]
     end
     
     subgraph "📊 Model Suggestion Workflow"
         D --> D1[📚 Literature Search<br/>arXiv Papers]
         D1 --> D2[🧠 Domain Analysis<br/>Current State]
         D2 --> D3[💡 Model Recommendations<br/>Architecture Guidance]
-        D3 --> D4[📋 Structured Output<br/>Implementation Guide]
     end
     
-    subgraph "🧪 Research Planning Workflow (Iterative)"
-        E --> E1[🎯 Problem Generation<br/>Novel Research Questions]
-        E1 --> E2[✅ Problem Validation<br/>Novelty Assessment]
-        E2 --> E3{🤔 Accept Problem?<br/>Open vs Solved}
-        E3 -->|✅ Accept| E4[📥 Problem Collection<br/>Build Validated Set]
-        E3 -->|❌ Reject| E1
-        E4 --> E5{📊 Sufficient Problems?<br/>Target: 3+ Problems}
-        E5 -->|❌ Need More| E1
-        E5 -->|✅ Ready| E6[📋 Research Plan Creation<br/>Comprehensive Strategy]
+    subgraph "🧪 Research Planning Workflow (Streamlined)"
+        E --> E1[🎯 Problem Generation<br/>Single High-Quality Problem]
+        E1 --> E2[✅ Tavily Validation<br/>Novelty Check]
+        E2 --> E3[📋 Auto Research Plan<br/>Direct Generation]
     end
     
-    subgraph "🎯 System Features"
-        F1[🔄 Intelligent Routing<br/>Confidence Scoring]
-        F2[📚 Real-time Literature<br/>Analysis & Search]
-        F3[🔍 Iterative Validation<br/>Problem Novelty Check]
-        F4[📊 Structured Outputs<br/>JSON Results]
-        F5[⚡ Error Handling<br/>Graceful Recovery]
-        F6[🧠 LLM Integration<br/>Advanced Analysis]
+    subgraph "📝 Paper Writing Workflow (Tavily-Enhanced)"
+        F --> F1[📊 Analyze Results<br/>+ File Processing]
+        F1 --> F2[� Tavily Source Search<br/>Academic Citations]
+        F2 --> F3[✍️ Generate Content<br/>With Citations [1],[2],[3]]
+        F3 --> F4[📄 Format Paper<br/>+ Reference List]
     end
     
-    D4 --> G[📤 Final Results<br/>Model Recommendations]
-    E6 --> H[📤 Final Results<br/>Research Plan]
+    subgraph "🧪 Experiment Suggestion Workflow"
+        G --> G1[📊 Analyze Findings<br/>Research Results]
+        G1 --> G2[🎯 Research Direction<br/>Focus Areas]
+        G2 --> G3[💡 Experiment Ideas<br/>Follow-up Studies]
+    end
+    
+    subgraph "⚗️ Experiment Design Workflow"
+        H --> H1[🧠 Design Concepts<br/>Experimental Setup]
+        H1 --> H2[⚙️ Implementation<br/>Code & Details]
+        H2 --> H3[📋 Complete Design<br/>Ready to Execute]
+    end
+    
+    subgraph "🎯 Enhanced System Features"
+        I1[🔄 Intelligent Routing<br/>5 Workflow Types]
+        I2[📚 Tavily Web Search<br/>Real-time Sources]
+        I3[📎 File Processing<br/>CSV/Excel/DOCX Support]
+        I4[🔍 Citation Integration<br/>Academic References]
+        I5[📊 Structured Outputs<br/>Frontend Compatible]
+        I6[🧠 Multi-LLM Support<br/>Advanced Analysis]
+    end
+    
+    D3 --> J1[📤 Model Recommendations]
+    E3 --> J2[📤 Research Plan]
+    F4 --> J3[📤 Research Paper<br/>with Citations]
+    G3 --> J4[📤 Experiment Suggestions]
+    H3 --> J5[📤 Experiment Design<br/>with Code]
     
     %% Styling
     classDef userInput fill:#FFE4B5,stroke:#FF8C00,stroke-width:3px
@@ -135,18 +154,22 @@ graph TB
     classDef decision fill:#FECA57,stroke:#F39C12,stroke-width:2px
     classDef modelFlow fill:#4ECDC4,stroke:#17A2B8,stroke-width:2px
     classDef researchFlow fill:#45B7D1,stroke:#007BFF,stroke-width:2px
+    classDef paperFlow fill:#98D8C8,stroke:#16A085,stroke-width:2px
+    classDef experimentFlow fill:#F7DC6F,stroke:#F1C40F,stroke-width:2px
+    classDef designFlow fill:#DDA0DD,stroke:#8A2BE2,stroke-width:2px
     classDef output fill:#90EE90,stroke:#32CD32,stroke-width:3px
     classDef features fill:#E6E6FA,stroke:#9370DB,stroke-width:1px
-    classDef validation fill:#96CEB4,stroke:#28A745,stroke-width:2px
     
     class A userInput
     class B router
-    class C,E3,E5 decision
-    class D,D1,D2,D3,D4 modelFlow
-    class E,E1,E2,E4,E6 researchFlow
-    class E2,E4 validation
-    class G,H output
-    class F1,F2,F3,F4,F5,F6 features
+    class C decision
+    class D,D1,D2,D3 modelFlow
+    class E,E1,E2,E3 researchFlow
+    class F,F1,F2,F3,F4 paperFlow
+    class G,G1,G2,G3 experimentFlow
+    class H,H1,H2,H3 designFlow
+    class J1,J2,J3,J4,J5 output
+    class I1,I2,I3,I4,I5,I6 features
             </div>
         </div>
 
@@ -163,21 +186,37 @@ graph TD
     
     C -->|Model/Architecture Query| D[📊 Model Suggestion<br/>Workflow]
     C -->|Research Planning Query| E[🔬 Research Planning<br/>Workflow]
+    C -->|Paper Writing Query| F[📝 Paper Writing<br/>Workflow]
+    C -->|Experiment Ideas Query| G[🧪 Experiment Suggestion<br/>Workflow]
+    C -->|Experiment Design Query| H[⚗️ Experiment Design<br/>Workflow]
     
-    D --> F[📚 arXiv Search]
-    F --> G[📄 Process PDFs]
-    G --> H[🧠 Domain Analysis]
-    H --> I[💡 Generate Suggestions]
-    I --> J[📋 Model Recommendations]
+    %% Model Suggestion Flow
+    D --> D1[📚 arXiv Search]
+    D1 --> D2[📄 Process PDFs]
+    D2 --> D3[🧠 Domain Analysis]
+    D3 --> D4[💡 Generate Suggestions]
+    D4 --> D5[📋 Model Recommendations]
     
-    E --> K[🎯 Generate Problem]
-    K --> L[✅ Validate Problem]
-    L --> M{🤔 Accept Problem?}
-    M -->|✅ Accept| N[📥 Collect Problem]
-    M -->|❌ Reject| K
-    N --> O{📊 Need More?<br/>< 3 Problems}
-    O -->|Yes| K
-    O -->|No| P[📋 Create Research Plan]
+    %% Research Planning Flow (Streamlined)
+    E --> E1[🎯 Generate Problem]
+    E1 --> E2[✅ Tavily Validation]
+    E2 --> E3[📋 Auto-Create Plan]
+    
+    %% Paper Writing Flow (Enhanced)
+    F --> F1[📊 Analyze Results + Files]
+    F1 --> F2[🔍 Tavily Source Search]
+    F2 --> F3[✍️ Generate with Citations]
+    F3 --> F4[� Complete Paper]
+    
+    %% Experiment Suggestion Flow
+    G --> G1[📊 Analyze Findings]
+    G1 --> G2[🎯 Research Direction]
+    G2 --> G3[� Experiment Ideas]
+    
+    %% Experiment Design Flow
+    H --> H1[🧠 Design Concepts]
+    H1 --> H2[⚙️ Implementation Code]
+    H2 --> H3[📋 Complete Design]
     
     %% Styling
     classDef userInput fill:#FFE4B5,stroke:#FF8C00,stroke-width:2px
@@ -185,16 +224,18 @@ graph TD
     classDef decision fill:#FECA57,stroke:#F39C12,stroke-width:2px
     classDef modelWorkflow fill:#4ECDC4,stroke:#17A2B8,stroke-width:2px
     classDef researchWorkflow fill:#45B7D1,stroke:#007BFF,stroke-width:2px
+    classDef paperWorkflow fill:#98D8C8,stroke:#16A085,stroke-width:2px
+    classDef experimentWorkflow fill:#F7DC6F,stroke:#F1C40F,stroke-width:2px
     classDef output fill:#DDA0DD,stroke:#8A2BE2,stroke-width:2px
-    classDef validation fill:#96CEB4,stroke:#28A745,stroke-width:2px
     
     class A userInput
     class B router
-    class C,M,O decision
-    class D,F,G,H,I modelWorkflow
-    class E,K,L,N,P researchWorkflow
-    class J,P output
-    class L,N validation
+    class C decision
+    class D,D1,D2,D3,D4 modelWorkflow
+    class E,E1,E2,E3 researchWorkflow
+    class F,F1,F2,F3 paperWorkflow
+    class G,G1,G2,H,H1,H2 experimentWorkflow
+    class D5,E3,F4,G3,H3 output
             </div>
         </div>
 
@@ -282,90 +323,82 @@ graph TD
         </div>
 
         <div id="research" class="diagram">
-            <h2>🧪 Research Planning Workflow (Enhanced)</h2>
+            <h2>🧪 Research Planning Workflow (Streamlined)</h2>
             <div class="description">
-                <strong>Purpose:</strong> Shows the complete iterative research planning with critique and refinement loops.
+                <strong>Purpose:</strong> Streamlined workflow that generates one high-quality problem, validates with Tavily, and creates a comprehensive research plan automatically.
             </div>
             <div class="mermaid">
 graph TD
-    A[🔬 Research Planning Start] --> B[🎯 Generate Problem Statement<br/>Iteration: 1]
+    A[� Research Planning Start] --> B[🎯 Generate Single Problem<br/>High-Quality Focus]
     
-    B --> C[🌐 Validate Problem<br/>Web Search + LLM Analysis]
-    C --> D{🤔 Problem Assessment<br/>Solved vs Open}
+    B --> C[🌐 Tavily Validation<br/>Web Search + LLM Analysis]
     
-    D -->|✅ Open/Novel<br/>Accept| E[📥 Collect Problem<br/>Add to Validated List]
-    D -->|❌ Solved/Well-studied<br/>Reject| F[🔄 Generate New Problem<br/>Iteration: N+1]
+    C --> D{🤔 Problem Assessment<br/>Novel vs Solved}
     
-    E --> G{📊 Collection Check<br/>Have Enough Problems?}
-    G -->|❌ Need More<br/>< 3 Problems| F
-    G -->|✅ Sufficient<br/>≥ 3 Problems| H[� Select Problem<br/>User Choice Interface]
+    D -->|✅ Novel/Open<br/>Proceed| E[� Auto-Create Research Plan<br/>Comprehensive Strategy]
+    D -->|❌ Solved/Known<br/>Reject| F[� Process Rejection Feedback<br/>Learn from Issues]
     
-    F --> I{⏰ Iteration Limit<br/>< 10 Attempts?}
-    I -->|✅ Continue| B
-    I -->|❌ Max Reached| H
+    F --> G{⏰ Retry Limit<br/>< Max Attempts?}
+    G -->|✅ Continue| B
+    G -->|❌ Max Reached| H[⚠️ Use Best Available<br/>Force Proceed]
     
-    H --> J[📋 Create Research Plan<br/>Comprehensive Analysis]
+    E --> I[🔍 Critique Research Plan<br/>AI Quality Assessment]
     
-    %% NEW: Critique and Refinement Loop
-    J --> K[🔍 Critique Plan<br/>AI Quality Assessment]
+    I --> J{📊 Quality Evaluation<br/>Plan Assessment}
     
-    K --> L{📊 Quality Check<br/>Major Issues?}
+    J -->|🎉 High Quality<br/>No Major Issues| K[✅ Finalize Plan<br/>Ready for Use]
+    J -->|🔄 Has Issues<br/>Refinable| L[🔧 Add Critique Context<br/>Improvement Guidance]
+    J -->|⚠️ Fundamental Issues<br/>Problem Level| B
     
-    L -->|🎉 No Major Issues<br/>High Quality| M[✅ Finalize Plan<br/>Quality Approved]
-    L -->|🔄 Has Major Issues<br/>Refinable| N[🔧 Refinement Context<br/>Add Critique Feedback]
-    L -->|⚠️ Problem Issues<br/>Fundamental Problems| H
-    L -->|🔄 Deep Issues<br/>Start Over| B
+    L --> M{🔄 Refinement Check<br/>< 3 Attempts?}
+    M -->|✅ Continue| E
+    M -->|❌ Max Refinements| N[✅ Accept Best Version<br/>Force Finalize]
     
-    N --> O{🔄 Refinement Check<br/>< 3 Attempts?}
-    O -->|✅ Continue Refining| J
-    O -->|❌ Max Refinements| P[✅ Accept Best Version<br/>Force Finalize]
+    H --> E
     
     %% Validation Details
-    C --> C1[📚 Literature Check]
-    C --> C2[🌐 Web Search Results]  
-    C --> C3[🎯 Gap Assessment]
+    C --> C1[📚 Literature Search]
+    C --> C2[🌐 Real-time Web Results]
+    C --> C3[🎯 Novelty Assessment]
     
     %% Problem Generation Details
-    B --> B1[💭 Domain Exploration]
-    B --> B2[🔍 Challenge Identification]
+    B --> B1[💭 Domain Analysis]
+    B --> B2[🔍 Gap Identification]
     B --> B3[❓ Question Formulation]
     
-    %% Critique Details
-    K --> K1[📊 Novelty Assessment]
-    K --> K2[🔧 Feasibility Check]
-    K --> K3[📝 Methodology Review]
-    K --> K4[⏰ Timeline Validation]
-    
     %% Research Plan Details
-    J --> J1[📋 Problem Analysis]
-    J --> J2[⏰ Phase Planning]
-    J --> J3[💰 Resource Estimation]
-    J --> J4[📊 Success Metrics]
+    E --> E1[📊 Problem Analysis]
+    E --> E2[⏰ Phase Planning]
+    E --> E3[� Methodology Design]
+    E --> E4[💰 Resource Planning]
+    
+    %% Critique Details
+    I --> I1[� Novelty Validation]
+    I --> I2[🔧 Feasibility Check]
+    I --> I3[� Methodology Review]
+    I --> I4[⏰ Timeline Assessment]
     
     %% Styling
     classDef start fill:#FFE4B5,stroke:#FF8C00,stroke-width:2px
     classDef process fill:#45B7D1,stroke:#007BFF,stroke-width:2px
     classDef validation fill:#96CEB4,stroke:#28A745,stroke-width:2px
     classDef decision fill:#FECA57,stroke:#F39C12,stroke-width:2px
-    classDef collection fill:#DDA0DD,stroke:#8A2BE2,stroke-width:2px
-    classDef userAction fill:#FF6B6B,stroke:#DC143C,stroke-width:2px
+    classDef feedback fill:#DDA0DD,stroke:#8A2BE2,stroke-width:2px
     classDef critique fill:#9370DB,stroke:#663399,stroke-width:2px
     classDef refinement fill:#FFA07A,stroke:#FF4500,stroke-width:2px
     classDef output fill:#90EE90,stroke:#32CD32,stroke-width:3px
     classDef subprocess fill:#F0F8FF,stroke:#4682B4,stroke-width:1px
-    classDef loop fill:#FFB6C1,stroke:#DC143C,stroke-width:2px
+    classDef warning fill:#FFB6C1,stroke:#DC143C,stroke-width:2px
     
     class A start
-    class B,F process
+    class B,E process
     class C validation
-    class D,G,I,L,O decision
-    class E collection
-    class H userAction
-    class J,M,P output
-    class K critique
-    class N refinement
-    class B1,B2,B3,C1,C2,C3,J1,J2,J3,J4,K1,K2,K3,K4 subprocess
-    class F,N loop
+    class D,G,J,M decision
+    class F,L feedback
+    class I critique
+    class H,N warning
+    class K output
+    class B1,B2,B3,C1,C2,C3,E1,E2,E3,E4,I1,I2,I3,I4 subprocess
             </div>
         </div>
 
@@ -458,6 +491,138 @@ graph TD
     class L,R,U,V success
     class D1,D2,E1,E2,F1,F2,G1,G2,H1,H2,I1,I2,O1,O2,O3,O4 context
     class S,T tracking
+            </div>
+        </div>
+
+        <div id="paper-writing" class="diagram">
+            <h2>📝 Paper Writing Workflow (Tavily-Enhanced)</h2>
+            <div class="description">
+                <strong>Purpose:</strong> Generates academic research papers with Tavily-sourced citations and file attachment support.
+            </div>
+            <div class="mermaid">
+graph TD
+    A[📝 Paper Writing Request<br/>+ Optional File Attachments] --> B[📊 Analyze Results<br/>Process Files & Context]
+    
+    B --> C[📋 Setup Paper Structure<br/>Venue & Template Config]
+    C --> D[🔍 Find Supporting Sources<br/>Tavily Web Search]
+    
+    subgraph "🔍 Tavily Source Discovery"
+        D --> D1[🎯 Background Literature Search]
+        D --> D2[🔬 Methodology Validation Search]
+        D --> D3[📈 Results Comparison Search]
+        D --> D4[📊 Data-Specific Search<br/>If Files Uploaded]
+        
+        D1 --> D5[📚 Academic Source Filtering]
+        D2 --> D5
+        D3 --> D5
+        D4 --> D5
+        
+        D5 --> D6[📑 Citation Database<br/>Organized by Section]
+    end
+    
+    D6 --> E[✍️ Generate Content<br/>With Integrated Citations]
+    
+    subgraph "📎 File Processing (If Attached)"
+        F[📎 CSV/Excel Files] --> F1[📊 Extract Data Structure]
+        G[📄 DOCX Documents] --> G1[📝 Extract Text Content]
+        F1 --> H[🔍 Enhanced Search Queries]
+        G1 --> H
+        H --> D4
+    end
+    
+    E --> I[📄 Format Paper<br/>Academic Layout + References]
+    I --> J[🎯 Finalize Paper<br/>Multiple Output Formats]
+    
+    J --> K[📋 Complete Research Paper<br/>Citations 1, 2, 3<br/>Reference List<br/>Source Metadata]
+    
+    %% File Processing Connection
+    A -.->|Files Attached| F
+    A -.->|Files Attached| G
+    
+    %% Styling
+    classDef input fill:#FFE4B5,stroke:#FF8C00,stroke-width:2px
+    classDef process fill:#E6F3FF,stroke:#0066CC,stroke-width:2px
+    classDef tavily fill:#E8F5E8,stroke:#228B22,stroke-width:2px
+    classDef files fill:#FFF0F5,stroke:#C71585,stroke-width:2px
+    classDef output fill:#DDA0DD,stroke:#8A2BE2,stroke-width:2px
+    
+    class A input
+    class B,C,E,I,J process
+    class D,D1,D2,D3,D4,D5,D6,H tavily
+    class F,G,F1,G1 files
+    class K output
+            </div>
+        </div>
+
+        <div id="experiment-suggestion" class="diagram">
+            <h2>🧪 Experiment Suggestion Workflow</h2>
+            <div class="description">
+                <strong>Purpose:</strong> Analyzes findings and suggests follow-up experiments based on research results.
+            </div>
+            <div class="mermaid">
+graph TD
+    A[🧪 Experiment Suggestion Request<br/>+ Research Findings] --> B[📊 Analyze Findings<br/>Extract Key Results]
+    
+    B --> C[🔍 Validate Analysis<br/>Check Research Quality]
+    C --> D[🎯 Decide Research Direction<br/>Determine Focus Areas]
+    D --> E[✅ Validate Research Direction<br/>Feasibility Check]
+    
+    E --> F[🔎 Generate Search Query<br/>For Related Experiments]
+    F --> G[📚 Search Experiment Papers<br/>Find Similar Studies]
+    G --> H[📄 Validate Papers<br/>Quality & Relevance]
+    
+    H --> I[💡 Generate Suggestions<br/>Experiment Ideas]
+    I --> J[📋 Final Experiment Plan<br/>Structured Recommendations]
+    
+    %% Styling
+    classDef input fill:#FFE4B5,stroke:#FF8C00,stroke-width:2px
+    classDef analysis fill:#E6F3FF,stroke:#0066CC,stroke-width:2px
+    classDef validation fill:#E8F5E8,stroke:#228B22,stroke-width:2px
+    classDef search fill:#FFF8DC,stroke:#DAA520,stroke-width:2px
+    classDef output fill:#DDA0DD,stroke:#8A2BE2,stroke-width:2px
+    
+    class A input
+    class B,D,I analysis
+    class C,E,H validation
+    class F,G search
+    class J output
+            </div>
+        </div>
+
+        <div id="experiment-design" class="diagram">
+            <h2>⚗️ Experiment Design Workflow</h2>
+            <div class="description">
+                <strong>Purpose:</strong> Creates detailed experimental designs with code and implementation details.
+            </div>
+            <div class="mermaid">
+graph TD
+    A[⚗️ Experiment Design Request<br/>Research Question] --> B[🧠 Design Ideas<br/>Generate Concepts]
+    
+    B --> C[📝 Select Best Ideas<br/>Filter & Rank]
+    C --> D[⚙️ Generate Implementation<br/>Code & Technical Details]
+    D --> E[🔍 Validate Design<br/>Technical Feasibility]
+    
+    E --> F{✅ Design Valid?}
+    F -->|Yes| G[📋 Complete Design<br/>Ready for Implementation]
+    F -->|No| H[🔄 Revise Design<br/>Address Issues]
+    H --> D
+    
+    G --> I[📊 Final Output<br/>Experimental Setup<br/>Code Implementation<br/>Evaluation Metrics]
+    
+    %% Styling
+    classDef input fill:#FFE4B5,stroke:#FF8C00,stroke-width:2px
+    classDef design fill:#E6F3FF,stroke:#0066CC,stroke-width:2px
+    classDef implementation fill:#F0F8FF,stroke:#4169E1,stroke-width:2px
+    classDef validation fill:#E8F5E8,stroke:#228B22,stroke-width:2px
+    classDef decision fill:#FFF8DC,stroke:#DAA520,stroke-width:2px
+    classDef output fill:#DDA0DD,stroke:#8A2BE2,stroke-width:2px
+    
+    class A input
+    class B,C design
+    class D,H implementation
+    class E validation
+    class F decision
+    class G,I output
             </div>
         </div>
 
@@ -598,6 +763,242 @@ graph TD
     class T,U accept
     class Q,R,V reject
     class A,E,F,H,O,AA,BB,CC,DD,N process
+            </div>
+        </div>
+
+        <!-- Simple Slide-Friendly Workflow Overviews -->
+        <div style="margin-top: 50px; padding: 30px; background: #f8f9fa; border-radius: 10px; border: 2px solid #dee2e6;">
+            <h2 style="text-align: center; margin-bottom: 30px; color: #495057;">📊 Slide-Friendly Workflow Overviews</h2>
+            <p style="text-align: center; color: #6c757d; margin-bottom: 40px;">Simple, clean diagrams perfect for presentations and slides</p>
+            
+            <!-- Model Suggestion - Simple -->
+            <div id="model-simple" class="diagram" style="margin-bottom: 40px;">
+                <h3>📊 Model Suggestion (Simple)</h3>
+                <div class="mermaid">
+graph TD
+    A[🎯 Research Query<br/>Task Description] --> B[� Task Analysis<br/>Extract Requirements]
+    B --> C[�📚 arXiv Literature Search<br/>Academic Papers]
+    C --> D[📄 Process Papers<br/>Extract Evidence]
+    D --> E[🧠 Domain Analysis<br/>Current State Assessment]
+    E --> F[💡 Model Recommendations<br/>Architecture Suggestions]
+    F --> G[🔍 AI Critique<br/>Quality Assessment]
+    G --> H[📤 Structured Results<br/>Implementation Guide]
+    
+    classDef input fill:#FFE4B5,stroke:#FF8C00,stroke-width:2px
+    classDef analysis fill:#E6F3FF,stroke:#0066CC,stroke-width:2px
+    classDef process fill:#4ECDC4,stroke:#17A2B8,stroke-width:2px
+    classDef validation fill:#96CEB4,stroke:#28A745,stroke-width:2px
+    classDef output fill:#90EE90,stroke:#32CD32,stroke-width:2px
+    
+    class A input
+    class B,C,D,E,F analysis
+    class G validation
+    class H output
+                </div>
+            </div>
+
+            <!-- Research Planning - Simple -->
+            <div id="research-planning-simple" class="diagram" style="margin-bottom: 40px;">
+                <h3>🧪 Research Planning (Simple)</h3>
+                <div class="mermaid">
+graph TD
+    A[🎯 Research Query<br/>Domain Interest] --> B[💭 Generate Problem<br/>Novel Research Question]
+    B --> C[🌐 Tavily Validation<br/>Web Search & Novelty Check]
+    C --> D{✅ Problem Valid?<br/>Novel vs Solved}
+    D -->|Valid| E[📋 Create Research Plan<br/>Methodology & Timeline]
+    D -->|Invalid| F[🔧 Process Feedback<br/>Learn from Issues]
+    F --> B
+    E --> G[🔍 AI Critique & Refine<br/>Quality Assessment]
+    G --> H[📤 Final Research Plan<br/>Ready for Execution]
+    
+    classDef input fill:#FFE4B5,stroke:#FF8C00,stroke-width:2px
+    classDef process fill:#45B7D1,stroke:#007BFF,stroke-width:2px
+    classDef validation fill:#96CEB4,stroke:#28A745,stroke-width:2px
+    classDef decision fill:#FECA57,stroke:#F39C12,stroke-width:2px
+    classDef feedback fill:#DDA0DD,stroke:#8A2BE2,stroke-width:2px
+    classDef output fill:#90EE90,stroke:#32CD32,stroke-width:2px
+    
+    class A input
+    class B,E process
+    class C,G validation
+    class D decision
+    class F feedback
+    class H output
+                </div>
+            </div>
+
+            <!-- Paper Writing - Simple -->
+            <div id="paper-writing-simple" class="diagram" style="margin-bottom: 40px;">
+                <h3>📝 Paper Writing (Simple)</h3>
+                <div class="mermaid">
+graph TD
+    A[📊 Research Data<br/>+ Files + Query] --> B[� Process Files<br/>CSV/Excel/DOCX]
+    B --> C[�📄 Analyze Results<br/>Extract Key Findings]
+    C --> D[� Setup Paper Structure<br/>Academic Template]
+    D --> E[�🔍 Tavily Source Discovery<br/>Academic Citation Search]
+    E --> F[✍️ Generate Content<br/>Structured Paper Sections]
+    F --> G[📚 Integrate Citations<br/>Reference Formatting]
+    G --> H[📤 Complete Paper<br/>Citations + References]
+    
+    classDef input fill:#FFE4B5,stroke:#FF8C00,stroke-width:2px
+    classDef files fill:#FFF0F5,stroke:#C71585,stroke-width:2px
+    classDef process fill:#98D8C8,stroke:#16A085,stroke-width:2px
+    classDef sources fill:#87CEEB,stroke:#4682B4,stroke-width:2px
+    classDef output fill:#90EE90,stroke:#32CD32,stroke-width:2px
+    
+    class A input
+    class B files
+    class C,D,F,G process
+    class E sources
+    class H output
+                </div>
+            </div>
+
+            <!-- Experiment Suggestion - Simple -->
+            <div id="experiment-suggestion-simple" class="diagram" style="margin-bottom: 40px;">
+                <h3>🧪 Experiment Suggestion (Simple)</h3>
+                <div class="mermaid">
+graph TD
+    A[📊 Research Results<br/>Findings & Data] --> B[🔍 Analyze Findings<br/>Extract Key Insights]
+    B --> C[🎯 Research Direction<br/>Identify Focus Areas]
+    C --> D[📚 Search Literature<br/>Related Experiments]
+    D --> E[📄 Validate Papers<br/>Quality & Relevance]
+    E --> F[💡 Generate Ideas<br/>Follow-up Experiments]
+    F --> G[📤 Experiment List<br/>Structured Suggestions]
+    
+    classDef input fill:#FFE4B5,stroke:#FF8C00,stroke-width:2px
+    classDef analysis fill:#E6F3FF,stroke:#0066CC,stroke-width:2px
+    classDef process fill:#F7DC6F,stroke:#F1C40F,stroke-width:2px
+    classDef validation fill:#96CEB4,stroke:#28A745,stroke-width:2px
+    classDef output fill:#90EE90,stroke:#32CD32,stroke-width:2px
+    
+    class A input
+    class B,C analysis
+    class D,F process
+    class E validation
+    class G output
+                </div>
+            </div>
+
+            <!-- Experiment Design - Simple -->
+            <div id="experiment-design-simple" class="diagram" style="margin-bottom: 40px;">
+                <h3>⚗️ Experiment Design (Simple)</h3>
+                <div class="mermaid">
+graph TD
+    A[💡 Experiment Idea<br/>Research Hypothesis] --> B[🧠 Design Concepts<br/>Methodology Planning]
+    B --> C[📝 Select Best Ideas<br/>Filter & Rank]
+    C --> D[⚙️ Code Implementation<br/>Technical Details]
+    D --> E[� Validate Design<br/>Technical Feasibility]
+    E --> F{✅ Design Valid?<br/>Ready to Execute?}
+    F -->|Yes| G[📤 Complete Design<br/>Ready to Execute]
+    F -->|No| H[🔄 Revise Design<br/>Address Issues]
+    H --> D
+    
+    classDef input fill:#FFE4B5,stroke:#FF8C00,stroke-width:2px
+    classDef design fill:#E6F3FF,stroke:#0066CC,stroke-width:2px
+    classDef implementation fill:#F0F8FF,stroke:#4169E1,stroke-width:2px
+    classDef validation fill:#96CEB4,stroke:#28A745,stroke-width:2px
+    classDef decision fill:#FECA57,stroke:#F39C12,stroke-width:2px
+    classDef revision fill:#FFA07A,stroke:#FF4500,stroke-width:2px
+    classDef output fill:#90EE90,stroke:#32CD32,stroke-width:2px
+    
+    class A input
+    class B,C design
+    class D implementation
+    class E validation
+    class F decision
+    class H revision
+    class G output
+                </div>
+            </div>
+
+            <!-- System Overview - Simple -->
+            <div id="system-overview-simple" class="diagram" style="margin-bottom: 20px;">
+                <h3>🌟 Complete System (Simple)</h3>
+                <div class="mermaid">
+graph TB
+    A[👤 User Query<br/>Research Request] --> B[🔍 Query Analysis<br/>Intent Classification]
+    B --> C[🤖 Intelligent Router<br/>Semantic Analysis]
+    
+    C --> D[📊 Model Suggestion]
+    C --> E[🧪 Research Planning]
+    C --> F[📝 Paper Writing]
+    C --> G[🧪 Experiment Ideas]
+    C --> H[⚗️ Experiment Design]
+    
+    D --> I[🔍 AI Critique]
+    E --> J[🌐 Tavily Validation]
+    F --> K[📚 Citation Discovery]
+    G --> L[📄 Literature Review]
+    H --> M[⚙️ Code Generation]
+    
+    I --> N[📤 Model Guide]
+    J --> O[📤 Research Plan]
+    K --> P[📤 Academic Paper]
+    L --> Q[📤 Experiment List]
+    M --> R[📤 Design & Code]
+    
+    classDef input fill:#FFE4B5,stroke:#FF8C00,stroke-width:3px
+    classDef analysis fill:#E6F3FF,stroke:#0066CC,stroke-width:2px
+    classDef router fill:#FF6B6B,stroke:#DC143C,stroke-width:2px
+    classDef workflows fill:#E6E6FA,stroke:#9370DB,stroke-width:2px
+    classDef enhancement fill:#F0F8FF,stroke:#4682B4,stroke-width:2px
+    classDef output fill:#90EE90,stroke:#32CD32,stroke-width:2px
+    
+    class A input
+    class B analysis
+    class C router
+    class D,E,F,G,H workflows
+    class I,J,K,L,M enhancement
+    class N,O,P,Q,R output
+                </div>
+            </div>
+        </div>
+
+        <!-- Enhanced System Features Overview -->
+        <div style="margin-top: 50px; padding: 30px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 10px; color: white;">
+            <h2 style="text-align: center; margin-bottom: 30px; color: white;">🌟 ML Researcher LangGraph - Enhanced System Features</h2>
+            
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; margin-bottom: 30px;">
+                <div style="background: rgba(255,255,255,0.1); padding: 20px; border-radius: 8px; backdrop-filter: blur(10px);">
+                    <h3 style="color: #FFE4B5; margin-bottom: 10px;">🤖 Intelligent Multi-Workflow Router</h3>
+                    <p>Advanced semantic analysis automatically routes user queries to one of 5 specialized workflows: Model Suggestion, Research Planning, Paper Writing, Experiment Suggestion, and Experiment Design.</p>
+                </div>
+                
+                <div style="background: rgba(255,255,255,0.1); padding: 20px; border-radius: 8px; backdrop-filter: blur(10px);">
+                    <h3 style="color: #98D8C8; margin-bottom: 10px;">🔍 Tavily-Powered Citation System</h3>
+                    <p>Real-time academic source discovery with automatic citation integration. The paper writing workflow now includes comprehensive reference lists with properly formatted academic citations.</p>
+                </div>
+                
+                <div style="background: rgba(255,255,255,0.1); padding: 20px; border-radius: 8px; backdrop-filter: blur(10px);">
+                    <h3 style="color: #F7DC6F; margin-bottom: 10px;">📎 Advanced File Processing</h3>
+                    <p>Seamless integration of user-uploaded files (CSV, Excel, DOCX) directly into research workflows, enhancing analysis with actual data and documentation.</p>
+                </div>
+                
+                <div style="background: rgba(255,255,255,0.1); padding: 20px; border-radius: 8px; backdrop-filter: blur(10px);">
+                    <h3 style="color: #DDA0DD; margin-bottom: 10px;">📊 Frontend-Compatible Outputs</h3>
+                    <p>All workflows generate structured, frontend-compatible results with dynamic content formatting, enhanced metadata, and consistent field mapping for seamless UI integration.</p>
+                </div>
+                
+                <div style="background: rgba(255,255,255,0.1); padding: 20px; border-radius: 8px; backdrop-filter: blur(10px);">
+                    <h3 style="color: #90EE90; margin-bottom: 10px;">🧪 Comprehensive Experiment Support</h3>
+                    <p>Two dedicated experiment workflows: Suggestion (idea generation from research) and Design (detailed implementation with code), providing end-to-end experimental research support.</p>
+                </div>
+                
+                <div style="background: rgba(255,255,255,0.1); padding: 20px; border-radius: 8px; backdrop-filter: blur(10px);">
+                    <h3 style="color: #4ECDC4; margin-bottom: 10px;">🧠 Enhanced LLM Integration</h3>
+                    <p>Advanced OpenAI integration with async processing, error handling, and sophisticated prompt engineering for high-quality research outputs across all workflows.</p>
+                </div>
+            </div>
+            
+            <div style="text-align: center; margin-top: 20px;">
+                <h3 style="color: #FFE4B5;">🚀 Latest Enhancements (Current Session)</h3>
+                <div style="background: rgba(255,255,255,0.1); padding: 15px; border-radius: 8px; margin-top: 10px;">
+                    <p>✅ <strong>Paper Writing Workflow:</strong> Fixed execution issues and added comprehensive Tavily citation system</p>
+                    <p>✅ <strong>File Processing:</strong> Enhanced attachment handling for CSV, Excel, and DOCX files in research workflows</p>
+                    <p>✅ <strong>Frontend Compatibility:</strong> Ensured all workflows output compatible results for dynamic UI display</p>
+                    <p>✅ <strong>Workflow Visualization:</strong> Updated complete system overview with all 5 enhanced workflows</p>
+                </div>
             </div>
         </div>
 

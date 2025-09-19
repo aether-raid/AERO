@@ -894,7 +894,13 @@
                         tabs.push({ key: 'model_suggestions', label: 'Model Suggestions', icon: 'fas fa-robot' });
                     }
                     if (results.research_plan) {
-                        tabs.push({ key: 'research_plan', label: 'Research Plan', icon: 'fas fa-clipboard-list' });
+                        // Check workflow type to determine appropriate label
+                        const workflowType = results.workflow_type || '';
+                        if (workflowType === 'paper_writing') {
+                            tabs.push({ key: 'research_plan', label: 'Research Paper', icon: 'fas fa-file-alt' });
+                        } else {
+                            tabs.push({ key: 'research_plan', label: 'Research Plan', icon: 'fas fa-clipboard-list' });
+                        }
                     }
                     // FIX: Check for experiment_designs field specifically
                     if (results.experiment_designs && typeof results.experiment_designs === 'string' && results.experiment_designs.trim()) {
@@ -1309,6 +1315,7 @@ To get actual AI-powered analysis, please:
                     const classes = {
                         'model_suggestion': 'model-suggestion',
                         'research_planning': 'research-planning',
+                        'paper_writing': 'research-planning',  // Use same styling as research planning
                         'direct_llm': 'direct-llm'
                     };
                     return classes[workflowType] || 'unknown';
@@ -1318,6 +1325,7 @@ To get actual AI-powered analysis, please:
                     const icons = {
                         'model_suggestion': 'fas fa-robot',
                         'research_planning': 'fas fa-clipboard-list',
+                        'paper_writing': 'fas fa-file-alt',
                         'direct_llm': 'fas fa-comments'
                     };
                     return icons[workflowType] || 'fas fa-question';
@@ -1472,7 +1480,7 @@ To get actual AI-powered analysis, please:
                     return modelSuggestions || 'No model suggestions available';
                 },
 
-                extractContentFromNestedObject(data, contentKeys = ['research_plan', 'model_suggestions', 'content', 'text', 'response']) {
+                extractContentFromNestedObject(data, contentKeys = ['research_plan', 'formatted_paper', 'model_suggestions', 'content', 'text', 'response']) {
                     // General method to extract actual content from nested backend objects
                     if (typeof data === 'string') {
                         return data;
