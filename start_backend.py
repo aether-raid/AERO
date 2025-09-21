@@ -121,11 +121,13 @@ def main():
     opt_missing = []
     try:
         import sentence_transformers  # noqa: F401
-    except ImportError:
+    except (ImportError, Exception) as e:
+        print(f"⚠️  sentence-transformers import failed: {e}")
         opt_missing.append("sentence-transformers")
     try:
         import torch  # noqa: F401
-    except ImportError:
+    except (ImportError, Exception) as e:
+        print(f"⚠️  torch import failed: {e}")
         opt_missing.append("torch")
 
     if missing:
