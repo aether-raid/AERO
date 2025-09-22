@@ -182,6 +182,28 @@ async def analyze_research_task(request: ResearchRequest, background_tasks: Back
         print(f"🎯 Workflow type: {results.get('workflow_type', 'unknown')}")
         sys.stdout.flush()
         
+        # 🆕 Add response size check and validation
+        try:
+            import json
+            results_json = json.dumps(results)
+            response_size = len(results_json)
+            
+            if response_size > 500000:  # 500KB limit
+                logger.warning(f"⚠️ Large response: {response_size:,} bytes")
+                print(f"⚠️ Large response: {response_size:,} bytes")
+                
+                # Truncate large experiment suggestions if present
+                if "experiment_suggestions" in results and len(str(results["experiment_suggestions"])) > 100000:
+                    original_length = len(str(results["experiment_suggestions"]))
+                    results["experiment_suggestions"] = str(results["experiment_suggestions"])[:100000] + "\n\n... [Response truncated due to size limits]"
+                    logger.info(f"📝 Truncated experiment_suggestions from {original_length:,} to 100KB")
+            
+            logger.info(f"📊 Final response size: {len(json.dumps(results)):,} bytes")
+            
+        except Exception as json_error:
+            logger.error(f"⚠️ JSON validation error: {json_error}")
+            # Continue anyway, the validation in the node should have handled this
+        
         # Create response
         response = AnalysisResponse(
             workflow_type=results.get("workflow_type", "unknown"),
@@ -215,7 +237,21 @@ async def analyze_research_task(request: ResearchRequest, background_tasks: Back
     except Exception as e:
         logger.error(f"❌ Analysis failed: {str(e)}")
         logger.error("=" * 60)
-        raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
+        
+        # Add detailed error logging
+        import traceback
+        traceback.print_exc()
+        
+        # Check if it's a serialization issue
+        error_detail = str(e)
+        if "json" in error_detail.lower() or "serializ" in error_detail.lower():
+            error_detail = f"Data serialization error: {str(e)}"
+        elif "timeout" in error_detail.lower():
+            error_detail = f"Request timeout: {str(e)}"
+        else:
+            error_detail = f"Analysis failed: {str(e)}"
+        
+        raise HTTPException(status_code=500, detail=error_detail)
 
 
 @app.post("/analyze_with_files", response_model=AnalysisResponse)
