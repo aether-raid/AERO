@@ -18,12 +18,10 @@ from langgraph.graph import StateGraph, END
 import os
 import sys
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from design_experiment.init_utils import get_llm_response, get_gpt_llm_response
+from design_experiment.utils import get_llm_response, get_gpt_llm_response
 from design_experiment.search import build_experiment_search_workflow, search_dataset_online
 from design_experiment.code import build_codegen_graph, CodeGenState
 from langchain_core.messages import AIMessage
-
-MAX_REFINEMENT_ROUNDS = 2
 
 @dataclass
 class ExperimentState:
@@ -355,27 +353,25 @@ def build_experiment_graph():
     graph.add_node("plan", plan_node)
     graph.add_node("design", design_node)
     graph.add_node("score", score_node)
-    graph.add_node("generate_code", generate_code_node)  # Add code generation node
-    graph.add_node("cleanup", cleanup_code_tags_node)    # Add cleanup node
+    graph.add_node("generate_code", generate_code_node)  
+    graph.add_node("cleanup", cleanup_code_tags_node)   
 
     graph.add_edge("summarize", "literature")
     graph.add_edge("literature", "plan")
     graph.add_edge("plan", "design")
-    graph.add_edge("design", "score")
-    graph.add_edge("score", "generate_code")     # Score to code generation
-    graph.add_edge("generate_code", "cleanup")   # Code generation to cleanup
-    graph.add_edge("cleanup", END)               # Cleanup to END
+    graph.add_edge("design", "generate_code")
+    graph.add_edge("generate_code", "score")
+    graph.add_edge("score", "design")  # If score fails, go back to design (refinement loop)
+    graph.add_edge("score", "cleanup") # If score passes, go to cleanup
+    graph.add_edge("cleanup", END)
 
-    # Conditional edge: if refinement_round < MAX_REFINEMENT_ROUNDS and suggestions exist, go back to design
+    # Conditional edge: if all scores >= 70, go to cleanup; else, go to design for refinement
     async def refinement_decision(state: ExperimentState):
-        min_score = min(state.scores.values()) if state.scores else 100
-        if (state.refinement_suggestions and
-            any(s.strip() for s in state.refinement_suggestions) and
-            state.refinement_round < MAX_REFINEMENT_ROUNDS and
-            min_score < 70):  # Only refine if any score is below 70
-            return "design"
+        scores = state.scores or {}
+        if scores and all(v >= 70 for v in scores.values()):
+            return "cleanup"
         else:
-            return "generate_code"  # Go to code generation, not END
+            return "design"
 
     graph.add_conditional_edges("score", refinement_decision)
     graph.set_entry_point("summarize")

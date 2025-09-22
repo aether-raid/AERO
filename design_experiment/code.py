@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from typing import List, Tuple, Any
 from langgraph.graph import StateGraph, END
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from design_experiment.init_utils import get_llm_response
+from design_experiment.utils import get_llm_response
 
 @dataclass
 class CodeGenState:

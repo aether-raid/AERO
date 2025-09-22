@@ -24,12 +24,24 @@ To address these challenges, we developed the Design Experiment Workflow, a Lang
 
 1. **Install dependencies**:
    ```bash
+   cd design_experiment
    pip install -r requirements_experiment_tree.txt
    ```
-2. **Run the main workflow**:
+2. **Run the main workflow interactively**:
    ```bash
    python main.py
    ```
+   You will be prompted to enter your research plan in the terminal.
 
+3. **(Optional) Use as a Python module**:
+   You can also import and use the workflow in your own Python scripts:
+   ```python
+   from design_experiment import run_design_workflow
+
+   user_input = input("Enter your research plan: ")
+   result = run_design_workflow(user_input)
+   print(result["design"])
+   print(result["code"])
+   ```
 ## License
 See the main project repository for license information.
