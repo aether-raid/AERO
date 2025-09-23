@@ -2844,31 +2844,80 @@ def _build_analyze_and_suggest_experiment_graph() -> StateGraph:
 
 async def run_experiment_suggestion_workflow(
     user_prompt: str,
-    experimental_results: Dict[str, Any],
-    client,
-    model: str,
-    arxiv_processor,
+    experimental_results: Dict[str, Any] = None,
     uploaded_data: List[str] = None,
     file_path: str = None
 ) -> Dict[str, Any]:
     """
     Compile and run the complete experiment suggestion workflow.
-
+    
     Args:
         user_prompt: The user's research query/context
-        experimental_results: Dictionary containing experimental data and results
-        client: OpenAI client instance
-        model: Model name string (e.g., "gemini/gemini-2.5-flash")
-        arxiv_processor: ArxivPaperProcessor instance
+        experimental_results: Optional dictionary containing experimental data and results
         uploaded_data: Optional list of uploaded file contents
         file_path: Optional path to a file to read and include as input data
-
+        
     Returns:
         Dictionary containing the final workflow state with results
     """
+    # Move all imports and initialization inside the function
+    try:
+        import asyncio
+        import openai
+        from Arxiv_utils.arxiv_paper_utils import ArxivPaperProcessor
+    except ImportError as e:
+        error_msg = f"Failed to import required modules: {str(e)}. Please ensure all dependencies are installed."
+        print(f"❌ {error_msg}")
+        return {
+            "workflow_successful": False,
+            "error": error_msg,
+            "error_type": "ImportError",
+            "original_prompt": user_prompt
+        }
+    
+    try:
+        # Load configuration
+        api_key = _load_from_env_file("OPENAI_API_KEY")
+        if not api_key:
+            raise ValueError("OPENAI_API_KEY not found in env.example file. Please ensure the file exists and contains a valid API key.")
+        
+        base_url = _load_from_env_file("BASE_URL") or "https://agents.aetherraid.dev"
+        model = _load_from_env_file("DEFAULT_MODEL") or "gemini/gemini-2.5-flash"
+        model_cheap = "gemini/gemini-2.5-flash-lite"
+        model_expensive = "gemini/gemini-2.5-pro"
+
+        # Initialize dependencies
+        try:
+            client = openai.OpenAI(api_key=api_key, base_url=base_url)
+        except Exception as e:
+            raise ValueError(f"Failed to initialize OpenAI client: {str(e)}. Please check your API key and base URL configuration.")
+        
+        try:
+            arxiv_processor = ArxivPaperProcessor(llm_client=client, model_name=model_cheap)
+        except Exception as e:
+            raise ValueError(f"Failed to initialize ArxivPaperProcessor: {str(e)}. Please check the ArxivPaperProcessor implementation.")
+        
+    except ValueError as e:
+        print(f"❌ Configuration Error: {str(e)}")
+        return {
+            "workflow_successful": False,
+            "error": str(e),
+            "error_type": "ConfigurationError",
+            "original_prompt": user_prompt
+        }
+    except Exception as e:
+        error_msg = f"Unexpected error during initialization: {str(e)}"
+        print(f"❌ {error_msg}")
+        return {
+            "workflow_successful": False,
+            "error": error_msg,
+            "error_type": type(e).__name__,
+            "original_prompt": user_prompt
+        }
+    
     print("🧪 Starting Experiment Suggestion Workflow...")
     print(f"📝 User Prompt: {user_prompt}")
-    print(f"🔬 Experimental Results: {len(experimental_results)} data points")
+    print(f"🔬 Experimental Results: {len(experimental_results) if experimental_results else 0} data points")
     print(f"🤖 Model: {model}")
     if file_path:
         print(f"📁 File Input: {file_path}")
@@ -2913,7 +2962,7 @@ async def run_experiment_suggestion_workflow(
             "arxiv_processor": arxiv_processor,
             
             # Input data
-            "experimental_results": experimental_results,
+            "experimental_results": experimental_results or {},
             "findings_analysis": {},
             "research_context": {},
             
@@ -3039,21 +3088,7 @@ async def test_experiment_suggestion_workflow():
     """
     Test function to run the workflow with sample data.
     """
-    print("⚠️ This is a test template. Please provide actual client and arxiv_processor instances.")
-    
-    import openai
-    # ArxivPaperProcessor is already imported at the top of the file
-    
-    api_key = _load_from_env_file("OPENAI_API_KEY")
-    base_url = _load_from_env_file("BASE_URL") or "https://agents.aetherraid.dev"
-    model = _load_from_env_file("DEFAULT_MODEL") or "gemini/gemini-2.5-flash"
-    model_cheap = "gemini/gemini-2.5-flash-lite"
-    model_expensive = "gemini/gemini-2.5-pro"
-
-    # Initialize dependencies
-    client = openai.OpenAI(api_key=api_key, base_url=base_url)
-    model = "gemini/gemini-2.5-flash"
-    arxiv_processor = ArxivPaperProcessor(llm_client=client, model_name=model_cheap)
+    print("⚠️ This is a test template. Please provide actual experimental results.")
     
     # Sample experimental results
     sample_experimental_results = {
@@ -3083,10 +3118,7 @@ async def test_experiment_suggestion_workflow():
     # Run workflow
     result = await run_experiment_suggestion_workflow(
         user_prompt="I have completed initial experiments on image classification with CNNs. Need suggestions for follow-up experiments to improve model performance and generalization.",
-        experimental_results=sample_experimental_results,
-        client=client,
-        model=model,
-        arxiv_processor=arxiv_processor
+        experimental_results=sample_experimental_results
         # Optional: Add file_path="path/to/your/file.txt" to load content from a file
         # file_path="experimental_results.txt"
     )
@@ -3098,22 +3130,16 @@ async def test_experiment_suggestion_workflow():
 async def run_experiment_suggestion_workflow_from_file(
     file_path: str,
     user_prompt: str = None,
-    experimental_results: Dict[str, Any] = None,
-    client=None,
-    model: str = None,
-    arxiv_processor=None
+    experimental_results: Dict[str, Any] = None
 ) -> Dict[str, Any]:
     """
     Convenience function to run experiment suggestion workflow with file input.
-
+    
     Args:
         file_path: Path to the input file containing experimental data or context
         user_prompt: Optional user prompt (if None, will use file content as prompt)
         experimental_results: Optional experimental results dict
-        client: OpenAI client instance
-        model: Model name string
-        arxiv_processor: ArxivPaperProcessor instance
-
+        
     Returns:
         Dictionary containing the final workflow state with results
     """
@@ -3130,23 +3156,10 @@ async def run_experiment_suggestion_workflow_from_file(
     if experimental_results is None:
         experimental_results = {}
 
-    # Load environment variables for dependencies if not provided
-    if client is None or model is None or arxiv_processor is None:
-        import openai
-        api_key = _load_from_env_file("OPENAI_API_KEY")
-        base_url = _load_from_env_file("BASE_URL") or "https://agents.aetherraid.dev"
-        model = model or _load_from_env_file("DEFAULT_MODEL") or "gemini/gemini-2.5-flash"
-        model_cheap = "gemini/gemini-2.5-flash-lite"
-
-        client = client or openai.OpenAI(api_key=api_key, base_url=base_url)
-        arxiv_processor = arxiv_processor or ArxivPaperProcessor(llm_client=client, model_name=model)
-
+    # Run the main workflow with file input
     return await run_experiment_suggestion_workflow(
         user_prompt=user_prompt,
         experimental_results=experimental_results,
-        client=client,
-        model=model,
-        arxiv_processor=arxiv_processor,
         file_path=file_path
     )
 
