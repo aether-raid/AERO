@@ -200,7 +200,7 @@ tensorboard_logs/
 
 # Faiss and metadata databases
 Faiss/
-
+arxiv_chunks_faiss.index
 # Generated Word reports
 suggestion_reports/
 *.docx

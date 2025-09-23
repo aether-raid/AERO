@@ -23,7 +23,7 @@ from design_experiment.utils import get_llm_response
 
 @dataclass
 class CodeGenState:
-    user_input: str
+    experiment_input: str = ""
     tags: List[Tuple[str, str]] = field(default_factory=list)
     generated_code: List[str] = field(default_factory=list)
     validation_results: List[Any] = field(default_factory=list)
@@ -66,7 +66,7 @@ def validate_code(code: str):
 
 # Node 1: Extract tags
 async def extract_tags_node(state: CodeGenState) -> CodeGenState:
-    state.tags = extract_code_tags(state.user_input)
+    state.tags = extract_code_tags(state.experiment_input)
     return state
 
 # Node 2: Generate code for each tag (in parallel)
@@ -200,7 +200,7 @@ async def main():
         except EOFError:
             break
     user_input = "\n".join(lines)
-    state = CodeGenState(user_input=user_input)
+    state = CodeGenState(experiment_input=user_input)
     graph = build_codegen_graph()
     final_state = await graph.ainvoke(state)
     print("\n--- Final Experiment with Inline Code and Validation ---\n")

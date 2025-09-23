@@ -1882,7 +1882,7 @@ def _revise_suggestions_node(state: ModelSuggestionState) -> ModelSuggestionStat
 
         ## ArXiv Research Context
         Papers available: {len(state["arxiv_results"].get("papers", []))}
-        {format_papers_for_context(state["arxiv_results"].get("papers", []))}
+        {_format_papers_for_context(state["arxiv_results"].get("papers", []))}
 
         ## Your Revision Task
         Create improved model recommendations that:
@@ -2037,28 +2037,82 @@ def _build_model_suggestion_graph() -> StateGraph:
 
 async def run_model_suggestion_workflow(
     user_prompt: str,
-    client,
-    model: str,
-    arxiv_processor,
     uploaded_data: List[str] = None
 ) -> Dict[str, Any]:
+    
+    
     """
     Compile and run the complete model suggestion workflow.
     
     Args:
         user_prompt: The user's research query
-        client: OpenAI client instance
-        model: Model name string (e.g., "gemini/gemini-2.5-flash")
-        arxiv_processor: ArxivPaperProcessor instance
         uploaded_data: Optional list of uploaded file contents
         
     Returns:
         Dictionary containing the final workflow state with results
     """
+    # Move all imports and initialization inside the function
+    try:
+        import asyncio
+        import openai
+        from Arxiv_utils.arxiv_paper_utils import ArxivPaperProcessor
+    except ImportError as e:
+        error_msg = f"Failed to import required modules: {str(e)}. Please ensure all dependencies are installed."
+        print(f"❌ {error_msg}")
+        return {
+            "workflow_successful": False,
+            "error": error_msg,
+            "error_type": "ImportError",
+            "original_prompt": user_prompt
+        }
+    
+    try:
+        # Load configuration
+        api_key = _load_from_env_file("OPENAI_API_KEY")
+        if not api_key:
+            raise ValueError("OPENAI_API_KEY not found in env.example file. Please ensure the file exists and contains a valid API key.")
+        
+        base_url = _load_from_env_file("BASE_URL") or "https://agents.aetherraid.dev"
+        model = _load_from_env_file("DEFAULT_MODEL") or "gemini/gemini-2.5-flash"
+        model_cheap = "gemini/gemini-2.5-flash-lite"
+        model_expensive = "gemini/gemini-2.5-pro"
+
+        # Initialize dependencies
+        try:
+            client = openai.OpenAI(api_key=api_key, base_url=base_url)
+        except Exception as e:
+            raise ValueError(f"Failed to initialize OpenAI client: {str(e)}. Please check your API key and base URL configuration.")
+        
+        try:
+            arxiv_processor = ArxivPaperProcessor(llm_client=client, model_name=model_cheap)
+        except Exception as e:
+            raise ValueError(f"Failed to initialize ArxivPaperProcessor: {str(e)}. Please check the ArxivPaperProcessor implementation.")
+        
+    except ValueError as e:
+        print(f"❌ Configuration Error: {str(e)}")
+        return {
+            "workflow_successful": False,
+            "error": str(e),
+            "error_type": "ConfigurationError",
+            "original_prompt": user_prompt
+        }
+    except Exception as e:
+        error_msg = f"Unexpected error during initialization: {str(e)}"
+        print(f"❌ {error_msg}")
+        return {
+            "workflow_successful": False,
+            "error": error_msg,
+            "error_type": type(e).__name__,
+            "original_prompt": user_prompt
+        }
+    
     print("🚀 Starting Model Suggestion Workflow...")
     print(f"📝 User Prompt: {user_prompt}")
     print(f"🤖 Model: {model}")
     print("=" * 80)
+    
+    
+    
     
     try:
         # Build the workflow graph
@@ -2175,33 +2229,23 @@ if __name__ == "__main__":
     """
     Main entry point for testing the workflow.
     """
-    import asyncio
-    import openai
-    # ArxivPaperProcessor is already imported at the top of the file
-    
-    api_key = _load_from_env_file("OPENAI_API_KEY")
-    base_url = _load_from_env_file("BASE_URL") or "https://agents.aetherraid.dev"
-    model = _load_from_env_file("DEFAULT_MODEL") or "gemini/gemini-2.5-flash"
-    model_cheap = "gemini/gemini-2.5-flash-lite"
-    model_expensive = "gemini/gemini-2.5-pro"
-
     # Use default test prompt for testing
     prompt = "I need help with object detection in autonomous vehicles"
 
-    # Initialize dependencies
-    client = openai.OpenAI(api_key=api_key, base_url=base_url)
-    model = "gemini/gemini-2.5-flash"
-    arxiv_processor = ArxivPaperProcessor(llm_client=client, model_name=model_cheap)
-    
-    # Run workflow
-    result = asyncio.run(run_model_suggestion_workflow(
-        user_prompt=prompt,
-        client=client,
-        model=model,
-        arxiv_processor=arxiv_processor
-    ))
-    
-    print("Final result:", result.get("model_suggestions", {}).get("suggestions_successful", False))
+    try:
+        # Run workflow - all initialization is now handled inside the function
+        result = asyncio.run(run_model_suggestion_workflow(
+            user_prompt=prompt
+        ))
+        
+        print("Final result:", result.get("model_suggestions", {}).get("suggestions_successful", False))
+        
+    except KeyboardInterrupt:
+        print("\n⚠️ Workflow interrupted by user")
+    except Exception as e:
+        print(f"\n❌ Unexpected error in main: {str(e)}")
+        import traceback
+        traceback.print_exc()
    
     
 

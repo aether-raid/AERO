@@ -1,2 +1,0 @@
-# Additional requirements for Word document generation
-python-docx>=0.8.11
