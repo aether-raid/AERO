@@ -13,9 +13,9 @@ We propose AERO, a modular and adaptable framework for machine learning research
 
 ## 🛠️ Installation and Set-Up
 
-1. **Install required packages:**
+1. **Install required packages using uv and uv.lock:**
    ```bash
-   pip install -r requirements.txt
+   uv pip install -r uv.lock
    ```
 
 2. **Configure environment variables:**
