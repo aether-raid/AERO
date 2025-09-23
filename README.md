@@ -41,10 +41,10 @@ We propose AERO, a modular and adaptable framework for machine learning research
 ### 1. Model Recommendation
 blah blah
 
-### 2. Research Planning
+### 2. Research Planning 
 blah blah
 
-### 3. Experiment Design
+### 3. Experiment Design 🧪
 Given a research plan, the system extracts key information and retrieves supporting literature to generate experiment ideas and designs. The final output is a detailed experimental design accompanied by executable Python code.
 
 #### Using it as a Python module:
