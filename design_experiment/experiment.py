@@ -25,7 +25,8 @@ from langchain_core.messages import AIMessage
 
 @dataclass
 class ExperimentState:
-    user_input: str
+    user_input: str = ""
+    experiment_input: str = ""
     plan_content: str = ""
     full_design_content: str = ""
     literature_chunks: list = field(default_factory=list)
@@ -46,7 +47,7 @@ async def summarize_node(state: ExperimentState) -> ExperimentState:
         Focus on the main modalities, methods, and goals.
 
         EXPERIMENT DESCRIPTION:
-        {state.user_input}
+        {state.experiment_input}
 
         Output only the search query, no explanation.
         """
@@ -133,7 +134,7 @@ async def plan_node(state: ExperimentState) -> ExperimentState:
         You are an expert researcher. Given the following experiment description and relevant literature, create a PLAN listing everything needed to execute the experiment.
 
         EXPERIMENT DESCRIPTION:
-        {state.user_input}
+        {state.experiment_input}
 
         {state.literature_context}
 
@@ -209,7 +210,7 @@ async def design_node(state: ExperimentState) -> ExperimentState:
 
             Context (for your reference only):
             EXPERIMENT DESCRIPTION:
-            {state.user_input}
+            {state.experiment_input}
 
             {state.literature_context}
 
@@ -309,19 +310,22 @@ async def generate_code_node(state: ExperimentState) -> ExperimentState:
     # Use the most refined design if available
     design = state.refined_design_content or state.full_design_content
     if design:
-        code_state = CodeGenState(user_input=design)
+        code_state = CodeGenState(experiment_input=design)
         code_graph = build_codegen_graph()
         final_code_state = await code_graph.ainvoke(code_state)
-        # --- Fix: handle dict fallback ---
+  
         if hasattr(final_code_state, "final_output"):
             state.generated_code = final_code_state.final_output
         elif isinstance(final_code_state, dict) and "final_output" in final_code_state:
             state.generated_code = final_code_state["final_output"]
         else:
-            state.generated_code = "❌ Code generation failed or returned unexpected output."
-    else:
-        state.generated_code = "❌ No valid experiment design available for code generation."
-    return state
+            # fallback: if code workflow returned full generated_code list or text
+            if hasattr(final_code_state, "generated_code"):
+                state.generated_code = final_code_state.generated_code
+            elif isinstance(final_code_state, dict) and "generated_code" in final_code_state:
+                state.generated_code = final_code_state["generated_code"]
+
+        return state
 
 async def cleanup_code_tags_node(state: ExperimentState) -> ExperimentState:
     """
@@ -359,16 +363,16 @@ def build_experiment_graph():
     graph.add_edge("summarize", "literature")
     graph.add_edge("literature", "plan")
     graph.add_edge("plan", "design")
-    graph.add_edge("design", "generate_code")
-    graph.add_edge("generate_code", "score")
-    graph.add_edge("score", "design")  # If score fails, go back to design (refinement loop)
-    graph.add_edge("score", "cleanup") # If score passes, go to cleanup
+    graph.add_edge("design", "score")
+    graph.add_edge("score", "design")    # If score fails, go back to design (refine)
+    graph.add_edge("score", "generate_code")  # If score passes, go to code generation
+    graph.add_edge("generate_code", "cleanup")
     graph.add_edge("cleanup", END)
 
-    # Conditional edge: if all scores >= 70, go to cleanup; else, go to design for refinement
+    # Conditional edge: if all scores >= 80, go to cleanup; else, go to design for refinement
     async def refinement_decision(state: ExperimentState):
         scores = state.scores or {}
-        if scores and all(v >= 70 for v in scores.values()):
+        if scores and all(v >= 80 for v in scores.values()):
             return "cleanup"
         else:
             return "design"
