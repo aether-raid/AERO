@@ -24,7 +24,7 @@ from concurrent.futures import ThreadPoolExecutor
 import sys
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from arxiv_paper_utils import ArxivPaperProcessor
-from design_experiment.init_utils import get_llm_response
+from design_experiment.utils import get_llm_response
 from langgraph.graph import StateGraph, END
 import asyncio
 

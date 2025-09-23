@@ -5,7 +5,7 @@ import os
 import re
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from design_experiment.experiment import ExperimentState, build_experiment_graph
-from design_experiment.init_utils import extract_research_components
+from design_experiment.utils import extract_research_components
 from design_experiment.idea_tree import run_experiment_tree_search
 from design_experiment.code import build_codegen_graph, CodeGenState
 
@@ -217,19 +217,24 @@ def design_experiment_workflow():
     g.set_entry_point('extract_components')
     return g
 
-async def main():
-    print("Paste your full research plan (end with an empty line):")
-    user_input = ""
-    while True:
-        line = input()
-        if line.strip() == "":
-            break
-        user_input += line + "\n"
-
+# --- Full Workflow ---
+def run_design_workflow(user_input: str):
+    """
+    Runs the design experiment workflow on the given research plan.
+    """
     workflow = design_experiment_workflow()
     state = {'user_input': user_input}
     app = workflow.compile()
-    await app.ainvoke(state)
+    import asyncio
+    asyncio.run(app.ainvoke(state))
+    return {
+        "design": state.get("refined_design_content", state.get("full_design_content", "")),
+        "code": state.get("generated_code", "")
+    }
+
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    user_input = input("Enter your research plan: ")
+    run_design_workflow(user_input)
+
+    

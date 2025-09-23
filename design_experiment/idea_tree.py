@@ -19,7 +19,7 @@ from typing import Dict, List, Optional, Any
 import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from design_experiment.search import build_experiment_search_workflow
-from design_experiment.init_utils import get_llm_response, extract_research_components
+from design_experiment.utils import get_llm_response, extract_research_components
 from langchain_core.messages import AIMessage
 
 class FilteredStringIO(StringIO):
