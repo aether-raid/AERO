@@ -19,7 +19,7 @@ import sys
 
 # Add parent directory to path for imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from arxiv_paper_utils import ArxivPaperProcessor
+from Arxiv_utils.arxiv_paper_utils import ArxivPaperProcessor
 
 # Suppress TensorFlow logging at the module level
 import logging
@@ -1490,7 +1490,7 @@ async def _search_experiment_papers_node(state: ExperimentSuggestionState) -> Ex
     # Import required modules for ArXiv search
     import urllib.request as libreq
     import xml.etree.ElementTree as ET
-    from arxiv import format_search_string
+    from Arxiv_utils.arxiv import format_search_string
     from concurrent.futures import ThreadPoolExecutor, as_completed
     
     # Initialize variables

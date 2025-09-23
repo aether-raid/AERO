@@ -21,7 +21,7 @@ Usage:
 import os
 # Import shared constants to prevent circular imports
 from shared_constants import ML_RESEARCH_CATEGORIES, Evidence, PropertyHit
-from arxiv_paper_utils import ArxivPaperProcessor
+from Arxiv_utils.arxiv_paper_utils import ArxivPaperProcessor
 # Disable TensorFlow oneDNN optimization messages and other warnings
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Suppress all TensorFlow warnings and info messages
@@ -66,10 +66,10 @@ from tavily import TavilyClient
 
 # Local imports
 from Report_to_txt import extract_pdf_text
-from arxiv import format_search_string
+from Arxiv_utils.arxiv import format_search_string
 # Note: arxiv imports removed for research planning workflow - using Tavily web search instead
-from arxiv import format_search_string
-from arxiv import explore_atom_elements  # For XML exploration if needed
+from Arxiv_utils.arxiv import format_search_string
+from Arxiv_utils.arxiv import explore_atom_elements  # For XML exploration if needed
 import os
 import pickle
 import faiss
@@ -1451,7 +1451,7 @@ class MLResearcherLangGraph:
             # Import required modules for ArXiv search
             import urllib.request as libreq
             import xml.etree.ElementTree as ET
-            from arxiv import format_search_string
+            from Arxiv_utils.arxiv import format_search_string
             
             search_query = state["arxiv_search_query"]
             original_prompt = state["original_prompt"]
@@ -7211,7 +7211,7 @@ BE STRICT: Only pass directions that are both **methodologically solid** and **w
         # Import required modules for ArXiv search
         import urllib.request as libreq
         import xml.etree.ElementTree as ET
-        from arxiv import format_search_string
+        from Arxiv_utils.arxiv import format_search_string
         from concurrent.futures import ThreadPoolExecutor, as_completed
         
         # Initialize variables
