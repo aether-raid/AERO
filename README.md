@@ -19,11 +19,11 @@ We propose AERO, a modular and adaptable framework for machine learning research
    ```
 
 2. **Configure environment variables:**
-   - Copy the provided `.env.example` file to `.env`:
+   Copy the provided `.env.example` file to `.env`:
      ```bash
      cp .env.example .env
      ```
-   - Open `.env` and fill in your own API keys and settings:
+   Open `.env` and fill in your own API keys and settings:
      ```
      OPENAI_API_KEY='YOUR_OPENAI_KEY'
      BASE_URL='YOUR_BASE_URL'
@@ -32,7 +32,7 @@ We propose AERO, a modular and adaptable framework for machine learning research
      CX='YOUR_CUSTOM_SEARCH_CX'
      TAVILY_API_KEY='YOUR_TAVILY_API_KEY'
      ```
-   - **Do not** commit your real `.env` file to version control. The `.env.example` file is safe to share and shows users what variables they need.
+   **Do not** commit your real `.env` file to version control. The `.env.example` file is safe to share and shows users what variables they need.
 
 ---
 
@@ -47,7 +47,7 @@ blah blah
 ### 3. Experiment Design
 Given a research plan, the system extracts key information and retrieves supporting literature to generate experiment ideas and designs. The final output is a detailed experimental design accompanied by executable Python code.
 
-**Using it as a Python module**
+#### Using it as a Python module:
 You can import and use the workflow in your own Python scripts:
    ```python
     from design_experiment import run_design_workflow # Full Workflow 
@@ -58,7 +58,7 @@ You can import and use the workflow in your own Python scripts:
     print(result["code"])
    ```
 
-**General Workflow:**
+#### General Workflow:
 1. Input Processing: Extracts goals, hypotheses, experiment ideas (if provided), and other relevant details from a research plan.
 2. Literature Retrieval System: Uses a Hybrid-RAG (Retrieval-Augmented Generation) approach to search and retrieve supporting literature (arXiv API).
 3. Idea Generation: Employs [SakanaAI’s Tree-based Experimentation Module](https://github.com/SakanaAI/treequest) to generate promising experiment ideas (when no experiment idea is provided).
