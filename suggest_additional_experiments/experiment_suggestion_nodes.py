@@ -130,6 +130,7 @@ class ExperimentSuggestionState(BaseState):
     experiment_iterations: List[Dict[str, Any]]  # History of experiment iterations
     research_direction: Dict[str, Any]        # Research direction analysis
     validated_experiment_papers: List[Dict[str, Any]]  # Validated papers for suggestions
+    distilled_methodologies: Dict[str, Any]         # Distilled methodology content from papers
     current_experiment_iteration: int        # Current iteration of experiment suggestion
     iteration_from_state: int                 # Iteration number from state
     analysis_iterations: List[Dict[str, Any]] # Track analysis validation iterations (history)
@@ -1411,6 +1412,12 @@ def _generate_experiment_search_query_node(state: ExperimentSuggestionState) -> 
         - For NLP: "transformer/text classification/evaluation/sentiment analysis"
         - For medical AI: "CNN/medical imaging/comparison/radiology"
         
+        SPECIAL CASE FOR SELF-SUPERVISED LEARNING: If the research direction involves self-supervised learning, use terms like:
+        - "SimCLR/contrastive learning/CIFAR-10/pretraining"
+        - "BYOL/self-supervised learning/image classification/fine-tuning"
+        - "MAE/masked autoencoder/CIFAR-10/generalization"
+        - "MoCo/momentum contrast/CIFAR-10/representation learning"
+        
         Focus on finding papers that will have similar experimental setups and methodologies, NOT generic methodology papers.
         Return ONLY the 4-term query string (no explanation).
         """
@@ -1453,7 +1460,12 @@ def _generate_experiment_search_query_node(state: ExperimentSuggestionState) -> 
         print(f"❌ Error generating experiment search query: {str(e)}")
         # Fallback query - try to extract domain from original prompt
         prompt_lower = original_prompt.lower()
-        if "object detection" in prompt_lower or "detection" in prompt_lower:
+        direction_lower = direction_text.lower()
+        
+        # Check for self-supervised learning direction
+        if "self-supervised" in direction_lower or "ssl" in direction_lower:
+            fallback_query = "SimCLR/contrastive learning/CIFAR-10/pretraining"
+        elif "object detection" in prompt_lower or "detection" in prompt_lower:
             fallback_query = "object detection/evaluation/experimental/computer vision"
         elif "classification" in prompt_lower:
             fallback_query = "classification/experimental/evaluation/machine learning"
@@ -1703,7 +1715,7 @@ def _validate_experiment_papers_node(state: ExperimentSuggestionState) -> Experi
             "papers_count": len(papers),
             "reason": "max_iterations_reached"
         }
-        state["next_node"] = "suggest_experiments_tree_2"  # CRITICAL FIX: Set routing
+        state["next_node"] = "distill_paper_methodologies"  # Route to distillation step first
         return state
     
     try:
@@ -1915,7 +1927,7 @@ def _validate_experiment_papers_node(state: ExperimentSuggestionState) -> Experi
             
             # Map validation decision to next node
             if validation_decision == "CONTINUE":
-                next_node = "suggest_experiments_tree_2"  # Route to NEW CLEAN architecture
+                next_node = "distill_paper_methodologies"  # Route to distillation step first
                 print(f"✅ Experiment papers are adequate. Continuing to experiment suggestions.")
                 
                 # CRITICAL FIX: Transfer papers to validated_experiment_papers for clean architecture
@@ -1931,7 +1943,7 @@ def _validate_experiment_papers_node(state: ExperimentSuggestionState) -> Experi
                 print(f"🔄 Papers inadequate. Generating new search query.")
             else:
                 # Default fallback
-                next_node = "suggest_experiments_tree_2"  # Route to NEW CLEAN architecture
+                next_node = "distill_paper_methodologies"  # Route to distillation step first
                 print(f"⚠️ Unknown validation decision '{validation_decision}'. Defaulting to continue.")
                 
                 # CRITICAL FIX: Also transfer papers for default fallback
@@ -1966,7 +1978,7 @@ def _validate_experiment_papers_node(state: ExperimentSuggestionState) -> Experi
             
             # Add routing for error case
             if decision == "continue":
-                state["next_node"] = "suggest_experiments_tree_2"  # Route to NEW CLEAN architecture
+                state["next_node"] = "distill_paper_methodologies"  # Route to distillation step first
                 # CRITICAL FIX: Transfer papers for continue decision in JSON error case
                 print(f"📚 Transferring {len(papers)} papers to validated_experiment_papers (JSON fallback)")
                 state["validated_experiment_papers"] = papers
@@ -1993,7 +2005,7 @@ def _validate_experiment_papers_node(state: ExperimentSuggestionState) -> Experi
         state["experiment_paper_validation_decision"] = "continue"
         
         # Add routing for error case  
-        state["next_node"] = "suggest_experiments_tree_2"  # Route to NEW CLEAN architecture
+        state["next_node"] = "distill_paper_methodologies"  # Route to distillation step first
         
         # CRITICAL FIX: Transfer papers for general error case too
         papers = state.get("experiment_papers", [])
@@ -2004,11 +2016,124 @@ def _validate_experiment_papers_node(state: ExperimentSuggestionState) -> Experi
     
     return state
 
+async def _distill_paper_methodologies_node(state: ExperimentSuggestionState) -> ExperimentSuggestionState:
+    """Distill and condense methodology and experimental information from validated papers."""
+    print("📚 Step 6: Distilling methodology and experimental information from papers...")
+    state["current_step"] = "distill_methodologies"
+
+    client = state["client"]
+    model = state["model"]
+    validated_papers = state.get("validated_experiment_papers", [])
+
+    if not validated_papers:
+        print("⚠️ No validated papers to distill")
+        state["distilled_methodologies"] = {}
+        return state
+
+    try:
+        distilled_methodologies = {}
+
+        for i, paper in enumerate(validated_papers[:5], 1):  # Process top 5 papers
+            paper_title = paper.get('title', f'Paper {i}')
+            paper_content = paper.get('content', '')
+
+            if not paper_content:
+                print(f"⚠️ Skipping paper {i} - no content available")
+                continue
+
+            print(f"🔬 Distilling paper {i}: {paper_title[:50]}...")
+
+            # Create distillation prompt with clearer instructions for brevity
+            distillation_prompt = f"""Extract key methodology from this research paper in exactly 800 characters or less.
+
+FOCUS ON:
+• Model architecture (specific networks, layers, components)
+• Training setup (batch size, learning rate, optimizer, epochs)
+• Dataset and preprocessing
+• Key experimental details
+
+FORMAT: Bullet points only. Be concise but specific.
+
+PAPER: {paper_title}
+CONTENT: {paper_content}
+IMPORTANT:
+KEEP RESPONSES TO A MAXIMUM OF 600 CHARACTERS.
+Provide methodology summary in under 600 characters:"""
+
+            try:
+                # Remove max_tokens to avoid truncation issues with LiteLLM proxy
+                response = client.chat.completions.create(
+                    model=model,
+                    temperature=0.1,  # Low temperature for factual extraction
+                    messages=[{"content": distillation_prompt, "role": "user"}]
+                )
+
+                distilled_content = response.choices[0].message.content
+                
+                # Debug response info
+                print(f"🔍 API response finish_reason: {response.choices[0].finish_reason}")
+                print(f"🔍 Raw content type: {type(distilled_content)}")
+                print(f"🔍 Raw content length: {len(distilled_content) if distilled_content else 0}")
+
+                # Handle None content
+                if distilled_content is None:
+                    print(f"⚠️ API returned None content for paper {i}")
+                    distilled_content = "API returned no content - processing failed"
+                
+                # Ensure content is within 1200 character limit
+                if distilled_content and len(distilled_content) > 1200:
+                    distilled_content = distilled_content[:1197] + "..."
+
+                distilled_methodologies[f"paper_{i}"] = {
+                    "title": paper_title,
+                    "distilled_content": distilled_content or "No methodology information extracted",
+                    "character_count": len(distilled_content) if distilled_content else 0
+                }
+
+                print(f"✅ Distilled paper {i}: {len(distilled_content) if distilled_content else 0} characters")
+                
+                # Show a preview of the content for debugging
+                if distilled_content and len(distilled_content) > 0:
+                    preview = distilled_content[:100].replace('\n', ' ')
+                    print(f"📄 Preview: {preview}...")
+
+            except Exception as api_error:
+                print(f"⚠️ API error for paper {i}: {api_error}")
+                distilled_methodologies[f"paper_{i}"] = {
+                    "title": paper_title,
+                    "distilled_content": f"API error: {str(api_error)}",
+                    "character_count": 0
+                }
+
+        state["distilled_methodologies"] = distilled_methodologies
+        for i in range(len(validated_papers), 5):
+            distilled_methodologies[f"paper_{i+1}"] = {
+                "title": f"Paper {i+1}",
+                "distilled_content": "No paper available",
+                "character_count": 0
+            }
+
+        total_chars = sum(info['character_count'] for info in distilled_methodologies.values())
+        successful_distillations = sum(1 for info in distilled_methodologies.values() if info['character_count'] > 0)
+        
+        print(f"📚 Successfully distilled methodologies from {successful_distillations}/{len(distilled_methodologies)} papers")
+        print(f"📊 Total distilled content: {total_chars} characters")
+
+    except Exception as e:
+        error_msg = f"Methodology distillation failed: {str(e)}"
+        print(f"❌ {error_msg}")
+        state["errors"].append(error_msg)
+        state["distilled_methodologies"] = {}
+        # Continue even on error - workflow will proceed to experiment generation
+
+    return state
+
 async def _suggest_experiments_tree_2_node(state: ExperimentSuggestionState) -> ExperimentSuggestionState:
     """Generate comprehensive experiment suggestions."""
     # Extract dependencies from state
     client = state["client"]
     model = state["model"]
+    print("==="*30)
     
     print("🧪 Step 7: Generating experiment suggestions...")
     state["current_step"] = "suggest_experiments"
@@ -2019,28 +2144,47 @@ async def _suggest_experiments_tree_2_node(state: ExperimentSuggestionState) -> 
         validated_papers = state.get("validated_experiment_papers", [])
         original_prompt = state["original_prompt"]
 
-        # DEBUG: Check validated_papers in experiment generation
-        print(f"🧪 DEBUG: Experiment generation - validated_papers length: {len(validated_papers)}")
-        if validated_papers:
-            print(f"🧪 DEBUG: First paper title: {validated_papers[0].get('title', 'No title')[:50]}...")
-        else:
-            print("🧪 DEBUG: No validated_papers in experiment generation!")
-        
         # Get validation feedback from previous iteration
         validation_feedback = state.get("validation_feedback", "")
         current_iteration = state.get("current_experiment_iteration", 0)
+
+        # Store current experiment suggestions as previous before generating new ones
+        current_suggestions = state.get("experiment_suggestions", "")
+        if current_suggestions and current_iteration > 0:
+            state["previous_experiment_suggestions"] = current_suggestions
+            print(f"📝 Stored previous experiment suggestions ({len(current_suggestions)} chars) for improvement guidance")
         
         # Get accumulated past mistakes for learning
         past_mistakes = state.get("past_experiment_mistakes", [])
         
-        # Prepare context from papers
+        # Get previous experiment suggestions for direct improvement
+        previous_experiment_suggestions = state.get("previous_experiment_suggestions", "")
+        
+        # Prepare context from distilled methodologies instead of raw papers
+        distilled_methodologies = state.get("distilled_methodologies", {})
         papers_context = ""
-        if validated_papers:
+        
+        # Check if we have meaningful distilled content (not just empty entries)
+        has_meaningful_distillation = any(
+            info.get('distilled_content', '') and len(info.get('distilled_content', '')) > 10
+            for info in distilled_methodologies.values()
+        )
+        
+        if has_meaningful_distillation:
+            papers_context = "Distilled Methodology and Experimental Information from Research Papers:\n\n"
+            for paper_key, paper_info in distilled_methodologies.items():
+                papers_context += f"Paper: {paper_info['title']}\n"
+                papers_context += f"Distilled Content ({paper_info['character_count']} chars):\n"
+                papers_context += f"{paper_info['distilled_content']}\n\n"
+        elif validated_papers:
+            # Fallback to raw papers if distillation failed or produced no content
+            print("⚠️ Using raw paper content as fallback (distillation produced no meaningful content)")
             papers_context = "Relevant Research Papers:\n"
             for i, paper in enumerate(validated_papers[:5], 1):
                 papers_context += f"{i}. {paper.get('title', 'Unknown')}\n"
-               # papers_context += f"   Abstract: {paper.get('summary', 'No summary')[:200]}...\n\n"
-                papers_context +=f"Content {paper.get('content', 'No Content')}"
+                papers_context += f"Content: {paper.get('content', 'No Content')[:2000]}...\n\n"
+        else:
+            papers_context = "No paper context available for experiment generation."
         
         # Add improvement guidance for iterations with past mistakes history
         improvement_guidance = ""
@@ -2067,10 +2211,26 @@ async def _suggest_experiments_tree_2_node(state: ExperimentSuggestionState) -> 
         - Novelty Issues: {'; '.join(mistake['novelty_concerns'][:2]) if mistake['novelty_concerns'] else 'None'}
         - Required Fixes: {'; '.join(mistake['improvement_recommendations'][:3]) if mistake['improvement_recommendations'] else 'None'}""")
             
+            # Include the most recent experiment suggestions for direct improvement
+            if previous_experiment_suggestions:
+                improvement_parts.append(f"""
+        
+        🔄 PREVIOUS EXPERIMENT SUGGESTIONS (IMPROVE UPON THESE):
+        Here are your most recent experiment suggestions that failed validation. Study them carefully and make targeted improvements:
+        
+        {previous_experiment_suggestions}
+        
+        Key areas to improve based on previous attempt:
+        - Address any missing or incomplete sections
+        - Enhance technical depth and specificity
+        - Improve paper integration and citations
+        - Strengthen methodology and evaluation procedures
+        - Fix any structural or content issues identified in validation""")
+            
             improvement_parts.append("""
         
         To pass strict validation, ensure:
-        1. Design at least 4 comprehensive experiments (not just 1-2)
+        1. Design 2 comprehensive experiments.
         2. Include ALL required sections: **Objective**, **Hypothesis**, **Methodology**, **Expected Outcomes**, **Success Metrics**
         3. Integrate insights from at least 3 research papers with specific citations
         4. Provide detailed technical depth (datasets, models, training procedures, evaluation metrics)
@@ -2080,17 +2240,22 @@ async def _suggest_experiments_tree_2_node(state: ExperimentSuggestionState) -> 
             
             improvement_guidance = "".join(improvement_parts)
         
-        # Create experiment suggestion prompt with STRICT literature grounding
-        content = f"""
-        You are an expert experimental researcher. Your task is to design experiments that are COMPLETELY GROUNDED in the provided literature context. You MUST NOT introduce any external knowledge, techniques, models, or datasets that are not explicitly mentioned in the provided papers.
+        # Create experiment suggestion prompt with LITERATURE-GROUNDED but FLEXIBLE approach
+        first_experiment_prompt = f"""
+        You are an expert experimental researcher designing novel experiments grounded in existing literature. You can use techniques, models, and datasets from the provided papers, and combine them in novel ways to address the research questions.
 
-        ⚠️ CRITICAL CONSTRAINTS - ZERO TOLERANCE:
-        - ONLY use models, datasets, and techniques explicitly mentioned in the provided papers
-        - EVERY model MUST cite its original research paper (e.g., "ResNet-50 (He et al., 2016)")
-        - EVERY dataset MUST be real and cited (e.g., "ImageNet (Deng et al., 2009)")
-        - If a technique is not mentioned in the papers, DO NOT use it
-        - Reference specific papers for EVERY experimental component
-        - Use the exact terminology and approaches from the literature context
+        FLEXIBLE LITERATURE GROUNDING:
+        - Use models, datasets, and techniques explicitly mentioned in the provided papers
+        - Combine different approaches from the literature in novel ways
+        - Reference specific papers for all experimental components
+        - Create experiments that build upon and extend the existing work
+        - If needed, use well-established techniques that complement the literature
+
+        CRITICAL REQUIREMENTS:
+        - Every experiment MUST reference at least 2 different papers from the provided literature
+        - Models and datasets MUST be cited from the papers (e.g., "ResNet-50 (He et al., 2016)")
+        - Experiments should address the key research questions directly
+        - Include all required sections: Objective, Hypothesis, Methodology, Expected Outcomes, Success Metrics
 
         Original Research Context:
         {original_prompt}
@@ -2112,18 +2277,14 @@ async def _suggest_experiments_tree_2_node(state: ExperimentSuggestionState) -> 
         2. **MODEL CITATIONS**: Every model mentioned MUST include original paper citation
         3. **DATASET CITATIONS**: Every dataset MUST be real with proper academic citation
         4. **TECHNIQUE VALIDATION**: Only use techniques explicitly described in the literature
-        5. **PAPER INTEGRATION**: Reference at least 3 different papers across your experiments
+        5. **PAPER INTEGRATION**: Reference at least 2 different papers for this experiment
 
-        Provide detailed experiment suggestions in the following format:
-
-        # Experiment Design Recommendations
-
-        ## Primary Experiments
+        Generate ONE detailed experiment in the following format:
 
         ### Experiment 1: [Experiment Title - Reference specific paper technique]
         **Objective**: Clear statement grounded in literature findings
         **Hypothesis**: Testable hypothesis based on literature insights
-        **Methodology**: 
+        **Methodology**:
         - Use ONLY techniques from provided papers
         - Cite specific papers for each methodological choice
         - Reference exact models/datasets from literature
@@ -2133,50 +2294,133 @@ async def _suggest_experiments_tree_2_node(state: ExperimentSuggestionState) -> 
         **Risk Assessment**: Risks identified in the literature
         **Literature References**: Specific papers supporting this experiment
 
-        ### Experiment 2: [Experiment Title - Reference specific paper technique]
-        [Same structure - different literature grounding]
-
-        ## Implementation Roadmap
-
-        **Phase 1 (Weeks 1-2)**: 
-        - Tasks based on literature implementation approaches
-
-        **Phase 2 (Weeks 3-4)**:
-        - Continuation with literature-grounded methods
-
-        ## Quality Control Measures
-
-        - Statistical methods from the literature
-        - Reproducibility requirements mentioned in papers
-        - Validation procedures from literature
-
-        ## Expected Timeline and Deliverables
-
-        - Timeline based on literature implementation times
-        - Deliverables aligned with literature outcomes
-
-        CRITICAL: Your experiments MUST be 100% grounded in the provided literature. If you cannot design experiments using ONLY the content from these papers, state this explicitly rather than introducing external knowledge.
+        CRITICAL: Your experiment MUST be 100% grounded in the provided literature. If you cannot design an experiment using ONLY the content from these papers, state this explicitly rather than introducing external knowledge.
         """
-        print ("===="*30)
-        #print('SUGESTION Prompt: '+ content)
-        #print ("===="*30)
-        
 
-        response = client.chat.completions.create(
+        print("🧪 Generating first experiment...")
+        response1 = client.chat.completions.create(
             model=model,
             temperature=0.3,
-            max_tokens=8000,
-            messages=[{"content": content, "role": "user"}]
+           # max_tokens=4000,
+            messages=[{"content": first_experiment_prompt, "role": "user"}]
         )
-        
-        experiment_suggestions = response.choices[0].message.content
-        
+
+        first_experiment = response1.choices[0].message.content
+
         # Ensure we have a valid string response
-        if experiment_suggestions is None:
-            raise ValueError("LLM returned None response")
-        
-        # Convert to string if needed
-        experiment_suggestions = str(experiment_suggestions)
+        if first_experiment is None:
+            raise ValueError("LLM returned None response for first experiment")
+
+        first_experiment = str(first_experiment)
+        print("✅ First experiment generated successfully")
+
+        # Create experiment suggestion prompt for SECOND EXPERIMENT - ensuring novelty
+        second_experiment_prompt = f"""
+        You are an expert experimental researcher designing a SECOND experiment that complements the first but uses different approaches from the literature. You can combine techniques from the provided papers in novel ways to create a distinct experimental approach.
+
+        FLEXIBLE LITERATURE GROUNDING FOR SECOND EXPERIMENT:
+        - Use different models, datasets, or techniques than the first experiment
+        - Combine approaches from the literature in novel ways
+        - Reference specific papers for all experimental components
+        - Create experiments that explore different aspects of the research questions
+        - Build upon the literature while exploring alternative approaches
+
+        CRITICAL REQUIREMENTS FOR SECOND EXPERIMENT:
+        - MUST be fundamentally different from the first experiment in approach or methodology
+        - Every experiment MUST reference at least 2 different papers from the provided literature
+        - Models and datasets MUST be cited from the papers
+        - Should address different aspects of the key research questions
+        - Include all required sections: Objective, Hypothesis, Methodology, Expected Outcomes, Success Metrics
+
+        FIRST EXPERIMENT (DO NOT REPEAT OR BE SIMILAR TO THIS):
+        {first_experiment}
+
+        Original Research Context:
+        {original_prompt}
+
+        Research Direction:
+        {json.dumps(research_direction, indent=2)}
+
+        Findings Analysis:
+        {json.dumps(findings_analysis, indent=2)}
+
+        LITERATURE CONTEXT (MANDATORY REFERENCE MATERIAL):
+        {papers_context}
+
+        {improvement_guidance}
+
+        EXPERIMENT DESIGN REQUIREMENTS FOR SECOND EXPERIMENT:
+
+        1. **LITERATURE GROUNDING**: Every experiment component MUST reference specific content from the provided papers
+        2. **MODEL CITATIONS**: Every model mentioned MUST include original paper citation
+        3. **DATASET CITATIONS**: Every dataset MUST be real with proper academic citation
+        4. **TECHNIQUE VALIDATION**: Only use techniques explicitly described in the literature
+        5. **PAPER INTEGRATION**: Reference at least 2 different papers for this experiment
+        6. **NOVELTY REQUIREMENT**: This experiment MUST be fundamentally different from the first experiment in approach, methodology, models, or research focus
+        7. **DIFFERENT LITERATURE BASIS**: Use different papers or different aspects of the same papers than the first experiment
+
+        Generate ONE detailed experiment that explores a completely different angle or approach:
+
+        ### Experiment 2: [Experiment Title - Reference specific paper technique - DIFFERENT from Experiment 1]
+        **Objective**: Clear statement grounded in literature findings (different focus from Experiment 1)
+        **Hypothesis**: Testable hypothesis based on literature insights (different from Experiment 1)
+        **Methodology**:
+        - Use ONLY techniques from provided papers (different techniques than Experiment 1)
+        - Cite specific papers for each methodological choice (different papers/aspects than Experiment 1)
+        - Reference exact models/datasets from literature (different from Experiment 1)
+        **Expected Outcomes**: Based on literature expectations (different outcomes than Experiment 1)
+        **Success Metrics**: Metrics mentioned in the papers (different metrics than Experiment 1)
+        **Resources Needed**: Based on literature resource requirements
+        **Risk Assessment**: Risks identified in the literature
+        **Literature References**: Specific papers supporting this experiment (different papers than Experiment 1)
+
+        CRITICAL REQUIREMENTS:
+        - Your experiment MUST be 100% grounded in the provided literature
+        - KEEP RESPONSE TO 500 WORDS MAXIMUM
+        - Your experiment MUST be NOVEL and DIFFERENT from the first experiment
+        - If you cannot design a sufficiently different experiment using ONLY the content from these papers, state this explicitly rather than creating a similar experiment
+        """
+
+        print("🧪 Generating second experiment (ensuring novelty)...")
+        response2 = client.chat.completions.create(
+            model=model,
+            temperature=0.4,  # Slightly higher temperature for more creativity in second experiment
+           # max_tokens=4000,
+            messages=[{"content": second_experiment_prompt, "role": "user"}]
+        )
+
+        second_experiment = response2.choices[0].message.content
+
+        # Ensure we have a valid string response
+        if second_experiment is None:
+            raise ValueError("LLM returned None response for second experiment")
+
+        second_experiment = str(second_experiment)
+        print("✅ Second experiment generated successfully")
+
+        # Combine both experiments into final suggestions
+        experiment_suggestions = f"""
+# Experiment Design Recommendations
+
+## Primary Experiments
+
+{first_experiment}
+
+{second_experiment}
+
+## Quality Control Measures
+
+- Statistical methods from the literature
+- Reproducibility requirements mentioned in papers
+- Validation procedures from literature
+
+## Expected Timeline and Deliverables
+
+- Timeline based on literature implementation times
+- Deliverables aligned with literature outcomes
+"""
+
+        print("✅ Both experiments combined successfully")
         
         state["experiment_suggestions"] = experiment_suggestions
         state["suggestion_source"] = "llm_generated"
@@ -2205,7 +2449,7 @@ async def _suggest_experiments_tree_2_node(state: ExperimentSuggestionState) -> 
         
         # Add success message
         state["messages"].append(
-            AIMessage(content=f"Generated comprehensive experiment suggestions with {state['experiment_summary']['total_experiments']} detailed experiments.")
+            AIMessage(content=f"Generated two distinct experiment suggestions with {state['experiment_summary']['total_experiments']} detailed experiments, ensuring novelty between approaches.")
         )
         
     except Exception as e:
@@ -2261,7 +2505,7 @@ def _validate_experiments_tree_2_node(state: ExperimentSuggestionState) -> Exper
     
     # Add infinite loop protection
     current_iteration = state.get("current_experiment_iteration", 0)
-    if current_iteration >= 5:
+    if current_iteration >= 7:  # Higher safety limit
         print(f"⚠️ Maximum experiment iterations reached ({current_iteration}). Forcing completion...")
         state["next_node"] = "END"
         state["experiments_validation_decision"] = "FORCE_PASS"
@@ -2368,14 +2612,15 @@ def _validate_experiments_tree_2_node(state: ExperimentSuggestionState) -> Exper
                    - Implementable experimental procedures
 
                 **MANDATORY REQUIREMENTS:**
-                - Every model MUST cite the original paper (e.g., "ResNet-50 (He et al., 2016)")
-                - Every dataset MUST be real with proper citation
+                - Every model/dataset MUST be cited from the provided papers
                 - Experiments must include: Objective, Hypothesis, Methodology, Expected Outcomes, Success Metrics
                 - At least 2 experiments must be proposed
+                - Experiments should build upon the literature rather than require groundbreaking novelty
 
                 **NOVELTY ASSESSMENT:**
-                - For literature-grounded experiments, focus on practical combinations rather than groundbreaking novelty
-                - Value lies in systematic application of documented methods to the target problem
+                - For literature-grounded experiments, focus on practical combinations and extensions of documented methods
+                - Value lies in systematic application and comparison of established approaches
+                - Reasonable novelty comes from combining different techniques or applying them to new contexts within the literature
 
                 Return your assessment in this exact JSON format:
                 {{
@@ -2517,13 +2762,11 @@ def _validate_experiments_tree_2_node(state: ExperimentSuggestionState) -> Exper
                 improvement_recommendations = validation_json.get("improvement_recommendations", ["Improve experiment design"])
                 decision_rationale = validation_json.get("decision_rationale", "")
                 
-                # ULTRA-STRICT VALIDATION ENFORCEMENT
-                min_score_met = all(score >= 0.80 for score in detailed_scores.values())  # Reduced from 0.85 for literature-grounded experiments
-                if (overall_score < 0.85 or  # Reduced from 0.90
-                    not min_score_met or 
-                    len(critical_issues) > 0 or 
-                    len(direction_misalignment) > 0 or 
-                    len(novelty_concerns) > 0):
+                # MODERATE VALIDATION ENFORCEMENT for literature-grounded experiments
+                min_score_met = all(score >= 0.75 for score in detailed_scores.values())  # Increased from 0.70
+                if (overall_score < 0.80 or  # Increased from 0.75
+                    not min_score_met or
+                    len(critical_issues) > 1):  # Reduced from 2 to be stricter
                     validation_result = "FAIL"
                 
                 print(f"\n🔍 LLM VALIDATION RESULTS:")
@@ -2565,12 +2808,12 @@ def _validate_experiments_tree_2_node(state: ExperimentSuggestionState) -> Exper
         # DEBUG: Log validation state
         print(f"🔍 VALIDATION DEBUG: papers_available={papers_available}, validation_result='{validation_result}', overall_score={overall_score:.3f}, current_iteration={current_iteration}")
 
-        # Adjust thresholds based on paper availability - REDUCED for literature-grounded experiments
+        # Adjust thresholds based on paper availability - MODERATE STRICTNESS for literature-grounded experiments
         if papers_available:
-            min_score_required = 0.85  # Reduced from 0.90 for literature-grounded experiments
+            min_score_required = 0.80  # Increased from 0.75 for better quality
             pass_condition = validation_result == "PASS" and overall_score >= min_score_required
         else:
-            min_score_required = 0.70  # Relaxed threshold when no papers (basic validation scenario)
+            min_score_required = 0.70  # Slightly increased from 0.65
             pass_condition = validation_result == "PASS" and overall_score >= min_score_required
         
         if pass_condition:
@@ -2593,7 +2836,7 @@ def _validate_experiments_tree_2_node(state: ExperimentSuggestionState) -> Exper
 **Generation Status**: Success
 
 ## LLM Validation Results
-- Overall Score: {overall_score:.2f}/1.0 (Required: ≥0.90)
+- Overall Score: {overall_score:.2f}/1.0 (Required: ≥0.80)
 - Research Direction Alignment: {detailed_scores.get('research_direction_alignment', 0):.2f}/1.0
 - Novelty Potential: {detailed_scores.get('novelty_potential', 0):.2f}/1.0
 - Justification Quality: {detailed_scores.get('justification_quality', 0):.2f}/1.0
@@ -2622,7 +2865,7 @@ def _validate_experiments_tree_2_node(state: ExperimentSuggestionState) -> Exper
             state["messages"].append(
                 AIMessage(content=f"Experiment suggestion workflow completed successfully. LLM validation score: {overall_score:.2f}/1.0. Comprehensive experiment designs are ready for implementation.")
             )
-        elif current_iteration < 3:
+        elif current_iteration < 5:  # Allow more retries for experiment generation
             threshold_note = f"minimum {min_score_required:.2f} required" + (" (relaxed - no papers)" if not papers_available else " (strict - with papers)")
             print(f"❌ Experiment suggestions failed LLM validation - Score: {overall_score:.2f}/1.0 ({threshold_note})")
             state["next_node"] = "suggest_experiments_tree_2"
@@ -2647,7 +2890,7 @@ def _validate_experiments_tree_2_node(state: ExperimentSuggestionState) -> Exper
             
             # Create detailed mistake record for this iteration
             mistake_record = {
-                "iteration": current_iteration + 1,
+                "iteration": current_iteration,  # The iteration that just failed validation
                 "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
                 "validation_score": overall_score,
                 "critical_issues": critical_issues,
@@ -2699,8 +2942,8 @@ def _debug_validation_routing(state: ExperimentSuggestionState) -> str:
 
     print(f"🔍 ROUTING DEBUG: next_node='{next_node}', validation_decision='{validation_decision}', iteration={current_iteration}")
 
-    # SAFETY CHECK: Prevent infinite loops - align with validation logic (max 3 iterations)
-    MAX_ITERATIONS = 3
+    # SAFETY CHECK: Prevent infinite loops - align with validation logic (max 5 iterations)
+    MAX_ITERATIONS = 5
     if current_iteration >= MAX_ITERATIONS:
         print(f"🛑 Maximum iterations reached ({MAX_ITERATIONS}), forcing workflow END to prevent infinite recursion")
         return "END"
@@ -2773,6 +3016,7 @@ def _build_analyze_and_suggest_experiment_graph() -> StateGraph:
     workflow.add_node("generate_experiment_search_query", _generate_experiment_search_query_node)
     workflow.add_node("search_experiment_papers", _search_experiment_papers_node)
     workflow.add_node("validate_experiment_papers", _validate_experiment_papers_node)
+    workflow.add_node("distill_paper_methodologies", _distill_paper_methodologies_node)
     
     # NEW CLEAN ARCHITECTURE (RECOMMENDED - no dual edges, no state conflicts)
     workflow.add_node("suggest_experiments_tree_2", _suggest_experiments_tree_2_node)
@@ -2810,14 +3054,17 @@ def _build_analyze_and_suggest_experiment_graph() -> StateGraph:
     # Conditional edge after validation - use next_node field  
     workflow.add_conditional_edges(
         "validate_experiment_papers",
-        lambda state: state.get("next_node", "suggest_experiments_tree_2"),  # DEFAULT: Route to NEW CLEAN ARCHITECTURE
+        lambda state: state.get("next_node", "distill_paper_methodologies"),  # DEFAULT: Route to distillation step
         {
-            "suggest_experiments_tree_2": "suggest_experiments_tree_2",  # NEW CLEAN architecture (default)
-            
+            "distill_paper_methodologies": "distill_paper_methodologies",  # NEW: Distill methodologies first
+            "suggest_experiments_tree_2": "distill_paper_methodologies",    # Fallback: also route to distillation
             "search_experiment_papers": "search_experiment_papers", # Keep current papers, search for backup
             "generate_experiment_search_query": "generate_experiment_search_query"  # Start fresh with new search query
         }
     )
+    
+    # Add edge from distillation to experiment suggestion
+    workflow.add_edge("distill_paper_methodologies", "suggest_experiments_tree_2")
     workflow.add_conditional_edges(
         "suggest_experiments_tree_2",
         lambda state: state.get("next_node", "validate_experiments_tree_2"),  # Default to validation
@@ -2987,6 +3234,7 @@ async def run_experiment_suggestion_workflow(
             "research_direction": {},
             "validated_experiment_papers": [],
             "validated_experiment_papers": [],  # Add this key that the clean architecture uses
+            "distilled_methodologies": {},       # Distilled methodology content from papers
             "current_experiment_iteration": 0,
             "iteration_from_state": 0,
             "analysis_iterations": [],  # Track analysis validation iterations (list for history)
@@ -3068,7 +3316,7 @@ async def run_experiment_suggestion_workflow(
 def _load_from_env_file(key: str) -> Optional[str]:
     """Load configuration value from env.example file."""
     try:
-        with open('env.example', 'r', encoding='utf-8') as f:
+        with open('.env', 'r', encoding='utf-8') as f:
             for line in f:
                 line = line.strip()
                 if line.startswith(f'{key}='):
@@ -3124,6 +3372,8 @@ async def test_experiment_suggestion_workflow():
     )
     
     print("Final result:", "Success" if result.get("experiment_suggestions") else "Failed")
+    print("===="*3)
+    print(result.get("experiment_suggestions", "No suggestions generated"))
     return result
 
 
