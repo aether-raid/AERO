@@ -152,7 +152,7 @@ async def decide_next_node(state):
         return 'tree_search'
 
 # --- Build unified LangGraph workflow ---
-def unified_design_experiment_workflow():
+def design_experiment_workflow():
     g = StateGraph(dict)
     g.add_node('extract_components', node_extract_components)
     g.add_node('tree_search', node_tree_search)
@@ -165,7 +165,7 @@ def unified_design_experiment_workflow():
 
 # --- Runner ---
 def run_design_workflow(user_input: str):
-    workflow = unified_design_experiment_workflow()
+    workflow = design_experiment_workflow()
     state = {'user_input': user_input}
     app = workflow.compile()
     output_state = asyncio.run(app.ainvoke(state))
