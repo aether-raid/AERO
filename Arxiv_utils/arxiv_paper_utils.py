@@ -20,7 +20,7 @@ import asyncio
 from typing import Dict, List, Any
 import requests
 import feedparser
-from Report_to_txt import extract_pdf_text
+from Arxiv_utils.Report_to_txt import extract_pdf_text
 
 
 class ArxivPaperProcessor:

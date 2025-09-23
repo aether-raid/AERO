@@ -58,12 +58,12 @@ You can import and use the workflow in your own Python scripts:
 5. **Critique & Refinement**: LLM-based quality assessment with iterative improvement based on critique feedback (up to 4 iterations).
 6. **Final Recommendations**: Produces comprehensive model suggestions with implementation details, performance expectations, and literature citations.
 
-![Model researcher workflow diagram](images/model_researcher_flow.png)
+![Model researcher workflow diagram](Workflow_Diagrams/model_researcher_flow.png)
 
 ### 2. Research Planning 
 blah blah
 
-![Research plan workflow diagram ](images/research_planner_flow.png)
+![Research plan workflow diagram ](Workflow_Diagrams/research_planner_flow.png)
 
 ### 3. Experiment Design 🧪
 Given a research plan, the system extracts key information and retrieves supporting literature to generate experiment ideas and designs. The final output is a detailed experimental design accompanied by executable Python code.
