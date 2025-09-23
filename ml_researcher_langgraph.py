@@ -527,12 +527,12 @@ class MLResearcherLangGraph:
         workflow = StateGraph(ModelSuggestionState)
         
         # Import the node function dynamically to prevent circular imports
-        from nodes.model_suggestion_nodes import _analyze_properties_and_task_node
+        from Suggest_models.model_suggestion_nodes import _analyze_properties_and_task_node
         # Bind the method to this instance since it expects self
         bound_method = _analyze_properties_and_task_node.__get__(self, self.__class__)
         
         # Add nodes for model suggestion pipeline
-        workflow.add_node("analyze_properties_and_task", bound_method)
+        workflow.add_node("analyze_properties_and_task", self._analyze_properties_and_task_node)
         workflow.add_node("generate_search_query", self._generate_search_query_node)
         workflow.add_node("search_arxiv", self._search_arxiv_node)
         workflow.add_node("validate_papers", self._validate_papers_node)
@@ -906,7 +906,7 @@ class MLResearcherLangGraph:
     
     # --- PHASE 1: TASK ANALYSIS & DECOMPOSITION ---
     
-    async def _analyze_properties_and_task_node2(self, state: ModelSuggestionState) -> ModelSuggestionState:
+    async def _analyze_properties_and_task_node(self, state: ModelSuggestionState) -> ModelSuggestionState:
         """Combined node for extracting properties and decomposing task concurrently."""
         print("\n🤖 Step 1: Analyzing properties and decomposing task concurrently...")
         state["current_step"] = "analyze_properties_and_task"
