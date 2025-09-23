@@ -3,15 +3,15 @@ from dataclasses import dataclass, asdict
 from langgraph.graph.message import add_messages
 from langchain_core.messages import BaseMessage
 import math
-import logging 
+
 import os
-import time
+
 import asyncio
 import json
 import pickle
 import urllib.request as libreq
 import xml.etree.ElementTree as ET
-import re
+
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from langchain_core.messages import AIMessage
@@ -23,16 +23,7 @@ from Arxiv_utils.arxiv_paper_utils import ArxivPaperProcessor
 from langgraph.graph import StateGraph, END
 from typing import Dict, List, Any, Optional, TypedDict, Annotated
 # Suppress TensorFlow logging at the module level
-import logging
-# Use Uvicorn's error logger so messages are visible in the server console
-logger = logging.getLogger("uvicorn.error")
-logging.getLogger('tensorflow').setLevel(logging.ERROR)
-# Suppress httpx verbose logging
-logging.getLogger('httpx').setLevel(logging.WARNING)
 
-import logging
-logging.getLogger("openai._base_client").setLevel(logging.WARNING)
-# Add missing imports
 try:
     import faiss
 except ImportError:
