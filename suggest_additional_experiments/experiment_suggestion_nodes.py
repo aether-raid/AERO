@@ -4,12 +4,12 @@ from langgraph.graph.message import add_messages
 from langchain_core.messages import BaseMessage, AIMessage
 from langgraph.graph import StateGraph, END
 import math
-import logging 
+
 import os
 import time
 import asyncio
 import json
-import pickle
+
 import urllib.request as libreq
 import xml.etree.ElementTree as ET
 import re
@@ -22,11 +22,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from Arxiv_utils.arxiv_paper_utils import ArxivPaperProcessor
 
 # Suppress TensorFlow logging at the module level
-import logging
-logger = logging.getLogger("uvicorn.error")
-logging.getLogger('tensorflow').setLevel(logging.ERROR)
-logging.getLogger('httpx').setLevel(logging.WARNING)
-logging.getLogger("openai._base_client").setLevel(logging.WARNING)
+
 
 # Add missing imports
 try:
