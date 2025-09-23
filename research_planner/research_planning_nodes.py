@@ -39,8 +39,13 @@ import openai
 # Web search imports
 from tavily import TavilyClient
 
-# Local imports
-from shared_constants import ML_RESEARCH_CATEGORIES, Evidence, PropertyHit, BaseState
+class BaseState(TypedDict):
+    """Base state for all workflows."""
+    messages: Annotated[List[BaseMessage], add_messages]
+    original_prompt: str  # Pure user query without uploaded data
+    uploaded_data: List[str]  # Uploaded file contents as separate field
+    current_step: str
+    errors: List[str]
 
 # Suppress warnings
 import warnings
@@ -134,7 +139,7 @@ class ResearchPlanningState(BaseState):
 def _load_from_env_file(key: str) -> Optional[str]:
     """Load environment variable from env.example file."""
     try:
-        env_file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "env.example")
+        env_file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..\env.example")
         if os.path.exists(env_file_path):
             with open(env_file_path, 'r') as f:
                 for line in f:
@@ -1635,8 +1640,8 @@ def _determine_refinement_path(state: ResearchPlanningState) -> str:
     # UTILITY & HELPER FUNCTIONS
     # ==================================================================================
 
-def _generate_research_plan_word_document(state: ResearchPlanningState) -> str:
-        """Generate and save a comprehensive Word document for the research plan (simplified version)."""
+def _display_research_plan_terminal(state: ResearchPlanningState) -> str:
+        """Generate and display a comprehensive research plan in the terminal."""
         try:
             from datetime import datetime
             import os
@@ -1664,28 +1669,26 @@ METADATA:
 - Final Score: {state.get('critique_results', {}).get('overall_score', 'N/A')}
 """
             
-            # Save as text file (simplified - no Word formatting)
-            safe_prompt = "".join(c for c in state.get("original_prompt", "research")[:50] if c.isalnum() or c in ('-', '_')).strip()
-            if not safe_prompt:
-                safe_prompt = "research_plan"
+            # Print the research plan to terminal instead of saving to file
+            print("\n" + "="*80)
+            print("📋 GENERATED RESEARCH PLAN")
+            print("="*80)
+            print(content)
+            print("="*80)
+            print("📋 END OF RESEARCH PLAN")
+            print("="*80)
             
-            filename = f"research_plan_{safe_prompt}_{timestamp}.txt"
+            print(f"✅ Research plan displayed in terminal")
+            print(f"📊 Plan statistics:")
+            print(f"   - Total length: {len(content)} characters")
+            print(f"   - Estimated pages: {len(content) // 3000:.1f}")
+            print(f"   - Iterations: {state.get('iteration_count', 0)}")
+            print(f"   - Refinements: {state.get('refinement_count', 0)}")
             
-            # Ensure the directory exists
-            output_dir = "research_plans"
-            os.makedirs(output_dir, exist_ok=True)
-            
-            # Save in the research_plans directory
-            output_path = os.path.join(output_dir, filename)
-            
-            with open(output_path, 'w', encoding='utf-8') as f:
-                f.write(content)
-            
-            print(f"✅ Research plan document saved: {output_path}")
-            return output_path
+            return "terminal_display"  # Return indicator instead of file path
             
         except Exception as e:
-            print(f"❌ Failed to generate document: {str(e)}")
+            print(f"❌ Failed to display research plan: {str(e)}")
             return None
 
 async def plan_research(prompt: str, uploaded_data: List[str] = None) -> Dict[str, Any]:
@@ -1729,9 +1732,9 @@ async def plan_research(prompt: str, uploaded_data: List[str] = None) -> Dict[st
             
             # Generate document if successful
             if result.get("research_plan"):
-                doc_path = _generate_research_plan_word_document(result)
-                if doc_path:
-                    result["document_path"] = doc_path
+                display_status = _display_research_plan_terminal(result)
+                if display_status:
+                    result["display_method"] = "terminal_output"
             
             return result
             
@@ -1828,7 +1831,7 @@ __all__ = [
     '_finalize_plan_node',
     '_streamlined_validation_decision',
     '_determine_refinement_path',
-    '_generate_research_plan_word_document',
+    '_display_research_plan_terminal',
     'plan_research',
     'build_research_planning_graph',
     '_clean_text_for_encoding',
@@ -1891,8 +1894,8 @@ Examples:
             print(f"📋 Title: {plan.get('title', 'N/A')}")
             print(f"📊 Sections: {len(plan.get('sections', []))}")
             
-            if result.get("document_path"):
-                print(f"📄 Document saved: {result['document_path']}")
+            if result.get("display_method") == "terminal_output":
+                print("📄 Research plan displayed above in terminal")
         else:
             print("⚠️  No research plan was generated")
             
