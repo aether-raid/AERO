@@ -3394,17 +3394,3 @@ async def run_experiment_suggestion_workflow_from_file(
         experimental_results=experimental_results,
         file_path=file_path
     )
-
-
-if __name__ == "__main__":
-    """
-    Main entry point for testing the workflow.
-    """
-    # Run test
-    import asyncio
-    from dotenv import load_dotenv
-    load_dotenv()  # Load environment variables from .env file if present
-
-    
-    asyncio.run(test_experiment_suggestion_workflow())
-

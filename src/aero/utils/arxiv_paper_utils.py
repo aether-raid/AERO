@@ -17,9 +17,10 @@ class for better code organization.
 import re
 import math
 import asyncio
+from typing import Dict, List, Any, Optional
 import requests
 import feedparser
-from Arxiv_utils.Report_to_txt import extract_pdf_text
+from utils.report_to_txt import extract_pdf_text
 
 
 class ArxivPaperProcessor:
@@ -325,7 +326,7 @@ class ArxivPaperProcessor:
             print(f"❌ Error downloading PDF for {paper_info['title'][:50]}...: {e}")
             return paper_info
     
-    async def score_paper_relevance(self, paper_title: str, paper_content: str, original_query: str, custom_prompt: str | None = None) -> float:
+    async def score_paper_relevance(self, paper_title: str, paper_content: str, original_query: str, custom_prompt: Optional[str] = None) -> float:
         """LLM relevance score in [1.0, 10.0]. Returns a float only."""
         # Keep prompts lean; truncate huge inputs to control tokens
         MAX_CHARS = 8000
@@ -416,7 +417,7 @@ Paper content:
                     return 1.0
         return 1.0  # Fallback (should not reach here)
     
-    async def rank_papers_by_relevance(self, papers: list[dict], original_query: str, custom_prompt: str | None = None) -> list[dict]:
+    async def rank_papers_by_relevance(self, papers: list[dict], original_query: str, custom_prompt: Optional[str] = None) -> list[dict]:
         """Score and rank papers by relevance using cosine similarity (fast, deterministic)."""
         print("\n🎯 Scoring papers for relevance using cosine similarity...")
         
