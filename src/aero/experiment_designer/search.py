@@ -21,10 +21,8 @@ import urllib.request as libreq
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
 from concurrent.futures import ThreadPoolExecutor
-import sys
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from Arxiv_utils.arxiv_paper_utils import ArxivPaperProcessor
-from design_experiment.utils import get_llm_response
+from aero.utils.arxiv_paper_utils import ArxivPaperProcessor
+from aero.experiment_designer.utils import get_llm_response
 from langgraph.graph import StateGraph, END
 import asyncio
 

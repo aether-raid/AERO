@@ -11,15 +11,12 @@ Automated Experiment Code Generation Workflow (code.py)
 
 import re
 import ast
-import sys
-import os
 import importlib.util
 import asyncio
 from dataclasses import dataclass, field
 from typing import List, Tuple, Any
 from langgraph.graph import StateGraph, END
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from design_experiment.utils import get_llm_response
+from aero.experiment_designer.utils import get_llm_response
 
 @dataclass
 class CodeGenState:
@@ -186,25 +183,3 @@ def build_codegen_graph():
     graph.add_edge("assemble_output", END)
     graph.set_entry_point("extract_tags")
     return graph.compile()
-
-# Example runner
-async def main():
-    print("Enter experiment description (finish with an empty line):\n")
-    lines = []
-    while True:
-        try:
-            line = input()
-            if line == "":
-                break
-            lines.append(line)
-        except EOFError:
-            break
-    user_input = "\n".join(lines)
-    state = CodeGenState(experiment_input=user_input)
-    graph = build_codegen_graph()
-    final_state = await graph.ainvoke(state)
-    print("\n--- Final Experiment with Inline Code and Validation ---\n")
-    print(final_state['final_output'])
-
-if __name__ == "__main__":
-    asyncio.run(main())

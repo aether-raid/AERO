@@ -33,6 +33,8 @@ from pathlib import Path
 # LangGraph imports
 from langgraph.graph import StateGraph, END
 from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
+from langgraph.graph.message import add_messages
+from typing import Dict, List, Any, Optional, TypedDict, Annotated
 
 # Web search imports
 from tavily import TavilyClient
@@ -47,8 +49,13 @@ try:
 except ImportError:
     Document = None
 
-# Local imports
-from shared_constants import ML_RESEARCH_CATEGORIES, Evidence, PropertyHit
+class BaseState(TypedDict):
+    """Base state for all workflows."""
+    messages: Annotated[List[BaseMessage], add_messages]
+    original_prompt: str  # Pure user query without uploaded data
+    uploaded_data: List[str]  # Uploaded file contents as separate field
+    current_step: str
+    errors: List[str]
 
 # ==================================================================================
 # STATE DEFINITIONS
@@ -110,12 +117,12 @@ def _initialize_clients():
 
     if client is None:
         # Load configuration from env.example file
-        api_key = _load_from_env_file("OPENAI_API_KEY")
-        base_url = _load_from_env_file("BASE_URL") or "https://agents.aetherraid.dev"
-        model = _load_from_env_file("DEFAULT_MODEL") or "gemini/gemini-2.5-flash"
+        api_key = os.getenv("OPENAI_API_KEY")
+        base_url = os.getenv("BASE_URL") or "https://agents.aetherraid.dev"
+        model = os.getenv("DEFAULT_MODEL") or "gemini/gemini-2.5-flash"
 
         if not api_key:
-            raise ValueError("OPENAI_API_KEY not found in env.example")
+            raise ValueError("OPENAI_API_KEY not found")
 
         from openai import OpenAI
         client = OpenAI(
@@ -126,27 +133,13 @@ def _initialize_clients():
 
     if tavily_client is None:
         # Initialize Tavily client
-        tavily_api_key = "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"  # Using the key from the example file
+        tavily_api_key = os.getenv("TAVILY_API_KEY")  # Using the key from the example file
         try:
             tavily_client = TavilyClient(api_key=tavily_api_key)
             print("✅ Tavily web search client initialized successfully")
         except Exception as e:
             print(f"⚠️ Tavily client initialization failed: {e}")
             tavily_client = None
-
-def _load_from_env_file(key: str) -> Optional[str]:
-    """Load configuration value from env.example file."""
-    try:
-        with open("env.example", "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    k, v = line.split("=", 1)
-                    if k.strip() == key:
-                        return v.strip().strip('"').strip("'")
-    except Exception:
-        pass
-    return None
 
 # ==================================================================================
 # FILE EXTRACTION UTILITIES
@@ -2389,17 +2382,20 @@ async def _finalize_paper_node(state: PaperWritingState) -> PaperWritingState:
         # Markdown version (primary)
         final_outputs["markdown"] = formatted_paper
 
-        # Save to file
-        from datetime import datetime
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"generated_paper_{timestamp}.md"
+        # Print the paper to terminal instead of saving to file
+        print("\n" + "="*80)
+        print("📄 GENERATED ACADEMIC PAPER")
+        print("="*80)
+        print(formatted_paper)
+        print("="*80)
+        print("📄 END OF PAPER")
+        print("="*80)
 
-        with open(filename, 'w', encoding='utf-8') as f:
-            f.write(formatted_paper)
+        # Store paper content in outputs but don't save to file
+        final_outputs["paper_content"] = formatted_paper
+        final_outputs["display_method"] = "terminal_output"
 
-        final_outputs["file_path"] = filename
-
-        print(f"✅ Paper saved to: {filename}")
+        print(f"✅ Paper displayed in terminal")
         print(f"📊 Paper statistics:")
         print(f"   - Total length: {len(formatted_paper)} characters")
         print(f"   - Estimated pages: {len(formatted_paper) // 3000:.1f}")
@@ -2592,7 +2588,7 @@ async def write_paper(
         # Check for successful completion
         if result.get("current_step") == "paper_finalized":
             print("✅ Paper writing completed successfully!")
-            print(f"📄 Generated paper saved to: {result.get('final_outputs', {}).get('file_path', 'Unknown')}")
+            print("📄 Generated paper displayed above in terminal")
 
             # Return the complete results
             return dict(result)

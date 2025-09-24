@@ -131,21 +131,3 @@ def clean_json_string(text):
     text = re.sub(r"^```(?:json)?|```$", "", text, flags=re.MULTILINE).strip()
     text = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '', text)
     return text
-
-if __name__ == "__main__":
-    import asyncio
-
-    print("Paste your research plan (end with an empty line):")
-    user_input = ""
-    while True:
-        line = input()
-        if line.strip() == "":
-            break
-        user_input += line + "\n"
-
-    async def test_extract():
-        result = await extract_research_components(user_input)
-        print("\n--- Extracted Research Components ---")
-        print(json.dumps(result, indent=2, ensure_ascii=False))
-
-    asyncio.run(test_extract())
