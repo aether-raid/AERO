@@ -1,21 +1,19 @@
 import asyncio
-import sys
-import os
 import re
 from langgraph.graph import StateGraph, END
-
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from design_experiment.experiment import (
+from aero.experiment_designer.experiment import (
     ExperimentState,
     summarize_node,
     literature_node,
     plan_node,
     design_node,
     score_node,
+    remove_code_tags
 )
-from design_experiment.utils import extract_research_components
-from design_experiment.idea_tree import run_experiment_tree_search
-from design_experiment.code import CodeGenState, build_codegen_graph
+from aero.experiment_designer.utils import extract_research_components
+from aero.experiment_designer.idea_tree import run_experiment_tree_search
+from aero.experiment_designer.code import CodeGenState, build_codegen_graph
+
 
 # --- Helper: Add arXiv links ---
 def add_arxiv_links(text):
@@ -118,10 +116,12 @@ async def node_design_and_codegen(state):
                 break
             exp_state.refinement_round += 1
             exp_state = await design_node(exp_state)
+
         # Add arXiv links to references
         design_text = exp_state.refined_design_content or exp_state.full_design_content
         design_text = add_arxiv_links(design_text)
-        # --- Run codegen workflow directly (no subgraph, just call nodes) ---
+
+        # --- Run codegen workflow directly ---
         code_state = CodeGenState(experiment_input=design_text)
         code_graph = build_codegen_graph()
         final_code_state = await code_graph.ainvoke(code_state)
@@ -129,18 +129,17 @@ async def node_design_and_codegen(state):
             final_design_with_code = final_code_state.get('final_output', design_text)
         else:
             final_design_with_code = getattr(final_code_state, 'final_output', design_text)
+
+        # Clean up any remaining code tags in the final design
+        cleaned_design = remove_code_tags(design_text)
+        cleaned_code = remove_code_tags(final_design_with_code)
+
         all_designs.append({
             "experiment_idea": exp_desc,
-            "design": design_text,
+            "design": cleaned_design,
             "refinements": exp_state.refinement_suggestions,
-            "code": final_design_with_code
+            "code": cleaned_code
         })
-        print("\n--- FINAL EXPERIMENT DESIGN WITH INLINE CODE ---")
-        print(final_design_with_code)
-        print("\n--- FINAL REFINEMENT SUGGESTIONS ---")
-        if exp_state.refinement_suggestions:
-            for s in exp_state.refinement_suggestions:
-                print(f"- {s.strip('- ')}")
     state['all_designs'] = all_designs
     return state
 
@@ -182,20 +181,3 @@ def run_design_workflow(user_input: str):
         "design": design,
         "code": code
     }
-
-if __name__ == "__main__":
-    user_input = input("Enter your research plan: ")
-    result = run_design_workflow(user_input)
-    print("\n=== FINAL EXPERIMENT DESIGN ===\n")
-    print(result["design"])
-    print("\n=== GENERATED CODE ===\n")
-    print(result["code"])
-    # Save to Markdown file
-    with open("experiment_designs_output1.md", "w", encoding="utf-8") as f:
-        f.write("# Final Experiment Design\n\n")
-        f.write(result["design"] + "\n\n")
-        f.write("## Generated Code\n\n")
-        f.write("```python\n")
-        f.write(result["code"] + "\n")
-        f.write("```\n")
-    print("\nOutput saved to experiment_designs_output1.md")

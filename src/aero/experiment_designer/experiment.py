@@ -14,13 +14,9 @@ import re
 import json
 import asyncio
 from dataclasses import dataclass, field
-from langgraph.graph import StateGraph, END
-import os
-import sys
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from design_experiment.utils import get_llm_response, get_gpt_llm_response
-from design_experiment.search import build_experiment_search_workflow, search_dataset_online
-from design_experiment.code import build_codegen_graph, CodeGenState
+from aero.experiment_designer.utils import get_llm_response, get_gpt_llm_response
+from aero.experiment_designer.search import build_experiment_search_workflow, search_dataset_online
+from aero.experiment_designer.code import build_codegen_graph, CodeGenState
 from langchain_core.messages import AIMessage
 
 @dataclass
@@ -327,56 +323,19 @@ async def generate_code_node(state: ExperimentState) -> ExperimentState:
 
         return state
 
-async def cleanup_code_tags_node(state: ExperimentState) -> ExperimentState:
-    """
-    Removes all [CODE_NEEDED: ...] tags, their descriptions, and the summary list of code tags from the experiment plan.
-    """
-    def remove_code_tags(text):
-        # Remove [CODE_NEEDED: ...] and [CODE_NEEDED] ... tags (entire line)
-        text = re.sub(r'\[CODE_NEEDED(?::[^\]]*)?\][^\n]*\n?', '', text)
-        # Remove summary list section (header and following bullets)
-        text = re.sub(
-            r'(?i)Summary List of \[CODE_NEEDED\][^\n]*\n(?:\s*[\d\-\*\.]+\s*[^\n]+\n?)*', 
-            '', text
-        )
-        # Remove any leftover "Summary List of ..." header on its own line
-        text = re.sub(r'(?i)^Summary List of.*$', '', text, flags=re.MULTILINE)
-        return text.strip()
 
-    if state.refined_design_content:
-        state.refined_design_content = remove_code_tags(state.refined_design_content)
-    if state.full_design_content:
-        state.full_design_content = remove_code_tags(state.full_design_content)
-    return state
-
-# --- LangGraph workflow with cyclic refinement ---
-def build_experiment_graph():
-    graph = StateGraph(ExperimentState)
-    graph.add_node("summarize", summarize_node)
-    graph.add_node("literature", literature_node)
-    graph.add_node("plan", plan_node)
-    graph.add_node("design", design_node)
-    graph.add_node("score", score_node)
-    graph.add_node("generate_code", generate_code_node)  
-    graph.add_node("cleanup", cleanup_code_tags_node)   
-
-    graph.add_edge("summarize", "literature")
-    graph.add_edge("literature", "plan")
-    graph.add_edge("plan", "design")
-    graph.add_edge("design", "score")
-    graph.add_edge("score", "design")    # If score fails, go back to design (refine)
-    graph.add_edge("score", "generate_code")  # If score passes, go to code generation
-    graph.add_edge("generate_code", "cleanup")
-    graph.add_edge("cleanup", END)
-
-    # Conditional edge: if all scores >= 80, go to cleanup; else, go to design for refinement
-    async def refinement_decision(state: ExperimentState):
-        scores = state.scores or {}
-        if scores and all(v >= 80 for v in scores.values()):
-            return "cleanup"
-        else:
-            return "design"
-
-    graph.add_conditional_edges("score", refinement_decision)
-    graph.set_entry_point("summarize")
-    return graph.compile()
+def remove_code_tags(text):
+    # Remove [CODE_NEEDED: ...] and [CODE_NEEDED] ... tags (entire line)
+    text = re.sub(r'\[CODE_NEEDED(?::[^\]]*)?\][^\n]*\n?', '', text)
+    # Remove summary list section (header and following bullets)
+    text = re.sub(
+        r'(?i)Summary List of \[CODE_NEEDED\][^\n]*\n(?:\s*[\d\-\*\.]+\s*[^\n]+\n?)*', 
+        '', text
+    )
+    # Remove any leftover "Summary List of ..." header on its own line
+    text = re.sub(r'(?i)^Summary List of.*$', '', text, flags=re.MULTILINE)
+    # Remove lines with only asterisks or whitespace
+    text = re.sub(r'^\s*[\*\-]+\s*$', '', text, flags=re.MULTILINE)
+    # Remove lines with only whitespace
+    text = re.sub(r'^\s*$', '', text, flags=re.MULTILINE)
+    return text.strip()
