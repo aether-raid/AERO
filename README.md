@@ -46,7 +46,23 @@ This stores a copy in the folder `aero`. You can then navigate into it using `cd
 $ pip install .
 ```
 
-This should install `bfms` to your local Python instance.
+This should install `aero` to your local Python instance.
+
+### Contributing
+
+If you are contributing, please clone this repository:
+
+```bash
+$ git clone https://github.com/aether-raid/aero.git
+```
+
+Thereafter, use `uv` to sync dependencies as follows:
+
+```bash
+$ uv sync
+```
+
+This will initiate a `.venv/` directory in the repository root directory, which can then be used as the Python Environment for development purposes. Please follow the [`uv` documentation](https://docs.astral.sh/uv/) for detailed steps on how to use `uv` for development.
 
 
 ### Configuring Environment Variables
