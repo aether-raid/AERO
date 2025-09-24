@@ -1,8 +1,13 @@
 [project]
 name = "aero"
 version = "0.1.0"
-description = "Add your description here"
+description = "AERO: Automated Exploration, Research & Orchestration – A Framework for Machine Learning Research"
 readme = "README.md"
+authors = [
+    { name = "Jacob Wong", email = "" },
+    { name = "Ethan Lau", email = "" },
+    { name = "Charmaine Chua", email = "chuacharmaine648@gmail.com" },
+]
 requires-python = ">=3.11"
 dependencies = [
     "beautifulsoup4>=4.9.0",
@@ -30,3 +35,7 @@ dependencies = [
     "transformers>=4.0.0",
     "treequest==0.1.2",
 ]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
