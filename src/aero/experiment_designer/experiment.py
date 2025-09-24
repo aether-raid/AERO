@@ -14,7 +14,7 @@ import re
 import json
 import asyncio
 from dataclasses import dataclass, field
-from aero.experiment_designer.utils import get_llm_response, get_gpt_llm_response
+from aero.experiment_designer.utils import get_llm_response, get_gpt_llm_response, stream_writer
 from aero.experiment_designer.search import build_experiment_search_workflow, search_dataset_online
 from aero.experiment_designer.code import build_codegen_graph, CodeGenState
 from langchain_core.messages import AIMessage
@@ -124,8 +124,9 @@ async def enrich_datasets_with_links(text):
 
 # --- Node: Plan experiment requirements ---
 async def plan_node(state: ExperimentState) -> ExperimentState:
-    state.messages.append(AIMessage(content="📝 Generating experiment plan requirements..."))
-    print("📝 Generating experiment plan requirements...")
+    stream_writer("📝 Generating experiment plan requirements...")
+    await asyncio.sleep(0.5)  # Allow stream message to appear before LLM calls
+
     prompt = f"""
         You are an expert researcher. Given the following experiment description and relevant literature, create a PLAN listing everything needed to execute the experiment.
 
@@ -175,8 +176,9 @@ async def design_node(state: ExperimentState) -> ExperimentState:
     # Use refined design and suggestions if this is a refinement round
     if state.refinement_round > 0:
         state.refinement_round += 1
-        state.messages.append(AIMessage(content="🔧 Refining experiment design..."))
-        print("🔧 Refining experiment design...")
+        stream_writer("🔧 Refining experiment design...")
+        await asyncio.sleep(0.5)  # Allow stream message to appear before LLM calls
+
         prev_design = state.refined_design_content or state.full_design_content
         suggestions = "\n".join(f"- {s.strip('- ')}" for s in state.refinement_suggestions if s.strip())
         prompt = f"""
@@ -199,8 +201,9 @@ async def design_node(state: ExperimentState) -> ExperimentState:
         state.refined_design_content = content.strip()
     else:
         state.refinement_round += 1
-        state.messages.append(AIMessage(content="💡 Generating initial experiment design..."))
-        print("💡 Generating initial experiment design...")
+        stream_writer("💡 Generating initial experiment design...")
+        await asyncio.sleep(0.5)  # Allow stream message to appear before LLM calls
+
         prompt = f"""
             You are an expert researcher. Given the following context (experiment description, relevant literature, and experiment plan), generate a DETAILED, step-by-step experiment design.
 
@@ -243,8 +246,9 @@ async def design_node(state: ExperimentState) -> ExperimentState:
 
 # --- Node: Score experiment design and suggest refinements ---
 async def score_node(state: ExperimentState) -> ExperimentState:
-    state.messages.append(AIMessage(content="💯 Evaluating experiment design..."))
-    print("💯 Evaluating experiment design...")
+    stream_writer("💯 Evaluating experiment design...")
+    await asyncio.sleep(0.5)  # Allow stream message to appear before LLM calls
+
     design = state.refined_design_content if state.refinement_round > 0 else state.full_design_content
     prompt = f"""
             You are an expert research evaluator and advisor. Review the following experiment design in detail.
@@ -290,16 +294,20 @@ async def score_node(state: ExperimentState) -> ExperimentState:
         state.scores = parsed.get("scores", {})
         state.refinement_suggestions = parsed.get("refinements", [])
     except Exception as e:
-        print("Scoring JSON parse error:", e)
+        stream_writer("Scoring JSON parse error:", e)
+        await asyncio.sleep(0.5) 
         state.scores = None
         state.refinement_suggestions = [response.strip()]
 
-    print("Scores:")
+    stream_writer("Scores:")
+    await asyncio.sleep(0.5) 
     if state.scores:
         for criterion, score in state.scores.items():
-            print(f" - {criterion}: {score}")
+            stream_writer(f" - {criterion}: {score}")
+            await asyncio.sleep(0.5) 
     else:
-        print("No scores available.")
+        stream_writer("No scores available.")
+        await asyncio.sleep(0.5) 
     return state
 
 async def generate_code_node(state: ExperimentState) -> ExperimentState:
@@ -321,8 +329,12 @@ async def generate_code_node(state: ExperimentState) -> ExperimentState:
             elif isinstance(final_code_state, dict) and "generated_code" in final_code_state:
                 state.generated_code = final_code_state["generated_code"]
 
-        return state
+        # Clean the design output using remove_code_tags
+        cleaned_design = remove_code_tags(design)
+        state.full_design_content = cleaned_design
+        state.refined_design_content = cleaned_design
 
+    return state
 
 def remove_code_tags(text):
     # Remove [CODE_NEEDED: ...] and [CODE_NEEDED] ... tags (entire line)

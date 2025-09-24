@@ -22,7 +22,7 @@ from dotenv import load_dotenv
 from openai import AsyncOpenAI
 from concurrent.futures import ThreadPoolExecutor
 from aero.utils.arxiv_paper_utils import ArxivPaperProcessor
-from aero.experiment_designer.utils import get_llm_response
+from aero.experiment_designer.utils import get_llm_response, stream_writer
 from langgraph.graph import StateGraph, END
 import asyncio
 
@@ -177,7 +177,8 @@ async def cosine_similarity_search_experiments(hypothesis_text, faiss_db_path='.
     """Search FAISS database for experiment chunks with cosine similarity > min_similarity"""
     try:
         if not (os.path.exists(faiss_db_path) and os.path.exists(meta_db_path)):
-            print(f"📂 No experiment FAISS database found")
+            stream_writer(f"📂 No experiment FAISS database found")
+            await asyncio.sleep(0.5) 
             return []
 
         # Load FAISS index and metadata
@@ -196,7 +197,8 @@ async def cosine_similarity_search_experiments(hypothesis_text, faiss_db_path='.
         elif isinstance(meta, list):
             all_chunks = meta
         else:
-            print(f"❌ Unexpected metadata format: {type(meta)}")
+            stream_writer(f"❌ Unexpected metadata format: {type(meta)}")
+            await asyncio.sleep(0.5)
             return []
 
         if len(all_chunks) == 0:
@@ -221,16 +223,19 @@ async def cosine_similarity_search_experiments(hypothesis_text, faiss_db_path='.
                     relevant_chunks.append(chunk)
 
         relevant_chunks.sort(key=lambda x: x['cosine_similarity'], reverse=True)
-        print(f"🔍 Found {len(relevant_chunks)} relevant experiment chunks")
+        stream_writer(f"🔍 Found {len(relevant_chunks)} relevant experiment chunks")
+        await asyncio.sleep(0.5)
         
         for i, chunk in enumerate(relevant_chunks[:10]):
             title = chunk.get('paper_title', 'Unknown')[:50]
-            print(f"   📄 {i+1}: {chunk['cosine_similarity']:.3f} - {title}...")
-        
+            stream_writer(f"   📄 {i+1}: {chunk['cosine_similarity']:.3f} - {title}...")
+            await asyncio.sleep(0.5)
+
         return relevant_chunks
 
     except Exception as e:
-        print(f"❌ FAISS experiment search failed: {e}")
+        stream_writer(f"❌ FAISS experiment search failed: {e}")
+        await asyncio.sleep(0.5)
         return []
 
 # --- LLM Experiment Validation ---
@@ -265,7 +270,8 @@ async def llm_experiment_relevance_validation(chunk, hypothesis):
         return str(response).strip().lower().startswith('yes')
         
     except Exception as e:
-        print(f"❌ LLM experiment validation failed: {e}")
+        stream_writer(f"❌ LLM experiment validation failed: {e}")
+        await asyncio.sleep(0.5)
         return False
 
 # --- Filter Papers by Relevance ---
@@ -300,13 +306,15 @@ async def filter_papers_by_relevance(papers, hypothesis, min_relevance=0.6):
         return relevant_papers
         
     except Exception as e:
-        print(f"❌ Paper relevance filtering failed: {e}")
+        stream_writer(f"❌ Paper relevance filtering failed: {e}")
+        await asyncio.sleep(0.5)
         return papers
 
 # --- ArXiv Search by Abstracts ---
 async def search_arxiv_by_abstracts(keywords, hypothesis, max_papers=20):
     """Search ArXiv and filter papers by abstract relevance to hypothesis"""
-    print(f"🔍 Searching ArXiv for: {', '.join(keywords[:3])}")
+    stream_writer(f"🔍 Searching ArXiv for: {', '.join(keywords[:3])}")
+    await asyncio.sleep(0.5)  # Allow stream message to appear before LLM calls
     
     # Format ArXiv query
     search_terms = ' OR '.join(keywords[:3])
@@ -319,8 +327,9 @@ async def search_arxiv_by_abstracts(keywords, hypothesis, max_papers=20):
     root = ET.fromstring(xml_data)
     ns = {'atom': 'http://www.w3.org/2005/Atom', 'arxiv': 'http://arxiv.org/schemas/atom'}
     entries = root.findall('atom:entry', ns)
-    
-    print(f"📄 Found {len(entries)} papers from ArXiv")
+
+    stream_writer(f"📄 Found {len(entries)} papers from ArXiv")
+    await asyncio.sleep(0.5)
     if len(entries) == 0:
         return []
 
@@ -337,7 +346,8 @@ async def search_arxiv_by_abstracts(keywords, hypothesis, max_papers=20):
 
     # Filter by abstract relevance to hypothesis
     relevant_papers = await filter_papers_by_relevance(papers, hypothesis, min_relevance=0.6)
-    print(f"📊 {len(relevant_papers)}/{len(papers)} papers relevant based on abstracts")
+    stream_writer(f"📊 {len(relevant_papers)}/{len(papers)} papers relevant based on abstracts")
+    await asyncio.sleep(0.5)
     
     # Return relevant papers
     return relevant_papers
@@ -350,7 +360,8 @@ async def download_and_extract_experiments(papers, hypothesis):
     global arxiv_processor
     if not arxiv_processor:
         arxiv_processor = initialize_arxiv_processor()
-    print(f"📥 Downloading {len(papers)} papers and extracting experiments...")
+    stream_writer(f"📥 Downloading {len(papers)} papers and extracting experiments...")
+    await asyncio.sleep(0.5)
 
     # Download paper contents (keep as is)
     downloaded_papers = []
@@ -365,7 +376,8 @@ async def download_and_extract_experiments(papers, hypothesis):
     tasks = [extract_experiments_from_paper(paper, hypothesis) for paper in downloaded_papers]
     all_experiments_nested = await asyncio.gather(*tasks)
     all_experiments = [exp for sublist in all_experiments_nested for exp in sublist]
-    print(f"🧪 Extracted {len(all_experiments)} experiments from {len(downloaded_papers)} papers")
+    stream_writer(f"🧪 Extracted {len(all_experiments)} experiments from {len(downloaded_papers)} papers")
+    await asyncio.sleep(0.5)
     return all_experiments
 
 # --- Extract Experiments from Paper ---
@@ -410,7 +422,8 @@ async def extract_experiments_from_paper(paper, hypothesis):
         return experiments
         
     except Exception as e:
-        print(f"❌ Experiment extraction failed for {title}: {e}")
+        stream_writer(f"❌ Experiment extraction failed for {title}: {e}")
+        await asyncio.sleep(0.5)
         return []
 
 # --- Parse Extracted Experiments ---
@@ -469,7 +482,7 @@ def parse_extracted_experiments(llm_response, paper, source_url):
                 experiments.append(experiment)
     
     except Exception as e:
-        print(f"❌ Failed to parse experiments: {e}")
+        stream_writer(f"❌ Failed to parse experiments: {e}")
     
     return experiments
 
@@ -528,12 +541,14 @@ async def store_experiments_in_faiss(experiments, faiss_db_path='./Faiss/experim
         faiss.write_index(faiss_db, faiss_db_path)
         with open(meta_db_path, 'wb') as f:
             pickle.dump(faiss_meta, f)
-        
-        print(f"💾 Stored {stored_count} experiments in FAISS database")
+
+        stream_writer(f"💾 Stored {stored_count} experiments in FAISS database")
+        await asyncio.sleep(0.5)
         return True
         
     except Exception as e:
-        print(f"❌ Failed to store experiments in FAISS: {e}")
+        stream_writer(f"❌ Failed to store experiments in FAISS: {e}")
+        await asyncio.sleep(0.5)
         return False
 
 # --- Node: Retrieve from FAISS ---
@@ -541,7 +556,8 @@ async def node_faiss_retrieve(state):
     hypothesis = state['hypothesis']
     chunks = await cosine_similarity_search_experiments(hypothesis, min_similarity=0.7)
     state['retrieved_chunks'] = chunks
-    print(f"📚 Retrieved {len(chunks)} chunks from FAISS")
+    stream_writer(f"📚 Retrieved {len(chunks)} chunks from FAISS")
+    await asyncio.sleep(0.5)
     return state
 
 # --- Node: Extract keywords (for ArXiv search) ---
@@ -549,7 +565,8 @@ async def node_extract_keywords(state):
     hypothesis = state['hypothesis']
     keywords = await extract_keywords_from_hypothesis(hypothesis)
     state['keywords'] = keywords
-    print(f"🔑 Extracted keywords: {keywords}")
+    stream_writer(f"🔑 Extracted keywords: {keywords}")
+    await asyncio.sleep(0.5)
     return state
 
 # --- Node: Search ArXiv and add experiments to chunks ---
@@ -575,7 +592,8 @@ async def node_search_arxiv(state):
 async def node_llm_validate(state):
     hypothesis = state['hypothesis']
     chunks = state.get('retrieved_chunks', [])
-    print(f"🤖 Validating {len(chunks)} chunks...")
+    stream_writer(f"🤖 Validating {len(chunks)} chunks...")
+    await asyncio.sleep(0.5)  # Allow stream message to appear before LLM calls
     tasks = [llm_experiment_relevance_validation(chunk, hypothesis) for chunk in chunks]
     results = await asyncio.gather(*tasks)
     validated = [chunk for chunk, is_relevant in zip(chunks, results) if is_relevant]
