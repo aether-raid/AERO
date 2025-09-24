@@ -13,26 +13,78 @@ We propose AERO, a modular and adaptable framework for machine learning research
 
 ## 🛠️ Installation and Set-Up
 
-1. **Install required packages using uv and uv.lock:**
-   ```bash
-   uv pip install -r uv.lock
-   ```
+### Installing from PyPI
 
-2. **Configure environment variables:**
-   Copy the provided `.env.example` file to `.env`:
-     ```bash
-     cp .env.example .env
-     ```
-   Open `.env` and fill in your own API keys and settings:
-     ```
-     OPENAI_API_KEY='YOUR_OPENAI_KEY'
-     BASE_URL='YOUR_BASE_URL'
-     DEFAULT_MODEL='gemini/gemini-2.5-flash'
-     GOOGLE_API_KEY='YOUR_GOOGLE_KEY'
-     CX='YOUR_CUSTOM_SEARCH_CX'
-     TAVILY_API_KEY='YOUR_TAVILY_API_KEY'
-     ```
-   **Do not** commit your real `.env` file to version control. The `.env.example` file is safe to share and shows users what variables they need.
+Yes, we have published our framework on PyPI! To install the aero library and all its dependencies, the easiest method would be to use `pip` to query PyPI. This should, by default, be present in your Python installation. To, install run the following command in a terminal or Command Prompt / Powershell:
+
+```bash
+$ pip install aero
+```
+
+Depending on the OS, you might need to use `pip3` instead. If the command is not found, you can choose to use the following command too:
+
+```bash
+$ python -m pip install aero
+```
+
+Here too, `python` or `pip` might be replaced with `py` or `python3` and `pip3` depending on the OS and installation configuration. If you have any issues with this, it is always helpful to consult 
+[Stack Overflow](https://stackoverflow.com/).
+
+### Installing from Source
+
+Git is needed to install this repository from source. This is not completely necessary as you can also install the zip file for this repository and store it on a local drive manually. To install Git, follow [this guide](https://git-scm.com/book/en/v2/Getting-Started-Installing-Git).
+
+After you have successfully installed Git, you can run the following command in a terminal / Command Prompt:
+
+```bash
+$ git clone https://github.com/aether-raid/aero.git
+```
+
+This stores a copy in the folder `aero`. You can then navigate into it using `cd aero`. Then, you can run the following:
+
+```bash
+$ pip install .
+```
+
+This should install `aero` to your local Python instance.
+
+### Contributing
+
+If you are contributing, please clone this repository:
+
+```bash
+$ git clone https://github.com/aether-raid/aero.git
+```
+
+Thereafter, use `uv` to sync dependencies as follows:
+
+```bash
+$ uv sync
+```
+
+This will initiate a `.venv/` directory in the repository root directory, which can then be used as the Python Environment for development purposes. Please follow the [`uv` documentation](https://docs.astral.sh/uv/) for detailed steps on how to use `uv` for development.
+
+
+### Configuring Environment Variables
+
+Copy the provided `.env.example` file to `.env`:
+
+```bash
+cp .env.example .env
+```
+
+Open `.env` and fill in your own API keys and settings:
+
+```
+OPENAI_API_KEY='YOUR_OPENAI_KEY'
+BASE_URL='YOUR_BASE_URL'
+DEFAULT_MODEL='gemini/gemini-2.5-flash'
+GOOGLE_API_KEY='YOUR_GOOGLE_KEY'
+CX='YOUR_CUSTOM_SEARCH_CX'
+TAVILY_API_KEY='YOUR_TAVILY_API_KEY'
+```
+
+**Do not** commit your real `.env` file to version control. The `.env.example` file is safe to share and shows users what variables they need.
 
 ---
 
@@ -58,12 +110,12 @@ You can import and use the workflow in your own Python scripts:
 5. **Critique & Refinement**: LLM-based quality assessment with iterative improvement based on critique feedback (up to 4 iterations).
 6. **Final Recommendations**: Produces comprehensive model suggestions with implementation details, performance expectations, and literature citations.
 
-![Model researcher workflow diagram](Workflow_Diagrams/model_researcher_flow.png)
+![Model Researcher Workflow](diagrams/model_researcher_flow.png)
 
-### 2. Research Planning 
+### 2. Research Planning
 blah blah
 
-![Research plan workflow diagram ](Workflow_Diagrams/research_planner_flow.png)
+![Research Planner Workflow](diagrams/research_planner_flow.png)
 
 ### 3. Experiment Design 🧪
 Given a research plan, the system extracts key information and retrieves supporting literature to generate experiment ideas and designs. The final output is a detailed experimental design accompanied by executable Python code.
@@ -91,7 +143,7 @@ You can import and use the workflow in your own Python scripts:
 5. Scoring and Refinement System: Evaluates and refines experiment designs based on key criterions to ensure quality, completeness, and relevance.
 6. Code Generation: Produces minimal executable Python code after syntax validation and import checks 
 
-![Experiment Design workflow diagram](images/experiment_designer_flow.png)
+![Experiment Designer Workflow](diagrams/experiment_designer_flow.png)
 
 
 
@@ -152,12 +204,13 @@ You can import and use the workflow in your own Python scripts:
 9. **Quality Validation**: LLM-based validation with iterative improvement (up to 5 iterations).
 10. **Final Suggestions**: Produces validated experiment designs with detailed methodologies, expected outcomes, and success metrics.
 
-![Experimentalist worfklow diagram](images/experimentalist_flow.png)
+![Experimentalist Worfklow](diagrams/experimentalist_flow.png)
 
 ### 5. Paper Writing 
 blah blah
 
-![Report writer workflow diagram](images/report_writer_flow.png)
+![Report Writer Workflow](diagrams/report_writer_flow.png)
+
 ---
 
 

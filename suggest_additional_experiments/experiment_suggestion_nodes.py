@@ -1282,7 +1282,7 @@ async def _validate_research_direction_node(state: ExperimentSuggestionState) ->
             print(f"💭 Decision Rationale: {validation_json.get('decision_rationale', 'No rationale provided')}")
             print("=" * 80)
             
-            # CRITICAL FIX: Make the routing decision here instead of in separate function
+           
             # Check if this was a forced pass due to max iterations
             forced_pass = validation_json.get("forced_pass", False)
             
@@ -1293,6 +1293,7 @@ async def _validate_research_direction_node(state: ExperimentSuggestionState) ->
                 else:
                     print(f"🔄 Maximum direction iterations reached ({current_iteration}). Continuing to experiments.")
                 next_node = "generate_experiment_search_query"
+                
             # Check validation result - but distinguish between genuine pass and forced pass
             elif validation_result == "PASS":
                 if forced_pass:
@@ -3418,115 +3419,3 @@ if __name__ == "__main__":
     import asyncio
     asyncio.run(test_experiment_suggestion_workflow())
 
-
-# ==================================================================================
-# UTILITY HELPER FUNCTIONS
-# ==================================================================================
-
-def create_experiment_ranking_context_from_analysis_idkifthisisneeded(state: ExperimentSuggestionState) -> str:
-    """Create enhanced ranking context for experiment suggestions using extracted analysis."""
-    original_prompt = state.get("original_prompt", "")
-    
-    # Start with the original user query
-    context_parts = [f"User Query: {original_prompt}"]
-    
-    # Add findings analysis if available
-    findings_analysis = state.get("findings_analysis", {})
-    if findings_analysis:
-        if "experimental_details" in findings_analysis:
-            context_parts.append(f"Experimental Context: {findings_analysis['experimental_details']}")
-        
-        if "domain_analysis" in findings_analysis:
-            domain_info = findings_analysis["domain_analysis"]
-            context_parts.append(f"Domain: {domain_info.get('primary_domain', 'Unknown')}")
-            if domain_info.get("task_type"):
-                context_parts.append(f"Task Type: {domain_info['task_type']}")
-            if domain_info.get("application_area"):
-                context_parts.append(f"Application: {domain_info['application_area']}")
-        
-        if "key_findings" in findings_analysis:
-            key_findings = findings_analysis["key_findings"]
-            if key_findings:
-                context_parts.append(f"Key Findings: {'; '.join(key_findings[:3])}")
-    
-    # Add research direction if available
-    research_direction = state.get("research_direction", {})
-    if research_direction:
-        selected_direction = research_direction.get("selected_direction", {})
-        if selected_direction:
-            direction_text = selected_direction.get("direction", "")
-            if direction_text:
-                context_parts.append(f"Research Direction: {direction_text}")
-            
-            key_questions = selected_direction.get("key_questions", [])
-            if key_questions:
-                context_parts.append(f"Key Questions: {'; '.join(key_questions[:2])}")
-    
-    # Combine all parts
-    ranking_context = '\n'.join(context_parts)
-    
-    # Limit total length to avoid token issues
-    if len(ranking_context) > 1500:
-        ranking_context = ranking_context[:1500] + "..."
-    
-    return ranking_context
-
-
-def create_custom_ranking_prompt_thistoo(prompt_type: str = "default") -> str:
-    """Create a custom ranking prompt based on prompt type."""
-    
-    if prompt_type == "experimental":
-        return """Rate this paper's relevance to experimental methodology and research guidance on a scale of 1-10.
-
-Consider these factors:
-- Does it provide concrete experimental procedures or protocols?
-- Are there specific methodologies that can be replicated?
-- Does it include detailed experimental setups, datasets, or evaluation metrics?
-- How relevant is it to the experimental context and research goals?
-- Does it offer insights into experimental design, baseline comparisons, or ablation studies?
-
-Query context: {query}
-Paper title: {title}
-Paper content: {content}
-
-Respond with only a number from 1-10 where:
-- 9-10: Highly relevant with detailed experimental guidance
-- 7-8: Relevant with some experimental insights
-- 5-6: Moderately relevant
-- 3-4: Somewhat relevant
-- 1-2: Not relevant to experimental methodology
-
-Score:"""
-    
-    elif prompt_type == "model_suggestion":
-        return """Rate this paper's relevance to model architecture recommendations and suggestions on a scale of 1-10.
-
-Consider these factors:
-- Does it describe specific model architectures or components?
-- Are there performance comparisons between different models?
-- Does it provide insights into model selection for specific tasks?
-- How relevant is it to the model recommendation context?
-- Does it include architectural innovations or optimization techniques?
-
-Query context: {query}
-Paper title: {title}
-Paper content: {content}
-
-Respond with only a number from 1-10 where:
-- 9-10: Highly relevant for model recommendations
-- 7-8: Relevant with useful model insights
-- 5-6: Moderately relevant
-- 3-4: Somewhat relevant
-- 1-2: Not relevant for model suggestions
-
-Score:"""
-                        
-    else:  # default
-        return """Rate this paper's relevance to the research query on a scale of 1-10.
-
-Query: {query}
-Title: {title}
-Content: {content}
-
-Score (1-10):"""
-    asyncio.run(test_experiment_suggestion_workflow())
