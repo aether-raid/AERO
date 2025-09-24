@@ -31,6 +31,7 @@ from datetime import datetime
 # LangGraph imports
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
+from langgraph.config import get_stream_writer
 from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
 
 # LLM and related imports
@@ -58,6 +59,35 @@ logging.getLogger("openai._base_client").setLevel(logging.WARNING)
 
 
 # ==================================================================================
+# STREAMWRITER HELPER FUNCTION
+# ==================================================================================
+
+def _write_stream(message: str, key: str = "status"):
+    """Helper function to write to StreamWriter if available."""
+    try:
+        # Use LangGraph's get_stream_writer() without parameters (proper way)
+        writer = get_stream_writer()
+        writer({key: message})
+    except Exception:
+        # Fallback: try to get stream from config (for testing compatibility)
+        try:
+            # This fallback is for test compatibility only
+            import inspect
+            frame = inspect.currentframe()
+            while frame:
+                if 'config' in frame.f_locals and frame.f_locals['config']:
+                    config = frame.f_locals['config']
+                    stream = config.get("configurable", {}).get("stream")
+                    if stream and hasattr(stream, 'write'):
+                        stream.write(message)
+                        return
+                frame = frame.f_back
+        except Exception:
+            pass
+        # Final fallback: silently fail
+        pass
+
+# ==================================================================================
 # GLOBAL CLIENTS (for standalone execution)
 # ==================================================================================
 
@@ -66,43 +96,43 @@ _client = None
 _tavily_client = None
 _model = None
 
-def _initialize_clients():
+def _initialize_clients(config: Optional[Dict[str, Any]] = None):
     """Initialize global clients for standalone execution."""
     global _client, _tavily_client, _model
     
     if _client is None:
         try:
-            api_key = _load_from_env_file("OPENAI_API_KEY")
-            base_url = _load_from_env_file("BASE_URL") or "https://agents.aetherraid.dev"
-            _model = _load_from_env_file("MODEL") or "gemini/gemini-2.5-flash"
-            
+            api_key = os.getenv("OPENAI_API_KEY")
+            base_url = os.getenv("BASE_URL") or "https://agents.aetherraid.dev"
+            _model = os.getenv("MODEL") or "gemini/gemini-2.5-flash"
+
             if api_key:
                 import openai
                 _client = openai.OpenAI(
                     api_key=api_key,
                     base_url=base_url
                 )
-                print("✅ OpenAI client initialized successfully")
+                _write_stream( "✅ OpenAI client initialized successfully\n")
             else:
-                print("⚠️  OPENAI_API_KEY not found, using mock client")
+                _write_stream( "⚠️  OPENAI_API_KEY not found, using mock client\n")
                 _client = None
         except ImportError:
-            print("⚠️  openai not available, using mock client")
+            _write_stream( "⚠️  openai not available, using mock client\n")
             _client = None
         except Exception as e:
-            print(f"⚠️  OpenAI client initialization failed: {e}")
+            _write_stream( f"⚠️  OpenAI client initialization failed: {e}\n")
             _client = None
     
     if _tavily_client is None:
         try:
-            tavily_key = _load_from_env_file("TAVILY_API_KEY")
+            tavily_key = os.getenv("TAVILY_API_KEY")
             if tavily_key:
                 _tavily_client = TavilyClient(api_key=tavily_key)
-                print("✅ Tavily web search client initialized successfully")
+                _write_stream( "✅ Tavily web search client initialized successfully\n")
             else:
-                print("⚠️  TAVILY_API_KEY not found, web search disabled")
+                _write_stream( "⚠️  TAVILY_API_KEY not found, web search disabled\n")
         except Exception as e:
-            print(f"⚠️  Tavily client initialization failed: {e}")
+            _write_stream( f"⚠️  Tavily client initialization failed: {e}\n")
             _tavily_client = None
 
 
@@ -132,86 +162,6 @@ class ResearchPlanningState(BaseState):
     current_web_search_query: str               # Current search query being used
 
 
-# ==================================================================================
-# UTILITY FUNCTIONS
-# ==================================================================================
-
-def _load_from_env_file(key: str) -> Optional[str]:
-    """Load environment variable from env.example file."""
-    try:
-        env_file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..\env.example")
-        if os.path.exists(env_file_path):
-            with open(env_file_path, 'r') as f:
-                for line in f:
-                    line = line.strip()
-                    if line.startswith(f"{key}="):
-                        return line.split("=", 1)[1].strip().strip('"').strip("'")
-        return os.getenv(key)
-    except Exception:
-        return os.getenv(key)
-
-
-# ==================================================================================
-# NODE FUNCTIONS (for import by main MLResearcherLangGraph class)
-# ==================================================================================
-        """Build the research planning workflow graph."""
-        workflow = StateGraph(ResearchPlanningState)
-        
-        # Add nodes for the streamlined single-problem workflow  
-        workflow.add_node("generate_problem", self._generate_problem_node)
-        workflow.add_node("validate_problem", self._validate_problem_node)
-        workflow.add_node("process_rejection_feedback", self._process_rejection_feedback_node)
-        workflow.add_node("create_plan", self._create_research_plan_node)
-        workflow.add_node("critique_plan", self._critique_plan_node)
-        workflow.add_node("finalize_plan", self._finalize_plan_node)
-        
-        # Set entry point
-        workflow.set_entry_point("generate_problem")
-        
-        # Add edges with decision logic
-        workflow.add_conditional_edges(
-            "generate_problem",
-            self._streamlined_validation_decision,
-            {
-                "validate": "validate_problem",
-                "regenerate": "generate_problem"
-            }
-        )
-        
-        workflow.add_conditional_edges(
-            "validate_problem", 
-            self._streamlined_validation_decision,
-            {
-                "accepted": "create_plan",           # Problem validated as unsolved
-                "rejected": "process_rejection_feedback",  # Problem already solved, need new one
-                "regenerate": "generate_problem",     # Validation failed, try again
-                "error": "process_rejection_feedback"
-            }
-        )
-        
-        workflow.add_edge("process_rejection_feedback", "generate_problem")
-        
-        workflow.add_conditional_edges(
-            "create_plan",
-            self._determine_refinement_path,
-            {
-                "critique": "critique_plan",
-                "finalize": "finalize_plan"
-            }
-        )
-        
-        workflow.add_conditional_edges(
-            "critique_plan",
-            self._determine_refinement_path,
-            {
-                "refine": "create_plan",        # Need to improve the plan
-                "finalize": "finalize_plan"     # Plan is good enough
-            }
-        )
-        
-        workflow.add_edge("finalize_plan", END)
-        
-        return workflow.compile()
     
     # ==================================================================================
     # RESEARCH PLANNING WORKFLOW NODES  
@@ -219,7 +169,7 @@ def _load_from_env_file(key: str) -> Optional[str]:
     
     # --- PHASE 1: PROBLEM GENERATION & VALIDATION ---
 
-async def _generate_problem_node(state: ResearchPlanningState) -> ResearchPlanningState:
+async def _generate_problem_node(state: ResearchPlanningState, *, config: Optional[Dict[str, Any]] = None) -> ResearchPlanningState:
         """🚀 STREAMLINED GENERATION: Generate a single research problem for Tavily validation and automatic research planning."""
         current_iter = state.get("iteration_count", 0) + 1
         state["iteration_count"] = current_iter
@@ -228,8 +178,8 @@ async def _generate_problem_node(state: ResearchPlanningState) -> ResearchPlanni
         generation_attempts = state.get("generation_attempts", 0) + 1
         state["generation_attempts"] = generation_attempts
         
-        print(f"\n🎯 Step {current_iter}: Generating research problem for auto-validation (attempt #{generation_attempts})...")
-        print(f"🚀 Streamlined workflow: One problem → Tavily validation → Automatic research planning")
+        _write_stream( f"\n🎯 Step {current_iter}: Generating research problem for auto-validation (attempt #{generation_attempts})...\n")
+        _write_stream( f"🚀 Streamlined workflow: One problem → Tavily validation → Automatic research planning\n")
         state["current_step"] = "generate_problem"
         
         try:
@@ -242,7 +192,7 @@ async def _generate_problem_node(state: ResearchPlanningState) -> ResearchPlanni
             rejection_feedback = state.get("rejection_feedback", [])
             
             if rejection_feedback:
-                print(f"🧠 Learning from {len(rejection_feedback)} previous rejections...")
+                _write_stream( f"🧠 Learning from {len(rejection_feedback)} previous rejections...\n")
                 feedback_context = "\n\n🚨 IMPORTANT - LEARN FROM PREVIOUS MISTAKES:\n"
                 
                 # Group rejection reasons for better learning
@@ -362,10 +312,10 @@ async def _generate_problem_node(state: ResearchPlanningState) -> ResearchPlanni
                     state["generated_problems"] = []
                 state["generated_problems"].append(problem_data.copy())
                 
-                print(f"✅ Generated problem: {problem_data['statement']}")
-                print(f"🔍 Keywords for validation: {', '.join(problem_data.get('keywords', []))}")
+                _write_stream( f"✅ Generated problem: {problem_data['statement']}\n")
+                _write_stream( f"🔍 Keywords for validation: {', '.join(problem_data.get('keywords', []))}\n")
                 if rejection_feedback:
-                    print(f"🧠 Incorporated feedback from {len(rejection_feedback)} previous rejections")
+                    _write_stream( f"🧠 Incorporated feedback from {len(rejection_feedback)} previous rejections\n")
                 
                 # Add success message
                 state["messages"].append(
@@ -385,7 +335,7 @@ async def _generate_problem_node(state: ResearchPlanningState) -> ResearchPlanni
                     "generation_attempt": generation_attempts,
                     "status": "pending_validation"
                 }
-                print(f"⚠️  {error_msg}, using fallback problem")
+                _write_stream( f"⚠️  {error_msg}, using fallback problem\n")
         
         except Exception as e:
             error_msg = f"Problem generation failed: {str(e)}"
@@ -400,13 +350,14 @@ async def _generate_problem_node(state: ResearchPlanningState) -> ResearchPlanni
                 "generation_attempt": generation_attempts,
                 "status": "pending_validation"
             }
-            print(f"❌ {error_msg}, using fallback problem")
+            _write_stream( f"❌ {error_msg}, using fallback problem\n")
         
         return state
     
-async def _validate_problem_node(state: ResearchPlanningState) -> ResearchPlanningState:
+async def _validate_problem_node(state: ResearchPlanningState, *, config: Optional[Dict[str, Any]] = None) -> ResearchPlanningState:
         """Node for validating if the generated problem is already solved using web search."""
-        print(f"\n🔍 Validating problem with web search: {state['current_problem']['statement'][:60]}...")
+
+        _write_stream( f"\n🔍 Validating problem with web search: {state['current_problem']['statement'][:60]}...\n")
         state["current_step"] = "validate_problem"
         
         try:
@@ -416,7 +367,7 @@ async def _validate_problem_node(state: ResearchPlanningState) -> ResearchPlanni
             description = current_problem.get("description", "")
             
             # Step 1: Perform web searches to find existing solutions
-            print("🌐 Performing web searches for existing solutions...")
+            _write_stream( "🌐 Performing web searches for existing solutions...\n")
             
             # Check if Tavily client is available
             if not _tavily_client:
@@ -438,7 +389,7 @@ async def _validate_problem_node(state: ResearchPlanningState) -> ResearchPlanni
             # Perform searches using Tavily
             for query in search_queries[:3]:  # Limit to 3 queries to avoid rate limits
                 try:
-                    print(f"🔍 Searching: {query[:50]}...")
+                    _write_stream( f"🔍 Searching: {query[:50]}...\n")
                     
                     # Use Tavily search
                     search_response = await asyncio.get_event_loop().run_in_executor(
@@ -465,17 +416,17 @@ async def _validate_problem_node(state: ResearchPlanningState) -> ResearchPlanni
                         state["detailed_results"].extend(results_info)
                         
                         search_summaries.append(f"Query: '{query}' - Found {len(urls)} results")
-                        print(f"  ✅ Found {len(urls)} results")
+                        _write_stream( f"  ✅ Found {len(urls)} results\n")
                     else:
                         search_summaries.append(f"Query: '{query}' - No results")
-                        print(f"  ❌ No results found")
+                        _write_stream( f"  ❌ No results found\n")
                         
                 except Exception as search_error:
-                    print(f"  ⚠️  Search error for '{query}': {search_error}")
+                    _write_stream( f"  ⚠️  Search error for '{query}': {search_error}\n")
                     search_summaries.append(f"Query: '{query}' - Error: {str(search_error)}")
             
             # Step 2: Analyze search results with LLM
-            print("🧠 Analyzing search results with LLM...")
+            _write_stream( "🧠 Analyzing search results with LLM...\n")
             
             # Format search results for analysis
             formatted_results = ""
@@ -583,7 +534,7 @@ Return only the JSON object, no additional text.
                 # Check if current problem statement exceeds character limit
                 current_statement = state["current_problem"].get("statement", "")
                 if len(current_statement) > 400:
-                    print(f"⚠️  Problem statement too long ({len(current_statement)} chars), forcing rejection...")
+                    _write_stream( f"⚠️  Problem statement too long ({len(current_statement)} chars), forcing rejection...\n")
                     # Override validation to reject for length
                     validation_data["recommendation"] = "reject"
                     validation_data["status"] = "too_long"
@@ -648,15 +599,15 @@ Return only the JSON object, no additional text.
                 confidence = validation_data.get("confidence", 0.0)
                 recommendation = validation_data.get("recommendation", "reject")
                 
-                print(f"📊 Validation Status: {status.upper()}")
-                print(f"🎯 Confidence: {confidence:.2f}")
-                print(f"🌐 Search Results: {len(all_search_results)} URLs found")
-                print(f"💡 Recommendation: {recommendation.upper()}")
-                print(f"🧠 Reasoning: {validation_data.get('reasoning', 'No reasoning provided')[:150]}...")
+                _write_stream( f"📊 Validation Status: {status.upper()}\n")
+                _write_stream( f"🎯 Confidence: {confidence:.2f}\n")
+                _write_stream( f"🌐 Search Results: {len(all_search_results)} URLs found\n")
+                _write_stream( f"💡 Recommendation: {recommendation.upper()}\n")
+                _write_stream( f"🧠 Reasoning: {validation_data.get('reasoning', 'No reasoning provided')[:150]}...\n")
                 
                 # 🆕 SMART FEEDBACK: Process rejection feedback for learning
                 if recommendation == "reject":
-                    print("❌ Problem rejected - storing feedback for learning")
+                    _write_stream( "❌ Problem rejected - storing feedback for learning\n")
                     
                     # Extract and store detailed feedback
                     rejection_feedback = validation_data.get("rejection_feedback", {})
@@ -695,14 +646,14 @@ Specific improvements needed:
                         state["feedback_context"] = feedback_context
                         
                         # Print detailed feedback for user visibility
-                        print(f"🚨 Rejection Reason: {primary_reason.upper()}")
-                        print(f"💡 Guidance: {specific_guidance[:100]}...")
+                        _write_stream( f"🚨 Rejection Reason: {primary_reason.upper()}\n")
+                        _write_stream( f"💡 Guidance: {specific_guidance[:100]}...\n")
                         if rejection_feedback.get("alternative_angles"):
-                            print(f"🔄 Suggested Angles: {', '.join(rejection_feedback['alternative_angles'][:2])}")
+                            _write_stream( f"🔄 Suggested Angles: {', '.join(rejection_feedback['alternative_angles'][:2])}\n")
                     
-                    print("🧠 Feedback stored for next generation attempt")
+                    _write_stream( "🧠 Feedback stored for next generation attempt\n")
                 else:
-                    print("✅ Problem validated as open research opportunity")
+                    _write_stream( "✅ Problem validated as open research opportunity\n")
                     # Clear any previous feedback context on success
                     state["feedback_context"] = ""
                 
@@ -724,15 +675,15 @@ Specific improvements needed:
                     "total_urls_found": len(all_search_results)
                 }
                 state["current_problem"]["validation"] = state["validation_results"]
-                print(f"⚠️  {error_msg}, defaulting to rejection")
+                _write_stream( f"⚠️  {error_msg}, defaulting to rejection\n")
         
         except Exception as e:
             error_msg = f"Web search validation failed: {str(e)}"
             state["errors"].append(error_msg)
-            print(f"❌ {error_msg}")
+            _write_stream( f"❌ {error_msg}\n")
             
             # Fallback to basic LLM validation if web search fails
-            print("🔄 Falling back to LLM-only validation...")
+            _write_stream( "🔄 Falling back to LLM-only validation...\n")
             try:
                 fallback_content = f"""
                     Research Problem: {state['current_problem'].get('statement', '')}
@@ -754,10 +705,10 @@ Specific improvements needed:
                 
                 state["validation_results"] = fallback_json
                 state["current_problem"]["validation"] = fallback_json
-                print(f"✅ Fallback validation: {fallback_json.get('recommendation', 'reject').upper()}")
+                _write_stream( f"✅ Fallback validation: {fallback_json.get('recommendation', 'reject').upper()}\n")
                 
             except Exception as fallback_error:
-                print(f"❌ Fallback validation also failed: {fallback_error}")
+                _write_stream( f"❌ Fallback validation also failed: {fallback_error}\n")
                 # Final fallback - conservative rejection
                 state["validation_results"] = {
                     "status": "unknown", 
@@ -771,9 +722,10 @@ Specific improvements needed:
         
         return state
 
-async def _process_rejection_feedback_node(state: ResearchPlanningState) -> ResearchPlanningState:
+async def _process_rejection_feedback_node(state: ResearchPlanningState, *, config: Optional[Dict[str, Any]] = None) -> ResearchPlanningState:
         """🆕 SMART FEEDBACK: Process rejection feedback and prepare for next generation."""
-        print(f"\n🧠 Processing rejection feedback for smarter generation...")
+
+        _write_stream( f"\n🧠 Processing rejection feedback for smarter generation...\n")
         state["current_step"] = "process_feedback"
         
         try:
@@ -783,13 +735,13 @@ async def _process_rejection_feedback_node(state: ResearchPlanningState) -> Rese
             # Get the latest rejection feedback
             rejection_feedback_list = state.get("rejection_feedback", [])
             if not rejection_feedback_list:
-                print("⚠️  No rejection feedback to process")
+                _write_stream( "⚠️  No rejection feedback to process\n")
                 return state
             
             latest_feedback = rejection_feedback_list[-1]
             primary_reason = latest_feedback.get("primary_reason", "unknown")
             
-            print(f"📊 Analyzing rejection pattern: {primary_reason}")
+            _write_stream( f"📊 Analyzing rejection pattern: {primary_reason}\n")
             
             # Analyze rejection patterns for adaptive strategy
             rejection_patterns = {}
@@ -801,7 +753,7 @@ async def _process_rejection_feedback_node(state: ResearchPlanningState) -> Rese
             total_rejections = len(rejection_feedback_list)
             most_common_reason = max(rejection_patterns.items(), key=lambda x: x[1])[0] if rejection_patterns else "unknown"
             
-            print(f"🔍 Pattern Analysis: {total_rejections} rejections, most common: {most_common_reason}")
+            _write_stream( f"🔍 Pattern Analysis: {total_rejections} rejections, most common: {most_common_reason}\n")
             
             # Create strategic guidance based on patterns
             strategic_guidance = ""
@@ -850,8 +802,8 @@ async def _process_rejection_feedback_node(state: ResearchPlanningState) -> Rese
             
             state["feedback_context"] = enhanced_context
             
-            print(f"🎯 Updated strategy: {strategic_guidance}")
-            print(f"📝 Enhanced feedback context prepared for next generation")
+            _write_stream( f"🎯 Updated strategy: {strategic_guidance}\n")
+            _write_stream( f"📝 Enhanced feedback context prepared for next generation\n")
             
             # Add processing message
             state["messages"].append(
@@ -861,7 +813,7 @@ async def _process_rejection_feedback_node(state: ResearchPlanningState) -> Rese
         except Exception as e:
             error_msg = f"Feedback processing failed: {str(e)}"
             state["errors"].append(error_msg)
-            print(f"❌ {error_msg}")
+            _write_stream( f"❌ {error_msg}\n")
             # Continue without enhanced feedback if processing fails
             
         return state
@@ -887,31 +839,32 @@ def _clean_text_for_encoding(text: str) -> str:
             # Fallback: remove non-ASCII characters
             return ''.join(char for char in text if ord(char) < 128)
 
-def _create_research_plan_node(state: ResearchPlanningState) -> ResearchPlanningState:
+def _create_research_plan_node(state: ResearchPlanningState, *, config: Optional[Dict[str, Any]] = None) -> ResearchPlanningState:
         """Node for creating comprehensive research plan based on the selected problem."""
+
         selected_problem = state.get("selected_problem", {})
         
         # Check if this is a refinement iteration
         is_refinement = state.get("critique_results") is not None and state.get("refinement_count", 0) > 0
         
         if is_refinement:
-            print(f"\n� Step: Refining research plan (iteration {state.get('refinement_count', 0) + 1})...")
+            _write_stream( f"\n🔄 Step: Refining research plan (iteration {state.get('refinement_count', 0) + 1})...\n")
             # Increment refinement count
             state["refinement_count"] = state.get("refinement_count", 0) + 1
-            print(f"🎯 Addressing critique feedback...")
+            _write_stream( f"🎯 Addressing critique feedback...\n")
             
             # Verify critique data is available for refinement
             critique = state.get("critique_results", {})
             if not critique:
-                print("⚠️  WARNING: No critique results found - this may indicate a state management issue")
-                print("⚠️  Proceeding with limited refinement capability")
+                _write_stream( "⚠️  WARNING: No critique results found - this may indicate a state management issue\n")
+                _write_stream( "⚠️  Proceeding with limited refinement capability\n")
             else:
                 major_issues = critique.get("major_issues", [])
                 score = critique.get("overall_score", 0)
-                print(f"🎯 REFINEMENT TARGET: Improve score from {score:.1f}/10 by addressing {len(major_issues)} major issues")
+                _write_stream( f"🎯 REFINEMENT TARGET: Improve score from {score:.1f}/10 by addressing {len(major_issues)} major issues\n")
         else:
-            print(f"\n�📋 Step 4: Generating comprehensive research plan for selected problem...")
-            print(f"🎯 Selected Problem: {selected_problem.get('statement', 'N/A')[:100]}...")
+            _write_stream( f"\n📋 Step 4: Generating comprehensive research plan for selected problem...\n")
+            _write_stream( f"🎯 Selected Problem: {selected_problem.get('statement', 'N/A')[:100]}...\n")
             # Initialize refinement tracking
             state["refinement_count"] = 0
             state["previous_plans"] = []
@@ -930,13 +883,13 @@ def _create_research_plan_node(state: ResearchPlanningState) -> ResearchPlanning
                 if current_problem and current_problem.get('statement'):
                     selected_problem = current_problem
                     state["selected_problem"] = current_problem  # Store it properly
-                    print(f"✅ Using current_problem as selected_problem: {current_problem.get('statement', 'N/A')[:80]}...")
+                    _write_stream( f"✅ Using current_problem as selected_problem: {current_problem.get('statement', 'N/A')[:80]}...\n")
                 else:
                     error_msg = "No valid problem selected for research plan generation"
                     state["errors"].append(error_msg)
-                    print(f"❌ {error_msg}")
-                    print(f"🔍 Debug - selected_problem: {selected_problem}")
-                    print(f"🔍 Debug - current_problem: {current_problem}")
+                    _write_stream( f"❌ {error_msg}\n")
+                    _write_stream( f"🔍 Debug - selected_problem: {selected_problem}\n")
+                    _write_stream( f"🔍 Debug - current_problem: {current_problem}\n")
                     return state
             
             # Format the selected problem for the prompt
@@ -1256,20 +1209,20 @@ Use the following web-discovered sources as starting points for literature revie
                 if current_plan:
                     state["previous_plans"].append(current_plan)
                 
-                print(f"✅ Research plan refined (iteration {state['refinement_count']})")
-                print(f"🎯 TARGETED IMPROVEMENTS - Addressed {len(major_issues)} major critique issues:")
+                _write_stream( f"✅ Research plan refined (iteration {state['refinement_count']})\n")
+                _write_stream( f"🎯 TARGETED IMPROVEMENTS - Addressed {len(major_issues)} major critique issues:\n")
                 for i, issue in enumerate(major_issues, 1):
-                    print(f"   {i}. {issue}")
-                print(f"📊 Previous score: {critique.get('overall_score', 0):.1f}/10 - expecting significant improvement")
+                    _write_stream( f"   {i}. {issue}\n")
+                _write_stream( f"📊 Previous score: {critique.get('overall_score', 0):.1f}/10 - expecting significant improvement\n")
             else:
-                print("✅ Initial research plan generated")
-                print(f"📊 Based on selected problem: {selected_problem.get('statement', 'N/A')[:100]}...")
+                _write_stream( "✅ Initial research plan generated\n")
+                _write_stream( f"📊 Based on selected problem: {selected_problem.get('statement', 'N/A')[:100]}...\n")
             
-            print("\n" + "=" * 80)
-            print("📋 COMPREHENSIVE RESEARCH PLAN")
-            print("=" * 80)
-            print(research_plan)
-            print("=" * 80)
+            _write_stream( "\n" + "=" * 80 + "\n")
+            _write_stream( "📋 COMPREHENSIVE RESEARCH PLAN\n")
+            _write_stream( "=" * 80 + "\n")
+            _write_stream( research_plan + "\n")
+            _write_stream( "=" * 80 + "\n")
             
             state["research_plan"] = {
                 "research_plan_successful": True,
@@ -1296,15 +1249,16 @@ Use the following web-discovered sources as starting points for literature revie
                 "research_plan": None,
                 "problems_attempted": len(state.get("validated_problems", []))
             }
-            print(f"❌ {error_msg}")
+            _write_stream( f"❌ {error_msg}\n")
         
         return state
 
     # --- PHASE 3: PLAN CRITIQUE & ITERATIVE REFINEMENT ---
 
-def _critique_plan_node(state: ResearchPlanningState) -> ResearchPlanningState:
+def _critique_plan_node(state: ResearchPlanningState, *, config: Optional[Dict[str, Any]] = None) -> ResearchPlanningState:
         """Node for critiquing the generated research plan."""
-        print(f"\n🔍 Step: Critiquing research plan...")
+
+        _write_stream( f"\n🔍 Step: Critiquing research plan...\n")
         state["current_step"] = "critique_plan"
         
         try:
@@ -1452,10 +1406,10 @@ Return only a JSON object with this exact structure. For 'major_issues' and 'sug
                     "major_issues_count": len(major_issues)
                 }
                 
-                print(f"\n🔍 CRITIQUE STORED FOR REFINEMENT:")
-                print(f"   ✅ Critique results stored in state['critique_results']")
-                print(f"   ✅ Latest critique stored with timestamp")
-                print(f"   ✅ Ready for refinement iteration {state.get('refinement_count', 0) + 1}")
+                _write_stream( f"\n🔍 CRITIQUE STORED FOR REFINEMENT:\n")
+                _write_stream( f"   ✅ Critique results stored in state['critique_results']\n")
+                _write_stream( f"   ✅ Latest critique stored with timestamp\n")
+                _write_stream( f"   ✅ Ready for refinement iteration {state.get('refinement_count', 0) + 1}\n")
                 
                 # Track score history
                 overall_score = critique_data.get("overall_score", 0.0)
@@ -1464,38 +1418,38 @@ Return only a JSON object with this exact structure. For 'major_issues' and 'sug
                 # Enhanced critique logging
                 llm_recommendation = critique_data.get("recommendation", "unknown")
                 
-                print(f"\n📊 CRITIQUE RESULTS:")
-                print(f"   Score: {overall_score:.1f}/10.0")
-                print(f"   Major Issues Count: {len(major_issues)}")
-                print(f"   LLM Recommendation: {llm_recommendation.upper()}")
-                print(f"   Raw Issues List: {major_issues[:2] if major_issues else 'None'}")
+                _write_stream( f"\n📊 CRITIQUE RESULTS:\n")
+                _write_stream( f"   Score: {overall_score:.1f}/10.0\n")
+                _write_stream( f"   Major Issues Count: {len(major_issues)}\n")
+                _write_stream( f"   LLM Recommendation: {llm_recommendation.upper()}\n")
+                _write_stream( f"   Raw Issues List: {major_issues[:2] if major_issues else 'None'}\n")
                 
                 if major_issues:
-                    print(f"\n⚠️  MAJOR ISSUES TO ADDRESS:")
+                    _write_stream( f"\n⚠️  MAJOR ISSUES TO ADDRESS:\n")
                     for i, issue in enumerate(major_issues, 1):
-                        print(f"   {i}. {issue}")
+                        _write_stream( f"   {i}. {issue}\n")
                 
                 suggestions = critique_data.get("suggestions", [])
                 if suggestions:
-                    print(f"\n💡 IMPROVEMENT SUGGESTIONS:")
+                    _write_stream( f"\n💡 IMPROVEMENT SUGGESTIONS:\n")
                     for i, suggestion in enumerate(suggestions[:3], 1):
-                        print(f"   {i}. {suggestion}")
+                        _write_stream( f"   {i}. {suggestion}\n")
                 
                 strengths = critique_data.get("strengths", [])
                 if strengths:
-                    print(f"\n✅ IDENTIFIED STRENGTHS:")
+                    _write_stream( f"\n✅ IDENTIFIED STRENGTHS:\n")
                     for i, strength in enumerate(strengths[:2], 1):
-                        print(f"   {i}. {strength}")
+                        _write_stream( f"   {i}. {strength}\n")
                 
                 # Clear decision summary
                 if len(major_issues) == 0:
-                    print(f"\n🎉 EXCELLENT! No major issues found - plan ready for finalization!")
+                    _write_stream( f"\n🎉 EXCELLENT! No major issues found - plan ready for finalization!\n")
                 elif len(major_issues) <= 2:
-                    print(f"\n🔧 REFINEMENT NEEDED: {len(major_issues)} issues to address")
+                    _write_stream( f"\n🔧 REFINEMENT NEEDED: {len(major_issues)} issues to address\n")
                 elif len(major_issues) <= 4:
-                    print(f"\n⚠️  SIGNIFICANT ISSUES: {len(major_issues)} problems need attention")
+                    _write_stream( f"\n⚠️  SIGNIFICANT ISSUES: {len(major_issues)} problems need attention\n")
                 else:
-                    print(f"\n❌ MAJOR PROBLEMS: {len(major_issues)} fundamental issues detected")
+                    _write_stream( f"\n❌ MAJOR PROBLEMS: {len(major_issues)} fundamental issues detected\n")
                 
                 state["messages"].append(
                     AIMessage(content=f"Research plan critiqued. Score: {overall_score:.1f}/10, Issues: {len(major_issues)}, Recommendation: {critique_data.get('recommendation', 'unknown')}")
@@ -1503,7 +1457,7 @@ Return only a JSON object with this exact structure. For 'major_issues' and 'sug
                 
             except json.JSONDecodeError as e:
                 error_msg = f"Failed to parse critique JSON: {e}"
-                print(f"⚠️  {error_msg}")
+                _write_stream( f"⚠️  {error_msg}\n")
                 # Default critique for parsing failures
                 state["critique_results"] = {
                     "overall_score": 5.0,
@@ -1517,7 +1471,7 @@ Return only a JSON object with this exact structure. For 'major_issues' and 'sug
         except Exception as e:
             error_msg = f"Critique process failed: {str(e)}"
             state["errors"].append(error_msg)
-            print(f"❌ {error_msg}")
+            _write_stream( f"❌ {error_msg}\n")
             # Default to accepting plan if critique fails
             state["critique_results"] = {
                 "overall_score": 7.0,
@@ -1530,9 +1484,10 @@ Return only a JSON object with this exact structure. For 'major_issues' and 'sug
         
         return state
 
-def _finalize_plan_node(state: ResearchPlanningState) -> ResearchPlanningState:
+def _finalize_plan_node(state: ResearchPlanningState, *, config: Optional[Dict[str, Any]] = None) -> ResearchPlanningState:
         """Node for finalizing the research plan and preparing outputs."""
-        print(f"\n✅ Step 6: Finalizing research plan and preparing deliverables...")
+
+        _write_stream( f"\n✅ Step 6: Finalizing research plan and preparing deliverables...\n")
         state["current_step"] = "finalize_plan"
         
         try:
@@ -1552,10 +1507,10 @@ def _finalize_plan_node(state: ResearchPlanningState) -> ResearchPlanningState:
             research_plan.update(finalization_data)
             state["research_plan"] = research_plan
             
-            print(f"✅ Research plan finalized!")
-            print(f"📊 Final Score: {critique.get('overall_score', 0.0):.1f}/10")
-            print(f"🔄 Total Iterations: {state.get('iteration_count', 0)}")
-            print(f"🎯 Refinements: {state.get('refinement_count', 0)}")
+            _write_stream( f"✅ Research plan finalized!\n")
+            _write_stream( f"📊 Final Score: {critique.get('overall_score', 0.0):.1f}/10\n")
+            _write_stream( f"🔄 Total Iterations: {state.get('iteration_count', 0)}\n")
+            _write_stream( f"🎯 Refinements: {state.get('refinement_count', 0)}\n")
             
             # Add finalization message
             state["messages"].append(
@@ -1565,7 +1520,7 @@ def _finalize_plan_node(state: ResearchPlanningState) -> ResearchPlanningState:
         except Exception as e:
             error_msg = f"Plan finalization failed: {str(e)}"
             state["errors"].append(error_msg)
-            print(f"❌ {error_msg}")
+            _write_stream( f"❌ {error_msg}\n")
         
         return state
 
@@ -1580,30 +1535,22 @@ def _streamlined_validation_decision(state: ResearchPlanningState) -> str:
         
         # Check if we have validation results
         if not validation_results:
-            print("🔄 No validation results yet - continue to validation")
             return "validate"
         
         recommendation = validation_results.get("recommendation", "reject")
         current_iteration = state.get("iteration_count", 0)
-        
-        print(f"🚦 Validation Decision Point:")
-        print(f"   Recommendation: {recommendation}")
-        print(f"   Current Iteration: {current_iteration}")
         
         # Decision logic for streamlined workflow
         if recommendation == "accept":
             # Problem is validated - set as selected problem and proceed to planning
             state["selected_problem"] = current_problem
             state["validated_problems"] = [current_problem]  # Store in list for compatibility
-            print("✅ Problem accepted - proceeding to research plan creation")
             return "create_plan"
         elif recommendation == "reject":
             # Problem was rejected - process feedback and try again
-            print("❌ Problem rejected - processing feedback for improvement")
             return "process_feedback"
         else:
             # Unknown state - default to regeneration
-            print("🔄 Unknown validation state - regenerating problem")
             return "retry_generation"
 
 def _determine_refinement_path(state: ResearchPlanningState) -> str:
@@ -1612,35 +1559,25 @@ def _determine_refinement_path(state: ResearchPlanningState) -> str:
         refinement_count = state.get("refinement_count", 0)
         
         if not critique:
-            print("🔄 No critique available - proceeding to finalization")
             return "finalize"
         
         overall_score = critique.get("overall_score", 5.0)
         recommendation = critique.get("recommendation", "accept")
         major_issues = critique.get("major_issues", [])
         
-        print(f"🚦 Refinement Decision Point:")
-        print(f"   Score: {overall_score:.1f}/10")
-        print(f"   Recommendation: {recommendation}")
-        print(f"   Major Issues: {len(major_issues)}")
-        print(f"   Refinement Count: {refinement_count}")
-        
         # Decision logic
         if recommendation == "accept" or overall_score >= 7.0 or refinement_count >= 3:
-            print("✅ Plan quality sufficient - proceeding to finalization")
             return "finalize_plan"
         elif recommendation == "refine" and refinement_count < 3:
-            print("🔄 Plan needs refinement - creating improved version")
             return "refine_plan"
         else:
-            print("✅ Maximum refinements reached - finalizing current plan")
             return "finalize_plan"
 
     # ==================================================================================
     # UTILITY & HELPER FUNCTIONS
     # ==================================================================================
 
-def _display_research_plan_terminal(state: ResearchPlanningState) -> str:
+def _display_research_plan_terminal(state: ResearchPlanningState, config: Optional[Dict[str, Any]] = None) -> str:
         """Generate and display a comprehensive research plan in the terminal."""
         try:
             from datetime import datetime
@@ -1670,35 +1607,35 @@ METADATA:
 """
             
             # Print the research plan to terminal instead of saving to file
-            print("\n" + "="*80)
-            print("📋 GENERATED RESEARCH PLAN")
-            print("="*80)
-            print(content)
-            print("="*80)
-            print("📋 END OF RESEARCH PLAN")
-            print("="*80)
+            _write_stream( "\n" + "="*80 + "\n")
+            _write_stream( "📋 GENERATED RESEARCH PLAN\n")
+            _write_stream( "="*80 + "\n")
+            _write_stream( content + "\n")
+            _write_stream( "="*80 + "\n")
+            _write_stream( "📋 END OF RESEARCH PLAN\n")
+            _write_stream( "="*80 + "\n")
             
-            print(f"✅ Research plan displayed in terminal")
-            print(f"📊 Plan statistics:")
-            print(f"   - Total length: {len(content)} characters")
-            print(f"   - Estimated pages: {len(content) // 3000:.1f}")
-            print(f"   - Iterations: {state.get('iteration_count', 0)}")
-            print(f"   - Refinements: {state.get('refinement_count', 0)}")
+            _write_stream( f"✅ Research plan displayed in terminal\n")
+            _write_stream( f"📊 Plan statistics:\n")
+            _write_stream( f"   - Total length: {len(content)} characters\n")
+            _write_stream( f"   - Estimated pages: {len(content) // 3000:.1f}\n")
+            _write_stream( f"   - Iterations: {state.get('iteration_count', 0)}\n")
+            _write_stream( f"   - Refinements: {state.get('refinement_count', 0)}\n")
             
             return "terminal_display"  # Return indicator instead of file path
             
         except Exception as e:
-            print(f"❌ Failed to display research plan: {str(e)}")
+            _write_stream( f"❌ Failed to display research plan: {str(e)}\n")
             return None
 
-async def plan_research(prompt: str, uploaded_data: List[str] = None) -> Dict[str, Any]:
+async def plan_research(prompt: str, uploaded_data: List[str] = None, config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Main entry point for research planning workflow."""
         try:
             # Initialize clients for standalone execution
-            _initialize_clients()
+            _initialize_clients(config)
             
-            print(f"\n🚀 Starting Research Planning Workflow...")
-            print(f"📝 Research Domain: {prompt}")
+            _write_stream( f"\n🚀 Starting Research Planning Workflow...\n")
+            _write_stream( f"📝 Research Domain: {prompt}\n")
             
             # Initialize state
             initial_state: ResearchPlanningState = {
@@ -1728,18 +1665,18 @@ async def plan_research(prompt: str, uploaded_data: List[str] = None) -> Dict[st
             
             # Build and run the workflow
             workflow = build_research_planning_graph()
-            result = await workflow.ainvoke(initial_state)
+            result = await workflow.ainvoke(initial_state, config=config)
             
             # Generate document if successful
             if result.get("research_plan"):
-                display_status = _display_research_plan_terminal(result)
+                display_status = _display_research_plan_terminal(result, config)
                 if display_status:
                     result["display_method"] = "terminal_output"
             
             return result
             
         except Exception as e:
-            print(f"❌ Research planning workflow failed: {str(e)}")
+            _write_stream( f"❌ Research planning workflow failed: {str(e)}\n")
             return {
                 "error": str(e),
                 "workflow_type": "research_planning",
