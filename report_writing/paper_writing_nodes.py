@@ -133,7 +133,7 @@ def _initialize_clients():
 
     if tavily_client is None:
         # Initialize Tavily client
-        tavily_api_key = "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"  # Using the key from the example file
+        tavily_api_key = _load_from_env_file("TAVILY_API_KEY")  # Using the key from the example file
         try:
             tavily_client = TavilyClient(api_key=tavily_api_key)
             print("✅ Tavily web search client initialized successfully")
