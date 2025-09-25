@@ -19,7 +19,7 @@ import math
 import asyncio
 import requests
 import feedparser
-from Arxiv_utils.Report_to_txt import extract_pdf_text
+from aero.utils.report_to_txt import extract_pdf_text
 
 
 class ArxivPaperProcessor:

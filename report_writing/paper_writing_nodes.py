@@ -129,13 +129,16 @@ def _initialize_clients():
             api_key=api_key,
             base_url=base_url
         )
+        print("✅ OpenAI client initialized successfully")
 
     if tavily_client is None:
         # Initialize Tavily client
         tavily_api_key = os.getenv("TAVILY_API_KEY")  # Using the key from the example file
         try:
             tavily_client = TavilyClient(api_key=tavily_api_key)
+            print("✅ Tavily web search client initialized successfully")
         except Exception as e:
+            print(f"⚠️ Tavily client initialization failed: {e}")
             tavily_client = None
 
 # ==================================================================================
@@ -316,8 +319,10 @@ def create_file_data_from_paths(file_paths: List[str]) -> List[Dict[str, Any]]:
                     'content': content,
                     'filename': path.name
                 })
+            else:
+                print(f"⚠️ File not found: {file_path}")
         except Exception as e:
-            pass  # Skip files that can't be read
+            print(f"⚠️ Error reading file {file_path}: {e}")
     
     return files_data
 
@@ -327,6 +332,7 @@ def create_file_data_from_paths(file_paths: List[str]) -> List[Dict[str, Any]]:
 
 async def _analyze_results_node(state: PaperWritingState) -> PaperWritingState:
     """Node for analyzing experimental results and research context, including uploaded file data."""
+    print("\n📊 Paper Writing: Analyzing experimental results and research context...")
 
     try:
         # Extract research context from the original prompt and any provided data
@@ -339,6 +345,7 @@ async def _analyze_results_node(state: PaperWritingState) -> PaperWritingState:
         data_analysis = ""
 
         if uploaded_data:
+            print(f"📎 Processing {len(uploaded_data)} uploaded files...")
             uploaded_context = "\n\nUPLOADED FILE DATA:\n"
 
             for i, file_content in enumerate(uploaded_data, 1):
@@ -385,8 +392,10 @@ async def _analyze_results_node(state: PaperWritingState) -> PaperWritingState:
                 else:
                     uploaded_context += f"\nFile {i}: {file_content[:200]}{'...' if len(file_content) > 200 else ''}\n"
                     data_analysis += f"Additional file data. "
+
+            print(f"📋 Processed file data: {data_analysis}")
         else:
-            pass
+            print("📝 No uploaded files to process")
 
         analysis_prompt = f"""
         Analyze the following experimental results and research context to prepare for paper writing:
@@ -426,6 +435,7 @@ async def _analyze_results_node(state: PaperWritingState) -> PaperWritingState:
 
         # Parse the analysis
         analysis_text = response.choices[0].message.content.strip()
+        print(f"📋 Analysis: {analysis_text[:200]}...")
 
         # Try to extract JSON from response
         try:
@@ -486,6 +496,7 @@ async def _analyze_results_node(state: PaperWritingState) -> PaperWritingState:
         }
 
     except Exception as e:
+        print(f"❌ Error in analyze_results_node: {str(e)}")
         return {
             **state,
             "errors": state.get("errors", []) + [f"Analysis error: {str(e)}"],
@@ -494,6 +505,7 @@ async def _analyze_results_node(state: PaperWritingState) -> PaperWritingState:
 
 async def _setup_paper_node(state: PaperWritingState) -> PaperWritingState:
     """Node for LLM-driven template selection and comprehensive paper structure planning."""
+    print("\n🏗️ Paper Writing: Setting up comprehensive paper structure for single-call generation...")
 
     try:
         research_analysis = state.get("research_analysis", {})
@@ -611,6 +623,7 @@ async def _setup_paper_node(state: PaperWritingState) -> PaperWritingState:
         )
 
         setup_text = response.choices[0].message.content.strip()
+        print(f"📋 Comprehensive paper structure generated: {len(setup_text)} characters")
 
         # Try to extract JSON from response with robust parsing
         try:
@@ -636,7 +649,9 @@ async def _setup_paper_node(state: PaperWritingState) -> PaperWritingState:
                 # Try parsing the cleaned JSON
                 try:
                     setup_json = json.loads(json_str)
+                    print(f"✅ Successfully parsed LLM-generated structure")
                 except json.JSONDecodeError as json_error:
+                    print(f"⚠️ JSON parsing failed after cleaning: {json_error}")
                     # Try a more aggressive cleaning approach
                     json_str_backup = json_str
                     
@@ -648,7 +663,9 @@ async def _setup_paper_node(state: PaperWritingState) -> PaperWritingState:
                     
                     try:
                         setup_json = json.loads(json_str)
+                        print(f"✅ Successfully parsed LLM structure after aggressive cleaning")
                     except json.JSONDecodeError:
+                        print(f"❌ All JSON parsing attempts failed, using fallback structure")
                         raise Exception("JSON parsing failed after all cleanup attempts")
             else:
                 # Enhanced fallback structure optimized for single-call generation
@@ -732,6 +749,7 @@ async def _setup_paper_node(state: PaperWritingState) -> PaperWritingState:
                     }
                 }
         except Exception as e:
+            print(f"⚠️ JSON parsing failed, using enhanced fallback structure: {e}")
             # Use the enhanced fallback structure from above
             setup_json = {
                 "template_config": {
@@ -790,6 +808,8 @@ async def _setup_paper_node(state: PaperWritingState) -> PaperWritingState:
             }
 
         sections_count = len(setup_json.get("paper_structure", {}).get("sections", []))
+        print(f"✅ Paper structure ready: {sections_count} sections configured for single-call generation")
+        print(f"📊 Target word count: {setup_json.get('template_config', {}).get('target_word_count', 'unspecified')}")
 
         return {
             **state,
@@ -799,6 +819,7 @@ async def _setup_paper_node(state: PaperWritingState) -> PaperWritingState:
         }
 
     except Exception as e:
+        print(f"❌ Error in setup_paper_node: {str(e)}")
         return {
             **state,
             "errors": state.get("errors", []) + [f"Setup error: {str(e)}"],
@@ -807,10 +828,12 @@ async def _setup_paper_node(state: PaperWritingState) -> PaperWritingState:
 
 async def _find_supporting_sources_node(state: PaperWritingState) -> PaperWritingState:
     """🔍 Find supporting sources and citations using Tavily web search, enhanced with uploaded file context."""
+    print("\n🔍 Step: Finding supporting sources and citations...")
 
     try:
         # Check if Tavily client is available
         if tavily_client is None:
+            print("⚠️ Tavily client not initialized. Skipping source finding.")
             return {
                 **state,
                 "supporting_sources": [],
@@ -829,6 +852,7 @@ async def _find_supporting_sources_node(state: PaperWritingState) -> PaperWritin
         # Extract file-specific context for enhanced search queries
         file_context = ""
         if uploaded_data:
+            print(f"📎 Incorporating {len(uploaded_data)} uploaded files into search strategy...")
 
             # Extract key terms and context from uploaded files
             csv_keywords = []
@@ -916,12 +940,15 @@ async def _find_supporting_sources_node(state: PaperWritingState) -> PaperWritin
         all_sources = []
         citation_database = {}
 
+        print(f"🔍 Performing {len(search_queries)} targeted searches for citations...")
+
         for i, search_item in enumerate(search_queries[:4]):  # Limit to 4 searches
             query = search_item["query"]
             purpose = search_item["purpose"]
             section = search_item["section"]
 
             try:
+                print(f"   📚 Search {i+1}: {purpose} - {query[:50]}...")
 
                 # Execute Tavily search
                 search_response = await asyncio.get_event_loop().run_in_executor(
@@ -969,12 +996,20 @@ async def _find_supporting_sources_node(state: PaperWritingState) -> PaperWritin
                                 citation_database[section] = []
                             citation_database[section].append(source_info)
 
+                    print(f"   ✅ Found {sources_found} relevant sources for {purpose}")
+
             except Exception as e:
+                print(f"   ❌ Search failed for {purpose}: {str(e)}")
                 continue
 
         # Summary
         total_sources = len(all_sources)
         sections_with_sources = len(citation_database)
+
+        print(f"🎯 Source finding complete:")
+        print(f"   📚 Total sources found: {total_sources}")
+        print(f"   📋 Sections with sources: {sections_with_sources}")
+        print(f"   🔍 Search queries used: {len(search_queries)}")
 
         return {
             **state,
@@ -990,6 +1025,7 @@ async def _find_supporting_sources_node(state: PaperWritingState) -> PaperWritin
         }
 
     except Exception as e:
+        print(f"❌ Error in find_supporting_sources_node: {str(e)}")
         return {
             **state,
             "errors": state.get("errors", []) + [f"Source finding error: {str(e)}"],
@@ -1006,8 +1042,13 @@ async def _generate_content_node(state: PaperWritingState) -> PaperWritingState:
     critique_results = state.get("critique_results", {})
     
     if refinement_count > 0:
+        print(f"\n🔄 Paper Writing: Refining entire paper based on critique (Iteration {refinement_count})...")
         major_issues = critique_results.get("major_issues", [])
         suggestions = critique_results.get("suggestions", [])
+        if major_issues:
+            print(f"🎯 Addressing {len(major_issues)} major issues from critique")
+    else:
+        print("\n✍️ Paper Writing: Generating complete paper with citations in a single comprehensive call...")
 
     try:
         research_analysis = state.get("research_analysis", {})
@@ -1022,6 +1063,9 @@ async def _generate_content_node(state: PaperWritingState) -> PaperWritingState:
         source_validation = state.get("source_validation_results", {})
 
         sections = paper_structure.get("sections", [])
+        
+        print(f"📚 Using {len(supporting_sources)} sources for comprehensive paper generation")
+        print(f"📄 Generating complete paper with {len(sections)} sections in single LLM call")
 
         # Prepare comprehensive citations context for the entire paper
         citations_context = ""
@@ -1172,6 +1216,8 @@ Write a complete academic research paper based on the following requirements. Ge
 Generate the complete academic research paper now:
         """
 
+        print("🎯 Generating complete paper in single comprehensive LLM call...")
+        
         response = await asyncio.get_event_loop().run_in_executor(
             None,
             lambda: client.chat.completions.create(
@@ -1194,9 +1240,16 @@ Generate the complete academic research paper now:
         reference_list = _generate_reference_list(supporting_sources)
         if reference_list and "References" not in section_content:
             section_content["References"] = reference_list
+            print(f"📚 Added References section with {len(supporting_sources)} sources")
 
         # Count citations used in the complete paper
         total_citations_used = sum(1 for i in range(1, len(supporting_sources) + 1) if f"[{i}]" in complete_paper)
+
+        print(f"🎯 Complete paper generation successful:")
+        print(f"   📝 Total length: {len(complete_paper):,} characters")
+        print(f"   📋 Sections parsed: {len(section_content)}")
+        print(f"   📚 Citations integrated: {total_citations_used}/{len(supporting_sources)}")
+        print(f"   🔗 Citation coverage: {(total_citations_used/max(len(supporting_sources), 1)*100):.1f}%")
 
         return {
             **state,
@@ -1206,13 +1259,14 @@ Generate the complete academic research paper now:
         }
 
     except Exception as e:
+        print(f"❌ Error in generate_content_node: {str(e)}")
         return {
             **state,
             "errors": state.get("errors", []) + [f"Content generation error: {str(e)}"],
             "current_step": "content_generation_error"
         }
     else:
-        pass
+        print("\n✍️ Paper Writing: Generating content with citations for each section...")
 
     try:
         research_analysis = state.get("research_analysis", {})
@@ -1227,12 +1281,15 @@ Generate the complete academic research paper now:
         sections = paper_structure.get("sections", [])
         section_content = {}
 
+        print(f"📚 Using {len(supporting_sources)} sources for citations across {len(citation_database)} sections")
+        
         # Generate sections SEQUENTIALLY with context from previous sections
         for section_idx, section in enumerate(sections):
             section_name = section.get("name", "Unknown")
             section_focus = section.get("focus", "general")
             section_length = section.get("length", "1 page")
 
+            print(f"📝 Generating {section_name} section with citations ({section_idx + 1}/{len(sections)})...")
 
             # Build context from all previously written sections
             previous_sections_context = ""
@@ -1404,14 +1461,22 @@ Write a complete {section_name} section with integrated citations that flows nat
                 if f"[{i}]" in section_text:
                     used_citations.append(source)
 
+            print(f"   ✅ Generated {section_name} ({len(section_text)} chars, {len(used_citations)} citations)")
+
         # Generate reference list from all used sources
         reference_list = _generate_reference_list(supporting_sources)
         if reference_list:
             section_content["References"] = reference_list
+            print(f"📚 Generated References section with {len(supporting_sources)} sources")
 
         total_sources_used = len([s for s in supporting_sources if any(
             f"[{i}]" in content for i, content in enumerate(section_content.values(), 1)
         )])
+
+        print(f"🎯 Content generation complete:")
+        print(f"   📝 Sections written: {len(section_content)}")
+        print(f"   📚 Sources integrated: {total_sources_used}/{len(supporting_sources)}")
+        print(f"   🔗 Citation coverage: {source_validation.get('search_success_rate', 0):.1%}")
 
         return {
             **state,
@@ -1420,6 +1485,7 @@ Write a complete {section_name} section with integrated citations that flows nat
         }
 
     except Exception as e:
+        print(f"❌ Error in generate_content_node: {str(e)}")
         return {
             **state,
             "errors": state.get("errors", []) + [f"Content generation error: {str(e)}"],
@@ -1604,7 +1670,7 @@ def _parse_critique_json(critique_response: str) -> Dict[str, Any]:
     try:
         return json.loads(cleaned_response)
     except json.JSONDecodeError as e:
-        pass
+        print(f"🔧 JSON parsing attempt 1 failed: {e}")
     
     # Strategy 3: Find JSON object boundaries more aggressively
     try:
@@ -1616,7 +1682,7 @@ def _parse_critique_json(critique_response: str) -> Dict[str, Any]:
             json_str = cleaned_response[start_idx:end_idx + 1]
             return json.loads(json_str)
     except (json.JSONDecodeError, ValueError) as e:
-        pass
+        print(f"🔧 JSON parsing attempt 2 failed: {e}")
     
     # Strategy 4: Try to fix common JSON issues
     try:
@@ -1629,7 +1695,7 @@ def _parse_critique_json(critique_response: str) -> Dict[str, Any]:
         
         return json.loads(fixed_json)
     except (json.JSONDecodeError, ValueError) as e:
-        pass
+        print(f"🔧 JSON parsing attempt 3 failed: {e}")
     
     # Strategy 5: Extract key values using regex patterns
     try:
@@ -1691,12 +1757,14 @@ def _parse_critique_json(critique_response: str) -> Dict[str, Any]:
         
         extracted_data["section_scores"] = section_scores
         
+        print(f"✅ Successfully extracted critique data using regex patterns")
         return extracted_data
         
     except Exception as e:
-        pass
+        print(f"🔧 Regex extraction failed: {e}")
     
     # Strategy 6: Ultimate fallback with reasonable defaults
+    print("🔧 Using ultimate fallback critique with reasonable defaults")
     return {
         "overall_score": 6.0,
         "recommendation": "revise",
@@ -1723,6 +1791,7 @@ def _parse_critique_json(critique_response: str) -> Dict[str, Any]:
 
 async def _critique_paper_node(state: PaperWritingState) -> PaperWritingState:
     """Node for critiquing the complete paper generated via single LLM call."""
+    print("\n🔍 Paper Writing: Critiquing complete paper (optimized for single-call generation)...")
 
     try:
         section_content = state.get("section_content", {})
@@ -1733,6 +1802,7 @@ async def _critique_paper_node(state: PaperWritingState) -> PaperWritingState:
         original_prompt = state.get("original_prompt", "")
 
         if not section_content and not formatted_paper:
+            print("⚠️ No content to critique - skipping critique")
             return {
                 **state,
                 "critique_results": {"overall_score": 5.0, "recommendation": "accept", "major_issues": []},
@@ -1760,6 +1830,9 @@ async def _critique_paper_node(state: PaperWritingState) -> PaperWritingState:
         word_count = len(full_content.split())
         char_count = len(full_content)
         
+        print(f"📊 Paper to critique: {word_count:,} words, {char_count:,} characters")
+        print(f"🔧 Generation method: {generation_method}")
+
         critique_prompt = f"""
 You are a senior academic reviewer with expertise in evaluating research papers generated through advanced AI methods. You are specifically evaluating a paper created using **{generation_method}**.
 
@@ -1984,15 +2057,37 @@ Evaluate how well this paper demonstrates the advantages of comprehensive genera
             # Add to score history
             state["critique_score_history"].append(critique_data.get("overall_score", 0.0))
 
+            print(f"\n🔍 COMPREHENSIVE PAPER CRITIQUE COMPLETED:")
+            print(f"   📊 Overall Score: {critique_data.get('overall_score', 0):.1f}/10")
+            print(f"   📋 Recommendation: {critique_data.get('recommendation', 'unknown')}")
+            print(f"   ⚠️ Major Issues: {len(critique_data.get('major_issues', []))}")
+            print(f"   💡 Specific Improvements: {len(critique_data.get('specific_improvements', []))}")
+            print(f"   🔄 Iteration: {iteration_count}")
+            print(f"   📝 Paper Length: {word_count:,} words")
+
             # Show generation method specific feedback
             single_call_feedback = critique_data.get("single_call_specific_feedback", {})
             if single_call_feedback:
                 generation_effectiveness = single_call_feedback.get("generation_effectiveness", "")
                 coherence_assessment = single_call_feedback.get("coherence_assessment", "")
+                if generation_effectiveness:
+                    print(f"\n🎯 GENERATION METHOD ASSESSMENT:")
+                    print(f"   🔧 Effectiveness: {generation_effectiveness[:100]}...")
+                if coherence_assessment:
+                    print(f"   📊 Coherence: {coherence_assessment[:100]}...")
 
             # Print key feedback with detailed improvements
             major_issues = critique_data.get("major_issues", [])
+            if major_issues:
+                print(f"\n🚨 CRITICAL ISSUES TO ADDRESS:")
+                for i, issue in enumerate(major_issues[:3], 1):
+                    print(f"   {i}. {issue}")
+
             specific_improvements = critique_data.get("specific_improvements", [])
+            if specific_improvements:
+                print(f"\n🎯 SPECIFIC IMPROVEMENTS FOR COMPREHENSIVE PAPER:")
+                for i, improvement in enumerate(specific_improvements[:4], 1):
+                    print(f"   {i}. {improvement}")
 
             # Show coherence and flow assessment
             critical_analysis = critique_data.get("critical_analysis", {})
@@ -2000,11 +2095,26 @@ Evaluate how well this paper demonstrates the advantages of comprehensive genera
             if narrative_flow:
                 strengths = narrative_flow.get("strengths", [])
                 weaknesses = narrative_flow.get("weaknesses", [])
+                print(f"\n📊 NARRATIVE FLOW ASSESSMENT:")
+                if strengths:
+                    print(f"   ✅ Flow Strengths: {strengths[0] if strengths else 'None specified'}")
+                if weaknesses:
+                    print(f"   🔄 Flow Improvements: {weaknesses[0] if weaknesses else 'None needed'}")
 
             # Show technical assessment
             technical_feedback = critique_data.get("technical_feedback", {})
+            if any(technical_feedback.values()):
+                print(f"\n🔬 TECHNICAL CONTENT ASSESSMENT:")
+                methodology = technical_feedback.get("methodology_assessment", [])
+                if methodology:
+                    print(f"   • Methodology: {methodology[0]}")
+                integration = technical_feedback.get("experimental_integration", [])
+                if integration:
+                    print(f"   • Data Integration: {integration[0]}")
 
         except json.JSONDecodeError as e:
+            print(f"⚠️ Critique JSON parsing had issues, but recovered using fallback strategies")
+            print(f"   📝 Original error: {str(e)[:100]}...")
             # Fallback critique for parsing failures (should rarely happen now)
             critique_data = {
                 "overall_score": 6.5,  # Slightly higher default for single-call papers
@@ -2038,6 +2148,7 @@ Evaluate how well this paper demonstrates the advantages of comprehensive genera
         }
 
     except Exception as e:
+        print(f"❌ Error in critique_paper_node: {str(e)}")
         # Fallback to accept if critique fails
         fallback_critique = {
             "overall_score": 6.0,
@@ -2062,21 +2173,31 @@ def _determine_paper_refinement_path(state: PaperWritingState) -> str:
     
     # If coming from generate_content for the first time, always critique
     if current_step == "content_generated" and refinement_count == 0:
+        print("🔍 First content generation complete - proceeding to critique")
         return "critique"
     
     # If coming from critique_paper, make refinement decision
     if not critique:
+        print("🔄 No critique available - proceeding to finalization")
         return "finalize"
     
     overall_score = critique.get("overall_score", 5.0)
     recommendation = critique.get("recommendation", "accept")
     major_issues = critique.get("major_issues", [])
     
+    print(f"🚦 Paper Refinement Decision Point:")
+    print(f"   📊 Score: {overall_score:.1f}/10")
+    print(f"   📋 Recommendation: {recommendation}")
+    print(f"   ⚠️ Major Issues: {len(major_issues)}")
+    print(f"   🔄 Refinement Count: {refinement_count}")
+    
     # Maximum 3 refinement iterations
     MAX_REFINEMENTS = 3
     
     # If we've hit the maximum refinements, select the best version
     if refinement_count >= MAX_REFINEMENTS:
+        print(f"🏁 Maximum refinements ({MAX_REFINEMENTS}) reached - selecting best version")
+        
         # Get score history to find the best version
         score_history = state.get("critique_score_history", [])
         previous_papers = state.get("previous_papers", [])
@@ -2087,20 +2208,29 @@ def _determine_paper_refinement_path(state: PaperWritingState) -> str:
             best_score_idx = score_history.index(max(score_history))
             best_score = score_history[best_score_idx]
             
+            print(f"📊 Score History: {[f'{s:.1f}' for s in score_history]}")
+            print(f"🏆 Best Score: {best_score:.1f} at iteration {best_score_idx}")
+            
             # If the best version isn't the current one, restore it
             if best_score_idx < len(previous_papers) and best_score_idx != len(score_history) - 1:
+                print(f"🔄 Restoring best version from iteration {best_score_idx}")
                 state["section_content"] = previous_papers[best_score_idx]
                 # Update critique results to reflect the best version
                 critique_history = state.get("critique_history", [])
                 if best_score_idx < len(critique_history):
                     state["critique_results"] = critique_history[best_score_idx]["critique_data"]
+            else:
+                print("✅ Current version is the best - keeping it")
         
         return "finalize"
     
     # Decision logic for paper refinement (only revise for major issues)
     if recommendation == "accept" or overall_score >= 6.0 or len(major_issues) == 0:
+        print("✅ Paper accepted - no major issues found or score adequate")
         return "finalize"
     elif recommendation == "revise" and len(major_issues) > 0 and refinement_count < MAX_REFINEMENTS:
+        print(f"🔄 Major issues detected - revision needed (iteration {refinement_count + 1}/{MAX_REFINEMENTS})")
+        print(f"   🚨 {len(major_issues)} major issues to address")
         # Store current paper for comparison
         if "previous_papers" not in state:
             state["previous_papers"] = []
@@ -2109,10 +2239,12 @@ def _determine_paper_refinement_path(state: PaperWritingState) -> str:
         state["refinement_count"] = refinement_count + 1
         return "refine"
     else:
+        print("✅ Proceeding to finalization")
         return "finalize"
 
 async def _format_paper_node(state: PaperWritingState) -> PaperWritingState:
     """Node for formatting the paper according to template requirements with enhanced citation support."""
+    print("\n📄 Paper Writing: Formatting paper with citations...")
 
     try:
         section_content = state.get("section_content", {})
@@ -2150,12 +2282,16 @@ async def _format_paper_node(state: PaperWritingState) -> PaperWritingState:
         
         if sections:
             # Use the ACTUAL structure order from setup node
+            print(f"📋 Following structure from setup node: {len(sections)} sections")
             for section in sections:
                 section_name = section.get("name", "Unknown")
                 if section_name in section_content:
                     paper_parts.append(f"## {section_name}\n\n")
                     paper_parts.append(section_content[section_name])
                     paper_parts.append("\n\n")
+                    print(f"   ✅ Added {section_name} section in correct order")
+                else:
+                    print(f"   ⚠️ Section {section_name} missing from content")
             
             # Add any remaining sections not in the structure (like References)
             structure_section_names = [s.get("name", "") for s in sections]
@@ -2164,8 +2300,10 @@ async def _format_paper_node(state: PaperWritingState) -> PaperWritingState:
                     paper_parts.append(f"## {section_name}\n\n")
                     paper_parts.append(content)
                     paper_parts.append("\n\n")
+                    print(f"   📚 Added additional section: {section_name}")
         else:
             # Fallback to hardcoded order if no structure available
+            print("⚠️ No paper structure found, using fallback order")
             section_order = ["Abstract", "Introduction", "Related Work", "Methods", "Results", "Discussion", "Conclusion", "References"]
             for section_name in section_order:
                 if section_name in section_content:
@@ -2192,6 +2330,11 @@ async def _format_paper_node(state: PaperWritingState) -> PaperWritingState:
 
         total_citations = len([line for line in formatted_paper.split('\n') if '[' in line and ']' in line])
 
+        print(f"✅ Paper formatted:")
+        print(f"   📄 Total length: {len(formatted_paper)} characters")
+        print(f"   📚 Citations integrated: {total_citations}")
+        print(f"   📋 Sections included: {len(section_content)}")
+
         return {
             **state,
             "formatted_paper": formatted_paper,
@@ -2199,6 +2342,7 @@ async def _format_paper_node(state: PaperWritingState) -> PaperWritingState:
         }
 
     except Exception as e:
+        print(f"❌ Error in format_paper_node: {str(e)}")
         return {
             **state,
             "errors": state.get("errors", []) + [f"Formatting error: {str(e)}"],
@@ -2207,6 +2351,7 @@ async def _format_paper_node(state: PaperWritingState) -> PaperWritingState:
 
 async def _finalize_paper_node(state: PaperWritingState) -> PaperWritingState:
     """Node for finalizing the paper and creating output files."""
+    print("\n🎯 Paper Writing: Finalizing paper...")
 
     try:
         formatted_paper = state.get("formatted_paper", "")
@@ -2219,9 +2364,17 @@ async def _finalize_paper_node(state: PaperWritingState) -> PaperWritingState:
         final_score = critique_results.get("overall_score", 0.0)
         final_recommendation = critique_results.get("recommendation", "unknown")
         
+        print(f"📊 FINAL PAPER METRICS:")
+        print(f"   🏆 Final Score: {final_score:.1f}/10")
+        print(f"   📋 Final Recommendation: {final_recommendation}")
+        print(f"   🔄 Total Iterations: {refinement_count}")
+        
         if score_history:
             best_score = max(score_history)
             score_improvement = score_history[-1] - score_history[0] if len(score_history) > 1 else 0
+            print(f"   📈 Score History: {[f'{s:.1f}' for s in score_history]}")
+            print(f"   🎯 Best Score Achieved: {best_score:.1f}")
+            print(f"   📊 Score Improvement: {score_improvement:+.1f}")
 
         # Create multiple format outputs
         final_outputs = {}
@@ -2229,9 +2382,24 @@ async def _finalize_paper_node(state: PaperWritingState) -> PaperWritingState:
         # Markdown version (primary)
         final_outputs["markdown"] = formatted_paper
 
+        # Print the paper to terminal instead of saving to file
+        print("\n" + "="*80)
+        print("📄 GENERATED ACADEMIC PAPER")
+        print("="*80)
+        print(formatted_paper)
+        print("="*80)
+        print("📄 END OF PAPER")
+        print("="*80)
+
         # Store paper content in outputs but don't save to file
         final_outputs["paper_content"] = formatted_paper
         final_outputs["display_method"] = "terminal_output"
+
+        print(f"✅ Paper displayed in terminal")
+        print(f"📊 Paper statistics:")
+        print(f"   - Total length: {len(formatted_paper)} characters")
+        print(f"   - Estimated pages: {len(formatted_paper) // 3000:.1f}")
+        print(f"   - Sections: {len(state.get('section_content', {}))}")
 
         return {
             **state,
@@ -2240,6 +2408,7 @@ async def _finalize_paper_node(state: PaperWritingState) -> PaperWritingState:
         }
 
     except Exception as e:
+        print(f"❌ Error in finalize_paper_node: {str(e)}")
         return {
             **state,
             "errors": state.get("errors", []) + [f"Finalization error: {str(e)}"],
@@ -2302,8 +2471,7 @@ async def write_paper(
     uploaded_data: List[str] = None,
     file_paths: List[str] = None,
     files_data: List[Dict[str, Any]] = None,
-    target_venue: str = "general",
-    enable_streaming: bool = False
+    target_venue: str = "general"
 ) -> Dict[str, Any]:
     """
     Standalone function to write a research paper using the paper writing workflow.
@@ -2315,7 +2483,6 @@ async def write_paper(
         file_paths (List[str], optional): List of file paths to extract content from
         files_data (List[Dict[str, Any]], optional): List of file data dicts with 'content' (bytes) and 'filename' (str)
         target_venue (str, optional): Target publication venue
-        enable_streaming (bool, optional): Enable real-time streaming output
 
     Returns:
         Dict[str, Any]: Complete workflow results including the generated paper
@@ -2342,6 +2509,10 @@ async def write_paper(
             ]
         )
     """
+    print("📝 Paper Writing Workflow - Standalone Runner")
+    print("=" * 60)
+    print(f"🎯 Writing paper for: {user_query[:80]}{'...' if len(user_query) > 80 else ''}")
+    print("-" * 60)
 
     # Initialize clients
     _initialize_clients()
@@ -2351,16 +2522,26 @@ async def write_paper(
     
     # Extract content from file paths
     if file_paths:
+        print(f"📁 Processing {len(file_paths)} file paths...")
         extracted_from_paths = extract_files_from_paths(file_paths)
         processed_uploaded_data.extend(extracted_from_paths)
+        print(f"✅ Extracted content from {len(extracted_from_paths)} files")
     
     # Extract content from file bytes data
     if files_data:
+        print(f"📄 Processing {len(files_data)} file data objects...")
         extracted_from_bytes = extract_files_from_bytes(files_data)
         processed_uploaded_data.extend(extracted_from_bytes)
+        print(f"✅ Extracted content from {len(extracted_from_bytes)} files")
     
     if processed_uploaded_data:
-        pass  # Files processed successfully
+        print(f"📊 Total processed files: {len(processed_uploaded_data)}")
+        for i, data in enumerate(processed_uploaded_data[:3]):  # Show first 3 files
+            preview = data.split('\n')[0]  # First line (header)
+            print(f"   {i+1}. {preview}")
+        if len(processed_uploaded_data) > 3:
+            print(f"   ... and {len(processed_uploaded_data) - 3} more files")
+        print("-" * 60)
 
     # Build the workflow
     graph = build_paper_writing_graph()
@@ -2400,28 +2581,24 @@ async def write_paper(
     )
 
     # Execute the workflow
+    print("\n🚀 Starting Paper Writing Workflow...")
     try:
-        if enable_streaming:
-            # Run with streaming (silent mode for clean streaming)
-            step_counter = 0
-            result = initial_state
-            config = {"recursion_limit": 50}
-            
-            async for chunk in graph.astream(initial_state, config=config, stream_mode="updates"):
-                if chunk:
-                    step_counter += 1
-                    
-                    for node_name, node_updates in chunk.items():
-                        # Update result with latest state (no printing)
-                        result.update(node_updates)
-        else:
-            # Run without streaming
-            result = await graph.ainvoke(initial_state)
+        result = await graph.ainvoke(initial_state)
 
-        # Return the complete results silently
-        return dict(result)
+        # Check for successful completion
+        if result.get("current_step") == "paper_finalized":
+            print("✅ Paper writing completed successfully!")
+            print("📄 Generated paper displayed above in terminal")
+
+            # Return the complete results
+            return dict(result)
+        else:
+            print(f"❌ Paper writing failed at step: {result.get('current_step')}")
+            print(f"Errors: {result.get('errors', [])}")
+            return dict(result)
 
     except Exception as e:
+        print(f"❌ Critical error in paper writing workflow: {str(e)}")
         return {
             "success": False,
             "error": str(e),
@@ -2451,7 +2628,7 @@ if __name__ == "__main__":
     file_paths = sys.argv[2:] if len(sys.argv) > 2 else None
     
     if file_paths:
-        pass  # Files will be processed silently
+        print(f"📁 Processing files: {', '.join(file_paths)}")
     
     # Run the paper writing workflow with file processing
     asyncio.run(write_paper(research_topic, file_paths=file_paths))

@@ -11,6 +11,7 @@ This demonstrates the clean library usage pattern.
 
 from dotenv import load_dotenv
 import os
+import sys
 import asyncio
 
 async def main():
@@ -38,8 +39,6 @@ async def main():
     
     try:
         # Import the library (environment variables are now available)
-        from aero.research_planner.research_planning_nodes import plan_research
-        
         print("✅ Library imported successfully!")
         print("\n🚀 Running research planning test...")
         
@@ -48,12 +47,15 @@ async def main():
         
         print(f"📝 Query: {query}")
         
-        # Run research planning (await since it's async) with debug info
-        print("🔄 Calling plan_research with streaming...")
+        # Run research planning with streaming support
+        print("🔄 Using plan_research with streaming...")
         
-        # Import the workflow builder and client initializer
-        from aero.research_planner.research_planning_nodes import build_research_planning_graph, _initialize_clients
-        from langchain_core.messages import HumanMessage
+        # Import the plan_research function
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'research_planner'))
+        from research_planning_nodes import plan_research
+        
+        # Simply call plan_research with streaming enabled
+        result = await plan_research(query, enable_streaming=True)
         
         # Initialize clients first (important!)
         _initialize_clients()
@@ -66,7 +68,6 @@ async def main():
             "uploaded_data": [],
             "current_step": "initialize",
             "errors": [],
-            "workflow_type": "research_planning",
             "generated_problems": [],
             "validated_problems": [],
             "current_problem": {},
@@ -88,16 +89,65 @@ async def main():
         # Build the workflow
         workflow = build_research_planning_graph()
         
-        # Use streaming mode as per LangGraph documentation
-        print("📡 Starting streaming workflow...")
-        result = None
+        # 🎯 RECOMMENDED: Use 'updates' streaming mode
+        print("📡 Starting streaming workflow with 'updates' mode...")
+        print("=" * 60)
         
+        final_result = None
+        step_counter = 0
         config = {"recursion_limit": 50}
-        async for chunk in workflow.astream(initial_state, config=config, stream_mode="custom"):
-            print(f"🔄 Stream: {chunk}")
-            
-        # Get final result
-        final_result = await workflow.ainvoke(initial_state, config=config)
+        
+        # Stream with 'updates' mode - shows only changes after each node
+        async for chunk in workflow.astream(initial_state, config=config, stream_mode="updates"):
+            if chunk:
+                step_counter += 1
+                
+                for node_name, node_updates in chunk.items():
+                    print(f"\n� Step {step_counter}: {node_name}")
+                    print("-" * 40)
+                    
+                    # Show key updates based on the node
+                    if "current_step" in node_updates:
+                        print(f"🔄 Current step: {node_updates['current_step']}")
+                    
+                    if "current_problem" in node_updates and node_updates["current_problem"]:
+                        problem = node_updates["current_problem"]
+                        statement = problem.get('statement', 'N/A')
+                        print(f"💡 Problem generated: {statement[:100]}{'...' if len(statement) > 100 else ''}")
+                    
+                    if "validation_results" in node_updates and node_updates["validation_results"]:
+                        validation = node_updates["validation_results"]
+                        recommendation = validation.get("recommendation", "unknown")
+                        print(f"✅ Validation result: {recommendation}")
+                        if validation.get("reasoning"):
+                            reasoning = validation['reasoning']
+                            print(f"   📝 Reason: {reasoning[:150]}{'...' if len(reasoning) > 150 else ''}")
+                    
+                    if "research_plan" in node_updates and node_updates["research_plan"]:
+                        plan = node_updates["research_plan"]
+                        title = plan.get('title', 'Untitled')
+                        sections = plan.get('sections', [])
+                        print(f"📋 Research plan generated: {title}")
+                        print(f"   📊 Sections: {len(sections)} parts")
+                    
+                    if "critique_results" in node_updates and node_updates["critique_results"]:
+                        critique = node_updates["critique_results"]
+                        score = critique.get("overall_score", 0)
+                        recommendation = critique.get("recommendation", "unknown")
+                        print(f"📊 Critique score: {score}/10")
+                        print(f"📊 Recommendation: {recommendation}")
+                    
+                    if "errors" in node_updates and node_updates["errors"]:
+                        for error in node_updates["errors"]:
+                            print(f"❌ Error: {error}")
+                    
+                    # Store the final result
+                    final_result = {**initial_state, **node_updates}
+        
+        print("\n" + "=" * 60)
+        print("🏁 Workflow completed!")
+        
+        # Use the streamed result
         result = final_result
         
         print(f"📊 Result type: {type(result)}")

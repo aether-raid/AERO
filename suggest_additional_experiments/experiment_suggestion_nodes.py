@@ -3263,7 +3263,7 @@ async def run_experiment_suggestion_workflow(
         print("🔄 Running workflow...")
         
         # Run the workflow with increased recursion limit to prevent infinite loops
-        final_state = await workflow_graph.ainvoke(initial_state, config={"recursion_limit": 50})
+        final_state = await workflow_graph.ainvoke(initial_state, config={"recursion_limit": 1000})
         
         print("\n" + "=" * 80)
         print("🎉 WORKFLOW COMPLETED SUCCESSFULLY!")
