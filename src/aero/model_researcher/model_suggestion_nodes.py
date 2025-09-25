@@ -12,7 +12,7 @@ import pickle
 import urllib.request as libreq
 import xml.etree.ElementTree as ET
 
-import traceback
+
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from langchain_core.messages import AIMessage
 from dataclasses import dataclass, field
@@ -107,6 +107,38 @@ class BaseState(TypedDict):
 # ===== End moved from shared_constants.py =====
     faiss = None
 
+
+
+# ==================================================================================
+# STREAMWRITER HELPER FUNCTION
+# ==================================================================================
+from langgraph.config import get_stream_writer
+def _write_stream(message: str, key: str = "status"):
+    """Helper function to write to StreamWriter if available."""
+    try:
+        # Use LangGraph's get_stream_writer() without parameters (proper way)
+        writer = get_stream_writer()
+        writer({key: message})
+    except Exception:
+        # Fallback: try to get stream from config (for testing compatibility)
+        try:
+            # This fallback is for test compatibility only
+            import inspect
+            frame = inspect.currentframe()
+            while frame:
+                if 'config' in frame.f_locals and frame.f_locals['config']:
+                    config = frame.f_locals['config']
+                    stream = config.get("configurable", {}).get("stream")
+                    if stream and hasattr(stream, 'write'):
+                        stream.write(message)
+                        return
+                frame = frame.f_back
+        except Exception:
+            pass
+        # Final fallback: silently fail
+        pass
+
+
 # Utility function for search string formatting
 def format_search_string(input_string):
     """Convert string to arXiv search format handling slash-separated terms.
@@ -172,6 +204,9 @@ async def _analyze_properties_and_task_node(state: ModelSuggestionState) -> Mode
     
     async def extract_properties():
         """Extract properties using LLM analysis."""
+        _write_stream("Extracting properties from task description...")
+        _write_stream("Analyzing task decomposition...")
+      
         try:
             categories_list = "\n".join([f"- {category}" for category in ML_RESEARCH_CATEGORIES])
             
@@ -316,12 +351,12 @@ async def _analyze_properties_and_task_node(state: ModelSuggestionState) -> Mode
                 "tokens_used": response.usage.total_tokens if response.usage else "unknown"
             }
             
-            #print("✅ Task decomposition completed")
+            _write_stream("✅ Task decomposition completed")
             return {"success": True, "analysis": detailed_analysis}
         
         except Exception as e:
             error_msg = f"LLM decomposition failed: {str(e)}"
-            #print(f"❌ {error_msg}")
+            print(f"❌ {error_msg}")
             return {"success": False, "error": error_msg, "analysis": {"error": error_msg, "llm_analysis": None}}
 
     # Run both tasks concurrently
@@ -363,6 +398,7 @@ async def _analyze_properties_and_task_node(state: ModelSuggestionState) -> Mode
             AIMessage(content=f"Successfully analyzed task properties ({len(properties_result['properties'])} categories) and decomposed task characteristics concurrently.")
         )
     
+    print(f"DEBUG: State after _analyze_properties_and_task_node: detected_categories={len(state.get('detected_categories', []))}, errors={len(state.get('errors', []))}")
     return state
 
 
@@ -1104,6 +1140,7 @@ def _should_continue_with_papers(state: ModelSuggestionState) -> str:
         print(f"🔄 Validation decision: {decision} -> Performing new search")
         return "search_new"
     else:
+        print(f"DEBUG: _should_continue_with_papers: decision={decision}, search_iteration={search_iteration}, detected_categories={len(state.get('detected_categories', []))}")
         print(f"🔄 Validation decision: {decision} -> Continuing with current papers")
         return "continue"
 
@@ -2018,6 +2055,294 @@ async def run_model_suggestion_workflow(
         }
 
 
+
+async def run_model_suggestion_workflow_streaming(
+    user_prompt: str,
+    uploaded_data: List[str] = None
+) -> Dict[str, Any]:
+    
+    
+    """
+    Compile and run the complete model suggestion workflow.
+    
+    Args:
+        user_prompt: The user's research query
+        uploaded_data: Optional list of uploaded file contents
+        
+    Returns:
+        Dictionary containing the final workflow state with results
+    """
+    # Move all imports and initialization inside the function
+    try:
+        import asyncio
+        import openai
+        from utils.arxiv_paper_utils import ArxivPaperProcessor
+        
+    except ImportError as e:
+        error_msg = f"Failed to import required modules: {str(e)}. Please ensure all dependencies are installed."
+        print(f"❌ {error_msg}")
+        yield {
+            "workflow_successful": False,
+            "error": error_msg,
+            "error_type": "ImportError",
+            "original_prompt": user_prompt
+        }
+    
+    try:
+        
+        # Load configuration
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise ValueError("OPENAI_API_KEY not found. Please ensure the file exists and contains a valid API key.")
+        
+        base_url = os.getenv("BASE_URL") 
+        model = os.getenv("DEFAULT_MODEL") 
+        model_cheap = "gemini/gemini-2.5-flash-lite"
+      
+
+        # Initialize dependencies
+        try:
+            client = openai.OpenAI(api_key=api_key, base_url=base_url)
+        except Exception as e:
+            raise ValueError(f"Failed to initialize OpenAI client: {str(e)}. Please check your API key and base URL configuration.")
+        
+        try:
+            arxiv_processor = ArxivPaperProcessor(llm_client=client, model_name=model_cheap)
+        except Exception as e:
+            raise ValueError(f"Failed to initialize ArxivPaperProcessor: {str(e)}. Please check the ArxivPaperProcessor implementation.")
+        
+    except ValueError as e:
+        print(f"❌ Configuration Error: {str(e)}")
+        yield {
+            "workflow_successful": False,
+            "error": str(e),
+            "error_type": "ConfigurationError",
+            "original_prompt": user_prompt
+        }
+    except Exception as e:
+        error_msg = f"Unexpected error during initialization: {str(e)}"
+        print(f"❌ {error_msg}")
+        yield {
+            "workflow_successful": False,
+            "error": error_msg,
+            "error_type": type(e).__name__,
+            "original_prompt": user_prompt
+        }
+    
+    print("🚀 Starting Model Suggestion Workflow...")
+    print(f"📝 User Prompt: {user_prompt}")
+    print(f"🤖 Model: {model}")
+    print("=" * 80)
+    
+    
+    
+    
+    try:
+        # Build the workflow graph
+        workflow_graph = _build_model_suggestion_graph()
+        print("✅ Workflow graph compiled successfully")
+        
+        # Initialize the state with all required fields
+        initial_state = {
+            # Core workflow data
+            "messages": [],
+            "original_prompt": user_prompt,
+            "uploaded_data": uploaded_data or [],
+            "current_step": "starting",
+            "errors": [],
+            "workflow_type": "model_suggestion",
+            
+            # Dependencies
+            "client": client,
+            "model": model,
+            "arxiv_processor": arxiv_processor,
+            
+            # Workflow-specific fields (initialize as empty/default)
+            "detected_categories": [],
+            "detailed_analysis": {},
+            "arxiv_search_query": "",
+            "arxiv_results": {},
+            "validation_results": {},
+            "paper_validation_decision": "",
+            "search_iteration": 0,
+            "all_seen_paper_ids": set(),
+            "arxiv_chunk_metadata": [],
+            "model_suggestions": {},
+            "critique_results": {},
+            "suggestion_iteration": 0,
+            "critique_history": [],
+            "cumulative_issues": {
+                "fixed_issues": [],
+                "persistent_issues": [],
+                "recurring_issues": []
+            }
+        }
+        
+        print("🔄 Running workflow...")
+        
+        
+
+        # Use astream() with stream_mode="updates" to get state updates
+        async for chunk in workflow_graph.astream(initial_state, stream_mode=["updates","custom"]):
+            
+            stream_mode, data = chunk
+            print (f"\n--- Stream chunk received (stream_mode={stream_mode}) ---")
+            data=data.get("critique_response", data) 
+            
+            if data.get("status"):
+                print(f"Status: {data['status']}")
+            
+            yield data
+
+        # Update final_state with the latest chunk
+        #final_state.update(data)
+      
+        # Extract and display key results:
+        if data.get("model_suggestions", {}).get("suggestions_successful"):
+            print("✅ Model suggestions generated successfully")
+            suggestions = data["model_suggestions"]
+            if suggestions:
+                print(f"\n📋 FINAL RECOMMENDATIONS:")
+                print("-" * 40)
+                print(suggestions[:500] + "..." if len(suggestions) > 500 else suggestions)
+                
+            yield data  # Yield final state with suggestions
+        else:
+            print("⚠️ Model suggestions may have failed or are incomplete")
+        
+        # Display any errors
+        if data.get("errors"):
+            print(f"\n⚠️ Errors encountered: {len(data['errors'])}")
+            for i, error in enumerate(data["errors"][-3:], 1):  # Show last 3 errors
+                print(f"  {i}. {error}")
+        
+        # Display workflow statistics
+        print(f"\n📊 WORKFLOW STATISTICS:")
+        print(f"   - Papers analyzed: {len(data.get('arxiv_results', {}).get('papers', []))}")
+        print(f"   - Categories detected: {len(data.get('detected_categories', []))}")
+        print(f"   - Search iterations: {data.get('search_iteration', 0)}")
+        print(f"   - Suggestion iterations: {data.get('suggestion_iteration', 0)}")
+
+        yield data
+        
+    except Exception as e:
+        print(f"\n❌ WORKFLOW FAILED: {str(e)}")
+        print("Full error traceback:")
+        import traceback
+        traceback.print_exc()
+        
+        # Return error state
+        yield {
+            "workflow_successful": False,
+            "error": str(e),
+            "error_type": type(e).__name__,
+            "original_prompt": user_prompt
+        }
+
+
+
+async def run_model_suggestion_workflow_test(
+    user_prompt: str,
+    uploaded_data: List[str] = None,
+    streaming: bool = False,
+):
+    """
+    Compile and run the complete model suggestion workflow.
+
+    Args:
+        user_prompt: The user's research query
+        uploaded_data: Optional list of uploaded file contents
+        streaming: If True, yield updates as they happen. If False, return only final state.
+
+    Returns:
+        - If streaming=False: final workflow state (dict)
+        - If streaming=True: async generator yielding updates
+    """
+    try:
+        import openai
+        from utils.arxiv_paper_utils import ArxivPaperProcessor
+        
+    except ImportError as e:
+        error_msg = f"Failed to import required modules: {e}"
+        print(f"❌ {error_msg}")
+        return {
+            "workflow_successful": False,
+            "error": error_msg,
+            "error_type": "ImportError",
+            "original_prompt": user_prompt,
+        }
+
+    # Config
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        return {
+            "workflow_successful": False,
+            "error": "OPENAI_API_KEY not found",
+            "error_type": "ConfigurationError",
+            "original_prompt": user_prompt,
+        }
+
+    base_url = os.getenv("BASE_URL")
+    model = os.getenv("DEFAULT_MODEL")
+    model_cheap = "gemini/gemini-2.5-flash-lite"
+
+    # Initialize deps
+    client = openai.OpenAI(api_key=api_key, base_url=base_url)
+    arxiv_processor = ArxivPaperProcessor(llm_client=client, model_name=model_cheap)
+
+    # Build workflow graph
+    workflow_graph = _build_model_suggestion_graph()
+
+    initial_state = {
+        "messages": [],
+        "original_prompt": user_prompt,
+        "uploaded_data": uploaded_data or [],
+        "current_step": "starting",
+        "errors": [],
+        "workflow_type": "model_suggestion",
+        "client": client,
+        "model": model,
+        "arxiv_processor": arxiv_processor,
+        "detected_categories": [],
+        "detailed_analysis": {},
+        "arxiv_search_query": "",
+        "arxiv_results": {},
+        "validation_results": {},
+        "paper_validation_decision": "",
+        "search_iteration": 0,
+        "all_seen_paper_ids": set(),
+        "arxiv_chunk_metadata": [],
+        "model_suggestions": {},
+        "critique_results": {},
+        "suggestion_iteration": 0,
+        "critique_history": [],
+        "cumulative_issues": {
+            "fixed_issues": [],
+            "persistent_issues": [],
+            "recurring_issues": [],
+        },
+    }
+
+    # 🚀 Non-streaming mode
+    if not streaming:
+        final_state = await workflow_graph.ainvoke(initial_state)
+        return final_state
+
+    # 🚀 Streaming mode
+    async def _stream():
+        async for chunk in workflow_graph.astream(initial_state, stream_mode=["updates","custom"]):
+            
+            stream_mode, data = chunk
+            print (f"\n--- Stream chunk received (stream_mode={stream_mode}) ---")
+            data=data.get("critique_response", data) #this is to extract the correct state from the chunk, must get the final nodes response to use. 
+            
+            if data.get("status"):
+                print(f"Status: {data['status']}")
+            yield data
+        # After loop ends, yield final state one last time
+        yield data
+
+    return _stream()
 
     
 
