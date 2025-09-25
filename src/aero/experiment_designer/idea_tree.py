@@ -1,14 +1,3 @@
-"""
-Automated Idea Tree System (idea_tree.py)
-======================================================
-- Extracts research context and hypotheses from user input
-- Retrieves relevant literature for context
-- Uses LLMs to generate and score experiment strategies and methodologies
-- Builds and searches a tree of possible experiment designs
-- Outputs the best-scoring experiment idea with references
-
-"""
-
 from __future__ import annotations
 import re
 import sys

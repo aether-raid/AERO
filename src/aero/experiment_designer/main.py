@@ -26,7 +26,7 @@ def add_arxiv_links(text):
 # --- Node: Extract research components ---
 async def node_extract_components(state):
     user_input = state['user_input']
-    stream_writer("🔎 Extracting research components...")
+    await stream_writer("🔎 Extracting research components...", writer=state.get("writer"))
     await asyncio.sleep(0.5)
     result = await extract_research_components(user_input)
     state['research_goal'] = result.get('research_goal', '')
@@ -47,10 +47,10 @@ async def node_tree_search(state):
     experiment_ideas = []
 
     if isinstance(hypotheses, list) and len(hypotheses) >= 2:
-        stream_writer(f"🌳 Multiple hypotheses found ({len(hypotheses)}). Running tree search for each hypothesis...")
+        await stream_writer(f"🌳 Multiple hypotheses found ({len(hypotheses)}). Running tree search for each hypothesis...", writer=state.get("writer"))
         await asyncio.sleep(0.5)  # Allow stream message to appear before LLM calls
         for idx, hypothesis in enumerate(hypotheses, 1):
-            stream_writer(f"\n--- Tree Search for Hypothesis {idx}: {hypothesis} ---")
+            await stream_writer(f"\n--- Tree Search for Hypothesis {idx}: {hypothesis} ---", writer=state.get("writer"))
             await asyncio.sleep(0.5)
             combined_input = f"""Research Goal: {research_goal}
                 Variables: {variables}
@@ -59,9 +59,9 @@ async def node_tree_search(state):
                 """
             best_methodology = await run_experiment_tree_search(combined_input, num_iterations=5)
             if best_methodology:
-                stream_writer("\n--- BEST EXPERIMENT DESIGN (TREE SEARCH) ---")
+                await stream_writer("\n--- BEST EXPERIMENT DESIGN (TREE SEARCH) ---", writer=state.get("writer"))
                 await asyncio.sleep(0.5)
-                stream_writer(best_methodology.content)
+                await stream_writer(best_methodology.content, writer=state.get("writer"))
                 await asyncio.sleep(0.5)
                 tree_search_results.append({
                     "hypothesis": hypothesis,
@@ -69,7 +69,7 @@ async def node_tree_search(state):
                 })
                 experiment_ideas.append(best_methodology.content)
     else:
-        stream_writer("🌳 No explicit experiment ideas found. Running tree search to generate experiment ideas based on hypotheses...")
+        await stream_writer("🌳 No explicit experiment ideas found. Running tree search to generate experiment ideas based on hypotheses...", writer=state.get("writer"))
         await asyncio.sleep(0.5)  # Allow stream message to appear before LLM calls
         combined_input = f"""Research Goal: {research_goal}
             Variables: {variables}
@@ -97,10 +97,10 @@ async def node_design_and_codegen(state):
     experiment_ideas = state.get('experiment_ideas', [])
 
     all_designs = []
-    stream_writer(f"🧪 Found {len(experiment_ideas)} experiment idea(s). Generating detailed designs...")
+    await stream_writer(f"🧪 Found {len(experiment_ideas)} experiment idea(s). Generating detailed designs...", writer=state.get("writer"))
     await asyncio.sleep(0.5)  # Allow stream message to appear before LLM calls
     for idx, exp in enumerate(experiment_ideas, 1):
-        stream_writer(f"\n=== Experiment Idea {idx} ===")
+        await stream_writer(f"\n=== Experiment Idea {idx} ===", writer=state.get("writer"))
         exp_desc = exp.get('description', exp) if isinstance(exp, dict) else str(exp)
         experiment_input = f"""Research Goal: {research_goal}
             Hypotheses: {', '.join(hypotheses) if hypotheses else 'N/A'}
@@ -111,18 +111,18 @@ async def node_design_and_codegen(state):
         exp_state = ExperimentState(experiment_input=experiment_input.strip())
         # Run all experiment design nodes in sequence
         exp_state = await summarize_node(exp_state)
-        exp_state = await literature_node(exp_state)
-        exp_state = await plan_node(exp_state)
-        exp_state = await design_node(exp_state)
+        exp_state = await literature_node(exp_state, writer=state.get("writer"))
+        exp_state = await plan_node(exp_state, writer=state.get("writer"))
+        exp_state = await design_node(exp_state, writer=state.get("writer"))
         # Cyclic refinement loop
         max_refinements = 3
         for _ in range(max_refinements):
-            exp_state = await score_node(exp_state)
+            exp_state = await score_node(exp_state, writer=state.get("writer"))
             scores = exp_state.scores or {}
             if scores and all(int(v) >= 70 for v in scores.values()):
                 break
             exp_state.refinement_round += 1
-            exp_state = await design_node(exp_state)
+            exp_state = await design_node(exp_state, writer=state.get("writer"))
 
         # Add arXiv links to references
         design_text = exp_state.refined_design_content or exp_state.full_design_content
@@ -130,7 +130,7 @@ async def node_design_and_codegen(state):
 
         # --- Run codegen workflow directly ---
         code_state = CodeGenState(experiment_input=design_text)
-        code_graph = build_codegen_graph()
+        code_graph = build_codegen_graph(writer=state.get("writer"))
         final_code_state = await code_graph.ainvoke(code_state)
         if isinstance(final_code_state, dict):
             final_design_with_code = final_code_state.get('final_output', design_text)
@@ -158,7 +158,16 @@ async def decide_next_node(state):
         return 'tree_search'
 
 # --- Build unified LangGraph workflow ---
-def design_experiment_workflow():
+def experiment_designer():
+    """
+    Build and return the experiment design workflow as a LangGraph StateGraph.
+
+    The workflow extracts research components, optionally performs tree search for experiment ideas,
+    and generates/refines experiment designs and code.
+
+    Returns:
+        StateGraph: The configured experiment design workflow.
+    """
     g = StateGraph(dict)
     g.add_node('extract_components', node_extract_components)
     g.add_node('tree_search', node_tree_search)
@@ -171,7 +180,7 @@ def design_experiment_workflow():
 
 # --- Runner ---
 def run_design_workflow(user_input: str):
-    workflow = design_experiment_workflow()
+    workflow = experiment_designer()
     state = {'user_input': user_input}
     app = workflow.compile()
     output_state = asyncio.run(app.ainvoke(state))
@@ -188,3 +197,69 @@ def run_design_workflow(user_input: str):
         "design": design,
         "code": code
     }
+
+
+async def yield_design_workflow(user_input: str):
+    """
+    Async generator that yields status messages as they happen,
+    and finally yields the final result as a dict.
+    """
+    workflow = experiment_designer()
+    state = {'user_input': user_input}
+    queue = asyncio.Queue()
+
+    async def writer(msg):
+        await queue.put(msg)
+
+    state["writer"] = writer
+    app = workflow.compile()
+
+    # Run the workflow in the background
+    async def run_workflow():
+        await app.ainvoke(state)
+
+    task = asyncio.create_task(run_workflow())
+
+    # Yield status messages as they arrive
+    while True:
+        try:
+            msg = await asyncio.wait_for(queue.get(), timeout=0.1)
+            yield msg  # Stream status message in real time
+        except asyncio.TimeoutError:
+            if task.done():
+                break
+
+    # Yield the final result
+    output_state = await app.ainvoke(state)
+    all_designs = output_state.get("all_designs", [])
+    if all_designs:
+        first_design = all_designs[0]
+        design = first_design.get("design", "No design generated.")
+        code = first_design.get("code", "No code generated.")
+    else:
+        design = "No design generated."
+        code = "No code generated."
+    final_result = {
+        "design": design,
+        "code": code
+    }
+    yield final_result  # Yield the final result as the last message
+
+async def run_experiment_designer(user_input: str, stream: bool = False):
+    """
+    Run the experiment design workflow for a given research plan.
+
+    If stream=True, returns an async generator that yields status messages and the final result as they become available.
+    If stream=False, returns the final result as a dictionary after the workflow completes.
+
+    Args:
+        user_input (str): The research plan or prompt.
+        stream (bool): Whether to stream status messages in real time.
+
+    Returns:
+        Async generator (if stream=True) or dict (if stream=False) with experiment design and code.
+    """
+    if stream:
+        return yield_design_workflow(user_input)
+    else:
+        return await run_design_workflow(user_input)
