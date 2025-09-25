@@ -1,12 +1,12 @@
 # Suggest_models: Model Recommendation Module
 
-The `Suggest_models` module provides intelligent model recommendation capabilities for machine learning research tasks. It analyzes problem characteristics, searches relevant literature, and suggests optimal models with detailed justifications.
+The model suggestion workflow—exposed in code as `aero.model_researcher`—provides intelligent recommendations for machine learning research tasks. It analyzes problem characteristics, searches relevant literature, and suggests optimal models with detailed justifications. This README covers both the canonical package in `src/aero/model_researcher` and the mirrored convenience package in this folder.
 
 ## 🏗️ Architecture
 
 ### Core Components
-- **`model_suggestion_nodes.py`**: Main workflow implementation with LangGraph orchestration
-- **`__init__.py`**: Clean API interface exposing `suggest_models()` function
+- **`model_suggestion_nodes.py`**: Main workflow implementation with LangGraph orchestration.
+- **`__init__.py`**: Clean API interface exporting `suggest_models`, `stream_model_suggestions`, and the low-level workflow runners.
 
 ### State Management
 Uses `ModelSuggestionState` to track:
@@ -25,23 +25,91 @@ Uses `ModelSuggestionState` to track:
 
 ## 🚀 Usage
 
-### Simple Interface
-```python
-from Suggest_models import suggest_models
+### 1. Environment Setup
 
-result = await suggest_models("I need help with object detection in autonomous vehicles")
-print(result['model_suggestions']['model_suggestions'])
+1. Install dependencies (the project is managed with `uv`; `pip` works too):
+   ```powershell
+   uv sync
+   ```
+2. Create a `.env` file at the project root with at least:
+   ```dotenv
+   OPENAI_API_KEY=sk-...
+   BASE_URL=https://api.openai.com/v1        # or your compatible endpoint
+   DEFAULT_MODEL=gpt-4o-mini                 # model name used for reasoning
+   ```
+
+   Optional keys (Tavily, etc.) will be used automatically when available.
+
+### 2. Non-Streaming Helper (`suggest_models`)
+
+The easiest way to consume the workflow is through the re-exported helper:
+
+```python
+import asyncio
+from aero.model_researcher import suggest_models
+
+async def main():
+  response = await suggest_models(
+    "I need help with object detection in autonomous vehicles"
+  )
+  print(response["model_suggestions"]["model_suggestions"])
+
+asyncio.run(main())
 ```
 
-### Advanced Usage
-```python
-from Suggest_models.model_suggestion_nodes import run_model_suggestion_workflow
+Pass `uploaded_data=[...]` when you want to attach additional textual context. The helper returns the final workflow state once all refinement passes complete.
 
-result = await run_model_suggestion_workflow(
-    user_prompt="Your research task",
-    uploaded_data=["additional context"]
-)
+### 3. Streaming Interfaces
+
+There are two supported patterns when you want incremental updates:
+
+#### A. Flip the Streaming Flag on `suggest_models`
+
+```python
+import asyncio
+from aero.model_researcher import suggest_models
+
+async def main():
+  stream = await suggest_models(
+    "Design a streaming anomaly detection pipeline for industrial IoT sensors",
+    streaming=True,
+  )
+
+  async for update in stream:
+    status = update.get("status") or update.get("current_step")
+    if status:
+      print(f"Step: {status}")
+
+asyncio.run(main())
 ```
+
+#### B. Use the Dedicated `stream_model_suggestions` Helper
+
+```python
+import asyncio
+from aero.model_researcher import stream_model_suggestions
+
+async def main():
+  async for update in stream_model_suggestions(
+    "Optimise transformers for low-resource languages"
+  ):
+    if "model_suggestions" in update:
+      print(update["model_suggestions"]["model_suggestions"][:200])
+
+asyncio.run(main())
+```
+
+Both streaming variants yield structured dictionaries that mirror the workflow state. Expect updates for task analysis, arXiv search, paper validation, model drafting, and critique phases.
+
+### 4. Command-Line Smoke Test (Optional)
+
+A ready-made script demonstrates the streaming UX end-to-end:
+
+```powershell
+python test_files/test_stream_model_suggestions.py
+```
+
+The script loads `.env`, calls `stream_model_suggestions`, prints intermediate statuses, and shows a formatted preview of the final recommendations. Use it when validating new deployments or retrofitting configuration changes.
 
 ## 🔄 Workflow Flow
 

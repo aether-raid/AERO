@@ -197,6 +197,7 @@ async def _analyze_properties_and_task_node(state: ModelSuggestionState) -> Mode
     """Combined node for extracting properties and decomposing task concurrently."""
    # print("\n🤖 Step 1: Analyzing properties and decomposing task concurrently...")
     state["current_step"] = "analyze_properties_and_task"
+    _write_stream("Started property and task analysis.")
     
     # Extract dependencies from state
     client = state["client"]
@@ -204,8 +205,8 @@ async def _analyze_properties_and_task_node(state: ModelSuggestionState) -> Mode
     
     async def extract_properties():
         """Extract properties using LLM analysis."""
-        _write_stream("Extracting properties from task description...")
-        _write_stream("Analyzing task decomposition...")
+        _write_stream("Extracting properties from task description.")
+      
       
         try:
             categories_list = "\n".join([f"- {category}" for category in ML_RESEARCH_CATEGORIES])
@@ -298,21 +299,22 @@ async def _analyze_properties_and_task_node(state: ModelSuggestionState) -> Mode
                     )
                     property_hits.append(property_hit.to_dict())
                 
-                #print(f"✅ Property extraction completed: Found {len(property_hits)} properties")
+                _write_stream(f"Property extraction completed: Found {len(property_hits)} properties")
                 return {"success": True, "properties": property_hits}
                 
             except json.JSONDecodeError as e:
                 error_msg = f"Failed to parse LLM JSON response: {e}"
-                #print(f"⚠️  {error_msg}")
+                _write_stream(f"Error: {error_msg}")
                 return {"success": False, "error": error_msg, "properties": []}
         
         except Exception as e:
             error_msg = f"LLM property extraction failed: {str(e)}"
-            #print(f"❌ {error_msg}")
+            _write_stream(f"Error:   {error_msg}")
             return {"success": False, "error": error_msg, "properties": []}
 
     async def decompose_task():
         """Decompose task using LLM analysis."""
+        _write_stream("Analyzing task decomposition.")
         try:
             content = f"""
                 You are an expert machine learning researcher. Analyze the following research task and decompose it into key properties and characteristics.
@@ -351,7 +353,7 @@ async def _analyze_properties_and_task_node(state: ModelSuggestionState) -> Mode
                 "tokens_used": response.usage.total_tokens if response.usage else "unknown"
             }
             
-            _write_stream("✅ Task decomposition completed")
+            _write_stream("Task decomposition completed.")
             return {"success": True, "analysis": detailed_analysis}
         
         except Exception as e:
@@ -372,11 +374,12 @@ async def _analyze_properties_and_task_node(state: ModelSuggestionState) -> Mode
         error_msg = f"Property extraction failed: {str(properties_result)}"
         state["errors"].append(error_msg)
         state["detected_categories"] = []
-        print(f"❌ {error_msg}")
+        _write_stream(f"Error: {error_msg}")
     elif properties_result["success"]:
         state["detected_categories"] = properties_result["properties"]
-        for prop in properties_result["properties"]:
-            print(f"  - {prop['name']}: {prop['confidence']:.2f} confidence")
+        #for prop in properties_result["properties"][:5]:
+            
+            #_write_stream(f"  - {prop['name']}: {prop['confidence']:.2f} confidence")
     else:
         state["errors"].append(properties_result["error"])
         state["detected_categories"] = properties_result["properties"]
@@ -385,7 +388,7 @@ async def _analyze_properties_and_task_node(state: ModelSuggestionState) -> Mode
         error_msg = f"Task decomposition failed: {str(decomposition_result)}"
         state["errors"].append(error_msg)
         state["detailed_analysis"] = {"error": error_msg, "llm_analysis": None}
-        print(f"❌ {error_msg}")
+        _write_stream(f"Error: {error_msg}")
     elif decomposition_result["success"]:
         state["detailed_analysis"] = decomposition_result["analysis"]
     else:
@@ -398,7 +401,8 @@ async def _analyze_properties_and_task_node(state: ModelSuggestionState) -> Mode
             AIMessage(content=f"Successfully analyzed task properties ({len(properties_result['properties'])} categories) and decomposed task characteristics concurrently.")
         )
     
-    print(f"DEBUG: State after _analyze_properties_and_task_node: detected_categories={len(state.get('detected_categories', []))}, errors={len(state.get('errors', []))}")
+    #print(f"DEBUG: State after _analyze_properties_and_task_node: detected_categories={len(state.get('detected_categories', []))}, errors={len(state.get('errors', []))}")
+    _write_stream(f"Completed property and task analysis with {len(state.get('detected_categories', []))} detected categories and {len(state.get('errors', []))} errors.")
     return state
 
 
@@ -527,7 +531,7 @@ def _generate_search_query_node(state: ModelSuggestionState) -> ModelSuggestionS
         
         error_msg = f"Search query generation failed, using fallback: {str(e)}"
         state["errors"].append(error_msg)
-      #  print(f"⚠️  {error_msg}")
+        _write_stream(f"ERROR: {error_msg}")
     
     return state
 
@@ -585,11 +589,11 @@ async def _search_arxiv_node(state: ModelSuggestionState) -> ModelSuggestionStat
         
         # Format the search query
         formatted_query = format_search_string(search_query)
-       # print(f"Formatted query: {formatted_query}")
+        _write_stream(f"Formatted query: {formatted_query}")
         
         # Build the URL with proper offset
         url = f"http://export.arxiv.org/api/query?search_query={formatted_query}&start={start_offset}&max_results={max_results}"
-       # print(f"🌐 Full URL: {url}")
+        _write_stream(f"Full URL: {url}")
         
         with libreq.urlopen(url) as response:
             xml_data = response.read()
@@ -633,8 +637,8 @@ async def _search_arxiv_node(state: ModelSuggestionState) -> ModelSuggestionStat
                     fallback_query = '/'.join(query_parts[:2])
                     formatted_fallback = format_search_string(fallback_query)
                     fallback_url = f"http://export.arxiv.org/api/query?search_query={formatted_fallback}&start=0&max_results={max_results}"
-                    print(f"🔄 Fallback query: {fallback_query}")
-                    print(f"🌐 Fallback URL: {fallback_url}")
+                    _write_stream(f"Fallback query: {fallback_query}")
+                    _write_stream(f"Fallback URL: {fallback_url}")
                     
                     try:
                         with libreq.urlopen(fallback_url) as fallback_response:
@@ -644,33 +648,33 @@ async def _search_arxiv_node(state: ModelSuggestionState) -> ModelSuggestionStat
                         fallback_entries = fallback_root.findall('atom:entry', ns)
                         
                         if len(fallback_entries) > len(entries):
-                            print(f"✅ Fallback found {len(fallback_entries)} entries - using fallback results")
+                            _write_stream(f"Fallback found {len(fallback_entries)} entries - using fallback results")
                             entries = fallback_entries
                             xml_data = fallback_xml_data  # Update for consistency
                             root = fallback_root
                         else:
-                            print(f"❌ Fallback only found {len(fallback_entries)} entries - keeping original")
+                            _write_stream(f"Fallback only found {len(fallback_entries)} entries - keeping original")
                             
                             
                     except Exception as fallback_error:
-                        print(f"❌ Fallback query failed: {fallback_error}")
-            
+                        _write_stream(f"Fallback query failed: {fallback_error}")
+
             
             
             # Stage 1: Extract basic info (title, abstract, metadata) without downloading PDFs
-            print(f"� Stage 1: Extracting basic info for {len(entries)} papers...")
+            _write_stream(f"Extracting basic info for {len(entries)} papers...")
             papers = []
             for i, entry in enumerate(entries, 1):
                 paper_info = arxiv_processor.extract_basic_paper_info(entry, ns, i)
                 papers.append(paper_info)
-                print(f"✅ Basic info extracted for paper #{i}: {paper_info['title'][:50]}...")
+                #print(f"  - [{i}] {paper_info['title']} ({paper_info['id']})")
             
             # Stage 2: Rank papers by relevance using enhanced analysis context
-            print(f"\n🎯 Stage 2: Ranking papers by relevance (using extracted analysis)...")
-            
+            _write_stream(f"Ranking papers by relevance.")
+
             # Create enhanced ranking context from the detailed analysis
             ranking_context = _create_ranking_context_from_analysis(state)
-            print(f"📊 Using enhanced context for ranking: {ranking_context[:100]}...")
+            #print(f"📊 Using enhanced context for ranking: {ranking_context[:100]}...")
             
             # Create custom prompt for model suggestion ranking
             custom_prompt = _create_custom_ranking_prompt("model_suggestion")
@@ -679,9 +683,9 @@ async def _search_arxiv_node(state: ModelSuggestionState) -> ModelSuggestionStat
             
             # Stage 3: Download full content for top 5 papers only
             top_papers = papers  # Get top 5 papers
-            
-            print(f"\n📥 Stage 3: Downloading full PDF content for top {len(top_papers)} papers...")
-            
+
+            _write_stream(f"Stage 3: Downloading full PDF content for top {len(top_papers)} papers.")
+
             with ThreadPoolExecutor(max_workers=5) as executor:  # Limit concurrent downloads
                 # Submit download tasks for top papers only
                 future_to_paper = {
@@ -697,19 +701,20 @@ async def _search_arxiv_node(state: ModelSuggestionState) -> ModelSuggestionStat
                         if paper['id'] == updated_paper['id']:
                             papers[i] = updated_paper
                             break
-            
-            print(f"✅ PDF download stage completed. Top 5 papers now have full content.")
-            
+
+            _write_stream(f"PDF download stage completed. Top 5 papers now have full content.")
+
             # Print final results (now ranked by relevance)
-            print("\n" + "=" * 80)
-            print("📋 RANKED RESULTS (by relevance):")
-            print("=" * 80)
-            ttl=0
+            #print("\n" + "=" * 80)
+            #print("📋 RANKED RESULTS (by relevance):")
+            #print("=" * 80)
+         
             
             
             
             ttl = 0
             scores = []
+            '''
             for i, paper in enumerate(papers, 1):
                 relevance_score = paper.get('relevance_score', 0)
                 ttl += float(relevance_score)
@@ -750,6 +755,7 @@ async def _search_arxiv_node(state: ModelSuggestionState) -> ModelSuggestionStat
                 print(f"Score range: {min_score:.2f} - {max_score:.2f}")
             else:
                 print(f"Average score: 0.00/10.0")
+            '''
             
             # Set the arxiv_results in state for successful search
             state["arxiv_results"] = {
@@ -772,7 +778,7 @@ async def _search_arxiv_node(state: ModelSuggestionState) -> ModelSuggestionStat
                 
     except Exception as e:
         error_msg = f"Error searching arXiv: {type(e).__name__}: {str(e)}"
-        print(f"❌ Full error details: {error_msg}")
+        _write_stream(f"Full error details: {error_msg}")
         import traceback
         traceback.print_exc()
         
@@ -786,7 +792,6 @@ async def _search_arxiv_node(state: ModelSuggestionState) -> ModelSuggestionStat
             "formatted_query": formatted_query,
             "original_query": state["arxiv_search_query"]
         }
-        print(f"❌ {error_msg}")
     
     return state
 
@@ -853,6 +858,8 @@ def _create_ranking_context_from_analysis(state: ModelSuggestionState) -> str:
         ranking_context = ranking_context[:1500] + "..."
     
     return ranking_context
+
+
 def _create_custom_ranking_prompt(prompt_type: str = "default") -> str:
     """Create a custom ranking prompt based on prompt type."""
     
@@ -934,13 +941,13 @@ def _validate_papers_node(state: ModelSuggestionState) -> ModelSuggestionState:
     # Extract dependencies from state
     client = state["client"]
     model = state["model"]
-    
-    print("🔍 Step 3.5: Validating paper relevance and determining next steps...")
+
+    _write_stream("Validating paper relevance and determining next steps.")
     state["current_step"] = "validate_papers"
     
     try:
         papers = state["arxiv_results"].get("papers", [])
-        print(f"📚 Validating {len(papers)} retrieved papers...")
+        _write_stream(f"Validating {len(papers)} retrieved papers...")
         user_query = state["original_prompt"]
         search_iteration = state.get("search_iteration", 0)
         
@@ -962,7 +969,7 @@ def _validate_papers_node(state: ModelSuggestionState) -> ModelSuggestionState:
                 Abstract: {clean_abstract}
                 ---
             """
-            print(f"Included paper #{i} in validation summary: {clean_title[:50]}...")
+          
         
         # Create enhanced validation prompt with decision guidance
         validation_prompt = f"""
@@ -1041,29 +1048,31 @@ Return only the JSON object, no additional text.
             state["paper_validation_decision"] = validation_data.get("decision", "continue")
             
             # Print validation results
+            '''
             print("\n" + "=" * 70)
             print("📋 PAPER VALIDATION & DECISION RESULTS")
             print("=" * 70)
             print(f"🎯 Relevance Assessment: {validation_data.get('relevance_assessment', 'unknown').title()}")
             print(f"📊 Coverage Analysis: {validation_data.get('coverage_analysis', 'unknown').title()}")
             print(f"⭐ Quality Evaluation: {validation_data.get('quality_evaluation', 'unknown').title()}")
-            print(f"🚀 Decision: {validation_data.get('decision', 'continue').upper()}")
+            print(f"🚀 Decisiodn: {validation_data.get('decision', 'continue').upper()}")
             print(f"🎲 Confidence: {validation_data.get('confidence', 0):.2f}")
-            print(f"💭 Reasoning: {validation_data.get('reasoning', 'No reasoning provided')}")
+            _write_stream(f"Reasoning: {validation_data.get('reasoning', 'No reasoning provided')}")
+            '''
+            _write_stream(f"Paper validation decision and reasoning: {validation_data.get('decision', 'continue').upper()}")
             
             if validation_data.get('missing_aspects'):
-                print(f"🔍 Missing Aspects: {', '.join(validation_data['missing_aspects'])}")
+                _write_stream(f"Missing Aspects: {', '.join(validation_data['missing_aspects'])}")
             
             if validation_data.get('decision') != 'continue':
                 search_guidance = validation_data.get('search_guidance', {})
                 if search_guidance.get('new_search_terms'):
-                    print(f"🔄 Suggested Search Terms: {', '.join(search_guidance['new_search_terms'])}")
+                    _write_stream(f"Suggested Search Terms: {', '.join(search_guidance['new_search_terms'])}")
                 if search_guidance.get('focus_areas'):
-                    print(f"🎯 Focus Areas: {', '.join(search_guidance['focus_areas'])}")
-            
-            print("=" * 70)
-            
-            # Increment search iteration counter
+                    _write_stream(f"Focus Areas: {', '.join(search_guidance['focus_areas'])}")
+
+
+            # Increment search iteration counter    
             state["search_iteration"] = search_iteration + 1
             
             # Return state after successful validation
@@ -1093,7 +1102,7 @@ Return only the JSON object, no additional text.
             
     except Exception as e:
         error_msg = f"Validation failed: {str(e)}"
-        print(f"❌ {error_msg}")
+        _write_stream(f"ERROR: {error_msg}")
         
         # Default to continue on error
         state["validation_results"] = {
@@ -1126,22 +1135,19 @@ def _should_continue_with_papers(state: ModelSuggestionState) -> str:
     
     # Safety check: After 3 iterations, force continue to avoid infinite loops
     if search_iteration >= 3:
-        print("🛑 Maximum search iterations reached (3), forcing continue...")
+        _write_stream("Maximum search iterations reached (3), forcing continue...")
         return "continue"
     
     # Clean up decision string
     decision = str(decision).strip().upper()
     
     # Map validation decisions to workflow routing
-    if decision == "SEARCH_BACKUP":
-        print(f"🔄 Validation decision: {decision} -> Performing backup search")
+    _write_stream(f"Validation decision: {decision}")
+    if decision == "SEARCH_BACKUP": 
         return "search_backup"
     elif decision == "SEARCH_NEW":
-        print(f"🔄 Validation decision: {decision} -> Performing new search")
         return "search_new"
     else:
-        print(f"DEBUG: _should_continue_with_papers: decision={decision}, search_iteration={search_iteration}, detected_categories={len(state.get('detected_categories', []))}")
-        print(f"🔄 Validation decision: {decision} -> Continuing with current papers")
         return "continue"
 
 # --- PHASE 4: MODEL SUGGESTION & RECOMMENDATIONS ---
@@ -1159,9 +1165,9 @@ def _suggest_models_node(state: ModelSuggestionState) -> ModelSuggestionState:
     state["suggestion_iteration"] = iteration_count
     
     if is_revision:
-        print(f"\n🔄 Step 4 (Revision {iteration_count}): Revising model suggestions based on critique...")
+        _write_stream(f"(Revision {iteration_count}): Revising model suggestions based on critique...")
     else:
-        print(f"\n🤖 Step 4: Analyzing papers and suggesting suitable models...")
+        _write_stream(f"Analyzing papers and suggesting suitable models...")
     
     state["current_step"] = "suggest_models"
     
@@ -1374,12 +1380,8 @@ def _suggest_models_node(state: ModelSuggestionState) -> ModelSuggestionState:
         model_suggestions = response.choices[0].message.content
         
         # Print readable summary
-        print("✅ Model suggestions generated")
-        print("\n" + "=" * 80)
-        print("🎯 RECOMMENDED MODELS AND JUSTIFICATION")
-        print("=" * 80)
-        print(model_suggestions)
-        print("=" * 80)
+        _write_stream("Model suggestions generated")
+        
         
         # Prepare information about evidence sources for state
         chunks_analyzed = len(state.get("semantic_search_results", {}).get("top_chunks", []))
@@ -1427,15 +1429,14 @@ def _critique_response_node(state: ModelSuggestionState) -> ModelSuggestionState
     # Extract dependencies from state
     client = state["client"]
     model = state["model"]
-    
-    print 
-    print(f"\n🔍 Step 5: Critiquing and verifying model suggestions...")
+
+    _write_stream(f"Step 5: Critiquing and verifying model suggestions.")
     state["current_step"] = "critique_response"
     
     try:
         # Check if we have model suggestions to critique
         if not state.get("model_suggestions", {}).get("suggestions_successful", False):
-            print("⚠️ No successful model suggestions to critique")
+            _write_stream("No successful model suggestions to critique")
             state["critique_results"] = {
                 "critique_successful": False,
                 "error": "No model suggestions available for critique",
@@ -1583,22 +1584,20 @@ def _critique_response_node(state: ModelSuggestionState) -> ModelSuggestionState
             }
             
             # Print critique summary
-            print(f"✅ Critique completed - Overall quality: {critique_data.get('overall_quality', 'unknown')}")
-            print(f"📊 Confidence: {critique_data.get('confidence', 0):.2f}")
-            print(f"🎯 Recommendation: {critique_data.get('recommendation', 'unknown')}")
-            
+            _write_stream(f"Critique completed - Overall quality: {critique_data.get('overall_quality', 'unknown')}, Recommendation: {critique_data.get('recommendation', 'unknown')}")
+            '''
             if critique_data.get("strengths"):
                 print("\n💪 Strengths identified:")
                 for strength in critique_data["strengths"][:3]:  # Show top 3
                     print(f"  ✅ {strength}")
             
             if critique_data.get("weaknesses"):
-                print("\n⚠️ Weaknesses identified:")
+                _write_stream("\n⚠️ Weaknesses identified:")
                 for weakness in critique_data["weaknesses"][:3]:  # Show top 3
-                    print(f"  ❌ {weakness}")
-            
+                    _write_stream(f"  ❌ {weakness}")
+            '''
             if critique_data.get("needs_revision", False):
-                print(f"\n🔄 Revision needed - Priority areas: {', '.join(critique_data.get('revision_priorities', []))}")
+                _write_stream(f"Revision needed - Priority areas: {', '.join(critique_data.get('revision_priorities', []))}")
             
             # Add success message
             state["messages"].append(
@@ -1676,7 +1675,7 @@ def _analyze_cumulative_issues(state: ModelSuggestionState, current_critique: Di
         state["cumulative_issues"]["persistent_issues"] = persistent
     
     state["cumulative_issues"]["recurring_issues"] = recurring
-    
+    '''
     # Print cumulative analysis
     if state["cumulative_issues"]["fixed_issues"]:
         print(f"\n✅ Previously Fixed Issues ({len(state['cumulative_issues']['fixed_issues'])}): {', '.join(state['cumulative_issues']['fixed_issues'][:2])}...")
@@ -1686,7 +1685,7 @@ def _analyze_cumulative_issues(state: ModelSuggestionState, current_critique: Di
     
     if recurring:
         print(f"\n🔄 Recurring Issues Detected ({len(recurring)}): {', '.join(recurring[:2])}...")
-
+    '''
 def _issues_similar(issue1: str, issue2: str) -> bool:
     """Simple similarity check for issues based on keyword overlap."""
     keywords1 = set(issue1.lower().split())
@@ -1760,13 +1759,6 @@ def _revise_suggestions_node(state: ModelSuggestionState) -> ModelSuggestionStat
         state["model_suggestions"]["revision_applied"] = True
         state["model_suggestions"]["revision_timestamp"] = "current"
         
-        # Print revised suggestions
-        print("✅ Model suggestions revised based on critique")
-        print("\n" + "=" * 80)
-        print("🎯 REVISED MODEL RECOMMENDATIONS")
-        print("=" * 80)
-        #print(revised_suggestions)
-        print("=" * 80)
         
         # Add success message
         state["messages"].append(
@@ -1805,8 +1797,8 @@ def _should_revise_suggestions(state: ModelSuggestionState) -> str:
     MAX_ITERATIONS = 4
     
     if iteration_count >= MAX_ITERATIONS:
-        print(f"🛑 Maximum iterations ({MAX_ITERATIONS}) reached, finalizing suggestions...")
-        print(f"📊 Final Status: {len(cumulative_issues.get('fixed_issues', []))} issues fixed, {len(cumulative_issues.get('recurring_issues', []))} recurring")
+        _write_stream(f"Maximum iterations ({MAX_ITERATIONS}) reached, finalizing suggestions...")
+        _write_stream(f"Final Status: {len(cumulative_issues.get('fixed_issues', []))} issues fixed, {len(cumulative_issues.get('recurring_issues', []))} recurring")
         return "finalize"
     
     if not critique_results.get("critique_successful", False):
@@ -1820,17 +1812,17 @@ def _should_revise_suggestions(state: ModelSuggestionState) -> str:
     persistent_count = len(cumulative_issues.get("persistent_issues", []))
 
     if (recurring_count >= 2 and iteration_count >= 5) or (persistent_count >= 3 and iteration_count >= 5):
-        print(f"🔄 Detected {recurring_count} recurring issues and {persistent_count} persistent issues after {iteration_count} iterations - finalizing to prevent infinite loop...")
+        _write_stream(f"Detected {recurring_count} recurring issues and {persistent_count} persistent issues after {iteration_count} iterations - finalizing to prevent infinite loop...")
         return "finalize"
     
     # Revise if explicitly flagged for revision or if recommendation is revise/major_revision
     if needs_revision or recommendation in ["revise", "major_revision"]:
         fixed_count = len(cumulative_issues.get("fixed_issues", []))
-        print(f"🔄 Revision needed (iteration {iteration_count + 1}) - {fixed_count} issues already fixed, looping back...")
+        _write_stream(f"Revision needed (iteration {iteration_count + 1}) - {fixed_count} issues already fixed, looping back...")
         return "revise"
     else:
         fixed_count = len(cumulative_issues.get("fixed_issues", []))
-        print(f"✅ Suggestions approved after {iteration_count} iteration(s) - {fixed_count} total issues fixed, finalizing...")
+        _write_stream(f"Suggestions approved after {iteration_count} iteration(s) - {fixed_count} total issues fixed, finalizing...")
         return "finalize"
 
 
@@ -1883,7 +1875,7 @@ def _build_model_suggestion_graph() -> StateGraph:
     return workflow.compile()
 
 
-async def run_model_suggestion_workflow(
+async def run_model_suggestion_workflow_nonstream(
     user_prompt: str,
     uploaded_data: List[str] = None
 ) -> Dict[str, Any]:
@@ -2056,192 +2048,7 @@ async def run_model_suggestion_workflow(
 
 
 
-async def run_model_suggestion_workflow_streaming(
-    user_prompt: str,
-    uploaded_data: List[str] = None
-) -> Dict[str, Any]:
-    
-    
-    """
-    Compile and run the complete model suggestion workflow.
-    
-    Args:
-        user_prompt: The user's research query
-        uploaded_data: Optional list of uploaded file contents
-        
-    Returns:
-        Dictionary containing the final workflow state with results
-    """
-    # Move all imports and initialization inside the function
-    try:
-        import asyncio
-        import openai
-        from utils.arxiv_paper_utils import ArxivPaperProcessor
-        
-    except ImportError as e:
-        error_msg = f"Failed to import required modules: {str(e)}. Please ensure all dependencies are installed."
-        print(f"❌ {error_msg}")
-        yield {
-            "workflow_successful": False,
-            "error": error_msg,
-            "error_type": "ImportError",
-            "original_prompt": user_prompt
-        }
-    
-    try:
-        
-        # Load configuration
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            raise ValueError("OPENAI_API_KEY not found. Please ensure the file exists and contains a valid API key.")
-        
-        base_url = os.getenv("BASE_URL") 
-        model = os.getenv("DEFAULT_MODEL") 
-        model_cheap = "gemini/gemini-2.5-flash-lite"
-      
-
-        # Initialize dependencies
-        try:
-            client = openai.OpenAI(api_key=api_key, base_url=base_url)
-        except Exception as e:
-            raise ValueError(f"Failed to initialize OpenAI client: {str(e)}. Please check your API key and base URL configuration.")
-        
-        try:
-            arxiv_processor = ArxivPaperProcessor(llm_client=client, model_name=model_cheap)
-        except Exception as e:
-            raise ValueError(f"Failed to initialize ArxivPaperProcessor: {str(e)}. Please check the ArxivPaperProcessor implementation.")
-        
-    except ValueError as e:
-        print(f"❌ Configuration Error: {str(e)}")
-        yield {
-            "workflow_successful": False,
-            "error": str(e),
-            "error_type": "ConfigurationError",
-            "original_prompt": user_prompt
-        }
-    except Exception as e:
-        error_msg = f"Unexpected error during initialization: {str(e)}"
-        print(f"❌ {error_msg}")
-        yield {
-            "workflow_successful": False,
-            "error": error_msg,
-            "error_type": type(e).__name__,
-            "original_prompt": user_prompt
-        }
-    
-    print("🚀 Starting Model Suggestion Workflow...")
-    print(f"📝 User Prompt: {user_prompt}")
-    print(f"🤖 Model: {model}")
-    print("=" * 80)
-    
-    
-    
-    
-    try:
-        # Build the workflow graph
-        workflow_graph = _build_model_suggestion_graph()
-        print("✅ Workflow graph compiled successfully")
-        
-        # Initialize the state with all required fields
-        initial_state = {
-            # Core workflow data
-            "messages": [],
-            "original_prompt": user_prompt,
-            "uploaded_data": uploaded_data or [],
-            "current_step": "starting",
-            "errors": [],
-            "workflow_type": "model_suggestion",
-            
-            # Dependencies
-            "client": client,
-            "model": model,
-            "arxiv_processor": arxiv_processor,
-            
-            # Workflow-specific fields (initialize as empty/default)
-            "detected_categories": [],
-            "detailed_analysis": {},
-            "arxiv_search_query": "",
-            "arxiv_results": {},
-            "validation_results": {},
-            "paper_validation_decision": "",
-            "search_iteration": 0,
-            "all_seen_paper_ids": set(),
-            "arxiv_chunk_metadata": [],
-            "model_suggestions": {},
-            "critique_results": {},
-            "suggestion_iteration": 0,
-            "critique_history": [],
-            "cumulative_issues": {
-                "fixed_issues": [],
-                "persistent_issues": [],
-                "recurring_issues": []
-            }
-        }
-        
-        print("🔄 Running workflow...")
-        
-        
-
-        # Use astream() with stream_mode="updates" to get state updates
-        async for chunk in workflow_graph.astream(initial_state, stream_mode=["updates","custom"]):
-            
-            stream_mode, data = chunk
-            print (f"\n--- Stream chunk received (stream_mode={stream_mode}) ---")
-            data=data.get("critique_response", data) 
-            
-            if data.get("status"):
-                print(f"Status: {data['status']}")
-            
-            yield data
-
-        # Update final_state with the latest chunk
-        #final_state.update(data)
-      
-        # Extract and display key results:
-        if data.get("model_suggestions", {}).get("suggestions_successful"):
-            print("✅ Model suggestions generated successfully")
-            suggestions = data["model_suggestions"]
-            if suggestions:
-                print(f"\n📋 FINAL RECOMMENDATIONS:")
-                print("-" * 40)
-                print(suggestions[:500] + "..." if len(suggestions) > 500 else suggestions)
-                
-            yield data  # Yield final state with suggestions
-        else:
-            print("⚠️ Model suggestions may have failed or are incomplete")
-        
-        # Display any errors
-        if data.get("errors"):
-            print(f"\n⚠️ Errors encountered: {len(data['errors'])}")
-            for i, error in enumerate(data["errors"][-3:], 1):  # Show last 3 errors
-                print(f"  {i}. {error}")
-        
-        # Display workflow statistics
-        print(f"\n📊 WORKFLOW STATISTICS:")
-        print(f"   - Papers analyzed: {len(data.get('arxiv_results', {}).get('papers', []))}")
-        print(f"   - Categories detected: {len(data.get('detected_categories', []))}")
-        print(f"   - Search iterations: {data.get('search_iteration', 0)}")
-        print(f"   - Suggestion iterations: {data.get('suggestion_iteration', 0)}")
-
-        yield data
-        
-    except Exception as e:
-        print(f"\n❌ WORKFLOW FAILED: {str(e)}")
-        print("Full error traceback:")
-        import traceback
-        traceback.print_exc()
-        
-        # Return error state
-        yield {
-            "workflow_successful": False,
-            "error": str(e),
-            "error_type": type(e).__name__,
-            "original_prompt": user_prompt
-        }
-
-
-
-async def run_model_suggestion_workflow_test(
+async def run_model_suggestion_workflow(
     user_prompt: str,
     uploaded_data: List[str] = None,
     streaming: bool = False,
@@ -2326,21 +2133,29 @@ async def run_model_suggestion_workflow_test(
     # 🚀 Non-streaming mode
     if not streaming:
         final_state = await workflow_graph.ainvoke(initial_state)
-        return final_state
+        return final_state.get("critique_response", final_state)
 
     # 🚀 Streaming mode
     async def _stream():
+        final_data = None  # track last update
+
         async for chunk in workflow_graph.astream(initial_state, stream_mode=["updates","custom"]):
-            
             stream_mode, data = chunk
-            print (f"\n--- Stream chunk received (stream_mode={stream_mode}) ---")
-            data=data.get("critique_response", data) #this is to extract the correct state from the chunk, must get the final nodes response to use. 
-            
-            if data.get("status"):
-                print(f"Status: {data['status']}")
+
+            # Debugging / logging (optional, can remove to stay "silent")
+            if stream_mode == "updates":
+                key = list(data.keys())[0] if data else None
+                print(f"Step: {key}")
+            elif stream_mode == "custom" and data.get("status"):
+                print(f"Updates: {data['status']}")
+
+            # Stream intermediate updates
             yield data
-        # After loop ends, yield final state one last time
-        yield data
+            final_data = data
+
+        # ✅ After loop ends, yield final state only if it has "critique_response"
+        if final_data and "critique_response" in final_data:
+            yield final_data["critique_response"]
 
     return _stream()
 

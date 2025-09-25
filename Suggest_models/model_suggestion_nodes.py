@@ -662,7 +662,7 @@ async def _search_arxiv_node(state: ModelSuggestionState) -> ModelSuggestionStat
                             papers[i] = updated_paper
                             break
             
-            print(f"✅ PDF download stage completed. Top 5 papers now have full content.")
+            print(f"PDF download stage completed. Top 5 papers now have full content.")
             
             # Print final results (now ranked by relevance)
             print("\n" + "=" * 80)
