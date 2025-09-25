@@ -10,7 +10,7 @@ from aero.experiment_designer.experiment import (
     score_node,
     remove_code_tags
 )
-from aero.experiment_designer.utils import extract_research_components
+from aero.experiment_designer.utils import extract_research_components, stream_writer
 from aero.experiment_designer.idea_tree import run_experiment_tree_search
 from aero.experiment_designer.code import CodeGenState, build_codegen_graph
 
@@ -26,7 +26,8 @@ def add_arxiv_links(text):
 # --- Node: Extract research components ---
 async def node_extract_components(state):
     user_input = state['user_input']
-    print("🔎 Extracting research components...")
+    stream_writer("🔎 Extracting research components...")
+    await asyncio.sleep(0.5)
     result = await extract_research_components(user_input)
     state['research_goal'] = result.get('research_goal', '')
     state['hypotheses'] = result.get('hypotheses', [])
@@ -46,9 +47,11 @@ async def node_tree_search(state):
     experiment_ideas = []
 
     if isinstance(hypotheses, list) and len(hypotheses) >= 2:
-        print(f"🌳 Multiple hypotheses found ({len(hypotheses)}). Running tree search for each hypothesis...")
+        stream_writer(f"🌳 Multiple hypotheses found ({len(hypotheses)}). Running tree search for each hypothesis...")
+        await asyncio.sleep(0.5)  # Allow stream message to appear before LLM calls
         for idx, hypothesis in enumerate(hypotheses, 1):
-            print(f"\n--- Tree Search for Hypothesis {idx}: {hypothesis} ---")
+            stream_writer(f"\n--- Tree Search for Hypothesis {idx}: {hypothesis} ---")
+            await asyncio.sleep(0.5)
             combined_input = f"""Research Goal: {research_goal}
                 Variables: {variables}
                 Relevant Info: {relevant_info}
@@ -56,15 +59,18 @@ async def node_tree_search(state):
                 """
             best_methodology = await run_experiment_tree_search(combined_input, num_iterations=5)
             if best_methodology:
-                print("\n--- BEST EXPERIMENT DESIGN (TREE SEARCH) ---")
-                print(best_methodology.content)
+                stream_writer("\n--- BEST EXPERIMENT DESIGN (TREE SEARCH) ---")
+                await asyncio.sleep(0.5)
+                stream_writer(best_methodology.content)
+                await asyncio.sleep(0.5)
                 tree_search_results.append({
                     "hypothesis": hypothesis,
                     "best_methodology": best_methodology.content
                 })
                 experiment_ideas.append(best_methodology.content)
     else:
-        print("🌳 No explicit experiment ideas found. Running tree search to generate experiment ideas based on hypotheses...")
+        stream_writer("🌳 No explicit experiment ideas found. Running tree search to generate experiment ideas based on hypotheses...")
+        await asyncio.sleep(0.5)  # Allow stream message to appear before LLM calls
         combined_input = f"""Research Goal: {research_goal}
             Variables: {variables}
             Relevant Info: {relevant_info}
@@ -91,9 +97,10 @@ async def node_design_and_codegen(state):
     experiment_ideas = state.get('experiment_ideas', [])
 
     all_designs = []
-    print(f"🧪 Found {len(experiment_ideas)} experiment idea(s). Generating detailed designs...")
+    stream_writer(f"🧪 Found {len(experiment_ideas)} experiment idea(s). Generating detailed designs...")
+    await asyncio.sleep(0.5)  # Allow stream message to appear before LLM calls
     for idx, exp in enumerate(experiment_ideas, 1):
-        print(f"\n=== Experiment Idea {idx} ===")
+        stream_writer(f"\n=== Experiment Idea {idx} ===")
         exp_desc = exp.get('description', exp) if isinstance(exp, dict) else str(exp)
         experiment_input = f"""Research Goal: {research_goal}
             Hypotheses: {', '.join(hypotheses) if hypotheses else 'N/A'}

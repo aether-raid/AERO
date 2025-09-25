@@ -14,6 +14,7 @@ import re
 import asyncio
 from openai import AsyncOpenAI
 from dotenv import load_dotenv
+from langgraph.config import get_stream_writer
 
 # --- Load environment variables ---
 try:
@@ -76,6 +77,11 @@ async def get_gpt_llm_response(messages, temperature=0.2, max_tokens=None):
                                     
     except Exception as e:
         return f"Error: API call failed (e: {e})"
+
+def stream_writer(message: str):
+    writer = get_stream_writer()
+    if writer:
+        writer({"status": message})
 
 # --- Research Plan Understanding ---
 async def extract_research_components(user_input):

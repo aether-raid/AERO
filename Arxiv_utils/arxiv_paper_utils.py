@@ -17,10 +17,13 @@ warnings.filterwarnings('ignore', category=DeprecationWarning)  # Suppress Tenso
 import re
 import math
 import asyncio
-from typing import Dict, List, Any
-import requests
+from typing import Dict, List, Any, Optional
+import requests 
 import feedparser
 from Arxiv_utils.Report_to_txt import extract_pdf_text
+
+
+
 
 
 class ArxivPaperProcessor:
@@ -34,6 +37,7 @@ class ArxivPaperProcessor:
         import numpy as np
         import pickle
         import os
+        
         
         try:
             # Load FAISS DB and metadata
@@ -326,7 +330,7 @@ class ArxivPaperProcessor:
             print(f"❌ Error downloading PDF for {paper_info['title'][:50]}...: {e}")
             return paper_info
     
-    async def score_paper_relevance(self, paper_title: str, paper_content: str, original_query: str, custom_prompt: str = None) -> float:
+    async def score_paper_relevance(self, paper_title: str, paper_content: str, original_query: str, custom_prompt: Optional[str] = None) -> float:
         """LLM relevance score in [1.0, 10.0]. Returns a float only."""
         # Keep prompts lean; truncate huge inputs to control tokens
         MAX_CHARS = 8000

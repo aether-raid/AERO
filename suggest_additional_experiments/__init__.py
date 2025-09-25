@@ -10,7 +10,7 @@ Main Functions:
 - run_experiment_suggestion_workflow_from_file: Run workflow with file input
 """
 
-from .experiment_suggestion_nodes import run_experiment_suggestion_workflow, run_experiment_suggestion_workflow_from_file
+from ..src.aero.experiment_designer.experiment_suggestion_nodes import run_experiment_suggestion_workflow, run_experiment_suggestion_workflow_from_file
 from typing import List, Dict, Any, Optional
 
 # Expose the main function with a cleaner interface
