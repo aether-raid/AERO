@@ -15,8 +15,8 @@ import importlib.util
 import asyncio
 from dataclasses import dataclass, field
 from typing import List, Tuple, Any
-from langgraph.graph import StateGraph, END
-from aero.experiment_designer.utils import get_llm_response
+from langgraph.graph import StateGraph, END, START
+from aero.experiment_designer.utils import get_llm_response, stream_writer
 
 @dataclass
 class CodeGenState:
@@ -25,6 +25,7 @@ class CodeGenState:
     generated_code: List[str] = field(default_factory=list)
     validation_results: List[Any] = field(default_factory=list)
     final_output: str = ""
+
 def extract_code_tags(text: str):
 
     # Match [CODE_NEEDED: ...], [CODE_NEEDED] Description: ..., or [CODE_NEEDED] description
@@ -63,12 +64,16 @@ def validate_code(code: str):
 
 # Node 1: Extract tags
 async def extract_tags_node(state: CodeGenState) -> CodeGenState:
+    stream_writer(f"🤖 Starting Code Generation Agent...")
+    await asyncio.sleep(0.5)  # Allow stream message to appear before LLM calls
+
     state.tags = extract_code_tags(state.experiment_input)
     return state
 
 # Node 2: Generate code for each tag (in parallel)
 async def generate_code_node(state: CodeGenState) -> CodeGenState:
-    print(f"🤖 Performing {len(state.tags)} code generation tasks...")
+    stream_writer(f"👾 Performing {len(state.tags)} code generation tasks...")
+    await asyncio.sleep(0.5)  # Allow stream message to appear before LLM calls
 
     async def generate_for_tag(full_tag, description):
         messages = [
@@ -104,7 +109,8 @@ async def validate_code_node(state: CodeGenState) -> CodeGenState:
 
 # Node 4: Refine code based on validation results
 async def refine_code_node(state: CodeGenState) -> CodeGenState:
-    print("🔧 Refining code based on validation results...")
+    stream_writer("🔧 Refining code based on validation results...")
+    await asyncio.sleep(0.5)  # Allow stream message to appear before LLM calls
     refined_code = state.generated_code.copy()
     for idx, (code, val, (full_tag, description)) in enumerate(zip(state.generated_code, state.validation_results, state.tags)):
         # Fix syntax errors
@@ -183,3 +189,4 @@ def build_codegen_graph():
     graph.add_edge("assemble_output", END)
     graph.set_entry_point("extract_tags")
     return graph.compile()
+    
