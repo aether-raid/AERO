@@ -123,10 +123,10 @@ Given a research plan, the system extracts key information and retrieves support
 #### Using it as a Python module:
 You can import and use the workflow in your own Python scripts:
    ```python
-    from design_experiment import run_design_workflow # Full Workflow 
-    from design_experiment import design_experiment_workflow # (Optional) Langgraph Only 
+    from design_experiment import run_experiment_designer # Full Workflow 
+    from design_experiment import experiment_designer # (Optional) Langgraph Only 
 
-    result = run_design_workflow(user_input)
+    result = run_experiment_designer(user_input)
     print(result["design"])
     print(result["code"])
    ```

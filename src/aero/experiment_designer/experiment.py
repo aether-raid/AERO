@@ -1,14 +1,3 @@
-"""
-Automated Experiment Design Workflow (experiment.py)
-====================================================
-- Extracts research context and relevant literature from user input
-- Plans experiment requirements and structure
-- Generates and iteratively refines detailed experiment designs using LLMs
-- Evaluates and scores designs, suggesting targeted improvements
-- Produces executable code for experiment steps
-- Outputs a comprehensive experiment plan with inline code and references
-"""
-
 from __future__ import annotations
 import re
 import json
@@ -52,8 +41,8 @@ async def summarize_node(state: ExperimentState) -> ExperimentState:
     return state
 
 # --- Node: Use experiment search workflow to retrieve relevant chunks ---
-async def literature_node(state: ExperimentState) -> ExperimentState:
-    workflow = await build_experiment_search_workflow()
+async def literature_node(state: ExperimentState, writer=None) -> ExperimentState:
+    workflow = await build_experiment_search_workflow(writer=writer)
     app = workflow.compile()
     search_state = {'hypothesis': state.summary_query}
     result = await app.ainvoke(search_state)
@@ -123,9 +112,8 @@ async def enrich_datasets_with_links(text):
     return text.replace(datasets_text, enriched_datasets_text)
 
 # --- Node: Plan experiment requirements ---
-async def plan_node(state: ExperimentState) -> ExperimentState:
-    stream_writer("📝 Generating experiment plan requirements...")
-    await asyncio.sleep(0.5)  # Allow stream message to appear before LLM calls
+async def plan_node(state: ExperimentState, writer = None) -> ExperimentState:
+    await stream_writer("📝 Generating experiment plan requirements...", writer=writer)
 
     prompt = f"""
         You are an expert researcher. Given the following experiment description and relevant literature, create a PLAN listing everything needed to execute the experiment.
@@ -149,7 +137,7 @@ async def plan_node(state: ExperimentState) -> ExperimentState:
     return state
 
 # --- Node: Generate (or refine) experiment design ---
-async def design_node(state: ExperimentState) -> ExperimentState:
+async def design_node(state: ExperimentState, writer=None) -> ExperimentState:
     """
     Generates or refines a detailed experiment design.
     Adds [CODE_NEEDED: ...] tags for steps that can be executed in code.
@@ -176,8 +164,7 @@ async def design_node(state: ExperimentState) -> ExperimentState:
     # Use refined design and suggestions if this is a refinement round
     if state.refinement_round > 0:
         state.refinement_round += 1
-        stream_writer("🔧 Refining experiment design...")
-        await asyncio.sleep(0.5)  # Allow stream message to appear before LLM calls
+        await stream_writer("🔧 Refining experiment design...", writer=writer)
 
         prev_design = state.refined_design_content or state.full_design_content
         suggestions = "\n".join(f"- {s.strip('- ')}" for s in state.refinement_suggestions if s.strip())
@@ -201,8 +188,7 @@ async def design_node(state: ExperimentState) -> ExperimentState:
         state.refined_design_content = content.strip()
     else:
         state.refinement_round += 1
-        stream_writer("💡 Generating initial experiment design...")
-        await asyncio.sleep(0.5)  # Allow stream message to appear before LLM calls
+        await stream_writer("💡 Generating initial experiment design...", writer=writer)
 
         prompt = f"""
             You are an expert researcher. Given the following context (experiment description, relevant literature, and experiment plan), generate a DETAILED, step-by-step experiment design.
@@ -245,9 +231,8 @@ async def design_node(state: ExperimentState) -> ExperimentState:
     return state
 
 # --- Node: Score experiment design and suggest refinements ---
-async def score_node(state: ExperimentState) -> ExperimentState:
-    stream_writer("💯 Evaluating experiment design...")
-    await asyncio.sleep(0.5)  # Allow stream message to appear before LLM calls
+async def score_node(state: ExperimentState, writer=None) -> ExperimentState:
+    await stream_writer("💯 Evaluating experiment design...", writer=writer)
 
     design = state.refined_design_content if state.refinement_round > 0 else state.full_design_content
     prompt = f"""
@@ -294,28 +279,24 @@ async def score_node(state: ExperimentState) -> ExperimentState:
         state.scores = parsed.get("scores", {})
         state.refinement_suggestions = parsed.get("refinements", [])
     except Exception as e:
-        stream_writer("Scoring JSON parse error:", e)
-        await asyncio.sleep(0.5) 
+        await stream_writer(("Scoring JSON parse error:", e), writer=writer)
         state.scores = None
         state.refinement_suggestions = [response.strip()]
 
-    stream_writer("Scores:")
-    await asyncio.sleep(0.5) 
+    await stream_writer("Scores:", writer=writer)
     if state.scores:
         for criterion, score in state.scores.items():
-            stream_writer(f" - {criterion}: {score}")
-            await asyncio.sleep(0.5) 
+            await stream_writer(f" - {criterion}: {score}", writer=writer)
     else:
-        stream_writer("No scores available.")
-        await asyncio.sleep(0.5) 
+        await stream_writer("No scores available.", writer=writer)
     return state
 
-async def generate_code_node(state: ExperimentState) -> ExperimentState:
+async def generate_code_node(state: ExperimentState, writer=None) -> ExperimentState:
     # Use the most refined design if available
     design = state.refined_design_content or state.full_design_content
     if design:
         code_state = CodeGenState(experiment_input=design)
-        code_graph = build_codegen_graph()
+        code_graph = build_codegen_graph(writer=writer)
         final_code_state = await code_graph.ainvoke(code_state)
   
         if hasattr(final_code_state, "final_output"):

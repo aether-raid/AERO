@@ -1,8 +1,8 @@
 # design_experiment/__init__.py
-from aero.experiment_designer.main import run_design_workflow
-from aero.experiment_designer.main import design_experiment_workflow 
+from aero.experiment_designer.main import run_experiment_designer
+from aero.experiment_designer.main import experiment_designer 
 
 __all__ = [
-    "run_design_workflow",  # Main entry: INPUT = research plan, OUTPUT = experiment design, executable code
-    "design_experiment_workflow"  # Returns the LangGraph workflow object for advanced use
+    "run_experiment_designer",  # Async entry point: takes a research plan and returns experiment design and code (along with streaming option)
+    "experiment_designer"       # Returns the configured LangGraph workflow object for experiment design
 ]

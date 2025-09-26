@@ -1,13 +1,3 @@
-"""
-Experiment Design Utilities (init_utils.py)
-===========================================
-This module provides utility functions and configuration for the experiment design tree system, including:
-1. Environment and logging setup for LLM and API usage.
-2. Asynchronous LLM response handling using OpenAI API.
-3. Extraction and structuring of research components (goal, hypotheses, variables, constraints) from user input via LLM.
-4. JSON cleaning and parsing utilities for robust LLM output handling.
-
-"""
 import os
 import json
 import re
@@ -78,10 +68,14 @@ async def get_gpt_llm_response(messages, temperature=0.2, max_tokens=None):
     except Exception as e:
         return f"Error: API call failed (e: {e})"
 
-def stream_writer(message: str):
-    writer = get_stream_writer()
+async def stream_writer(message: str, writer=None):
     if writer:
-        writer({"status": message})
+        await writer(message)
+    else:
+        # Optionally fallback to get_stream_writer() or logging
+        default_writer = get_stream_writer()
+        if default_writer:
+            await default_writer(message)
 
 # --- Research Plan Understanding ---
 async def extract_research_components(user_input):
