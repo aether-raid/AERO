@@ -135,11 +135,15 @@ Given a research plan, the system extracts key information and retrieves support
 You can import and use the workflow in your own Python scripts:
    ```python
     from design_experiment import run_experiment_designer # Full Workflow 
-    from design_experiment import experiment_designer # (Optional) Langgraph Only 
 
+   # Regular Usage
     result = run_experiment_designer(user_input)
     print(result["design"])
     print(result["code"])
+
+   # Streaming Usage (yields status updates, final output is a dict):
+   async for update in await run_experiment_designer(user_input, stream=True):
+      print(update)
    ```
 
 #### General Workflow:

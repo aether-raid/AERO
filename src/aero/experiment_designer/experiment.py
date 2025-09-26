@@ -3,7 +3,7 @@ import re
 import json
 import asyncio
 from dataclasses import dataclass, field
-from aero.experiment_designer.utils import get_llm_response, get_gpt_llm_response, stream_writer
+from aero.experiment_designer.utils import get_llm_response, get_gpt_llm_response, stream_writer, stream_step_name
 from aero.experiment_designer.search import build_experiment_search_workflow, search_dataset_online
 from aero.experiment_designer.code import build_codegen_graph, CodeGenState
 from langchain_core.messages import AIMessage
@@ -55,6 +55,7 @@ async def literature_node(state: ExperimentState, writer=None) -> ExperimentStat
         text = chunk.get('text', '')
         context += f"[{idx}] {title} ({url})\n{text}\n\n"
     state.literature_context = context
+
     return state
 
 # --- Helper: Enrich datasets in plan with real links ---
@@ -113,7 +114,7 @@ async def enrich_datasets_with_links(text):
 
 # --- Node: Plan experiment requirements ---
 async def plan_node(state: ExperimentState, writer = None) -> ExperimentState:
-    await stream_writer("📝 Generating experiment plan requirements...", writer=writer)
+    await stream_writer("Generating experiment plan requirements...", writer=writer, stream_mode="custom")
 
     prompt = f"""
         You are an expert researcher. Given the following experiment description and relevant literature, create a PLAN listing everything needed to execute the experiment.
@@ -164,7 +165,7 @@ async def design_node(state: ExperimentState, writer=None) -> ExperimentState:
     # Use refined design and suggestions if this is a refinement round
     if state.refinement_round > 0:
         state.refinement_round += 1
-        await stream_writer("🔧 Refining experiment design...", writer=writer)
+        await stream_writer("Refining experiment design...", writer=writer, stream_mode="custom")
 
         prev_design = state.refined_design_content or state.full_design_content
         suggestions = "\n".join(f"- {s.strip('- ')}" for s in state.refinement_suggestions if s.strip())
@@ -188,7 +189,7 @@ async def design_node(state: ExperimentState, writer=None) -> ExperimentState:
         state.refined_design_content = content.strip()
     else:
         state.refinement_round += 1
-        await stream_writer("💡 Generating initial experiment design...", writer=writer)
+        await stream_writer("Generating initial experiment design...", writer=writer, stream_mode="custom")
 
         prompt = f"""
             You are an expert researcher. Given the following context (experiment description, relevant literature, and experiment plan), generate a DETAILED, step-by-step experiment design.
@@ -232,7 +233,7 @@ async def design_node(state: ExperimentState, writer=None) -> ExperimentState:
 
 # --- Node: Score experiment design and suggest refinements ---
 async def score_node(state: ExperimentState, writer=None) -> ExperimentState:
-    await stream_writer("💯 Evaluating experiment design...", writer=writer)
+    await stream_writer("Evaluating experiment design...", writer=writer, stream_mode="custom")
 
     design = state.refined_design_content if state.refinement_round > 0 else state.full_design_content
     prompt = f"""
@@ -279,18 +280,19 @@ async def score_node(state: ExperimentState, writer=None) -> ExperimentState:
         state.scores = parsed.get("scores", {})
         state.refinement_suggestions = parsed.get("refinements", [])
     except Exception as e:
-        await stream_writer(("Scoring JSON parse error:", e), writer=writer)
+        await stream_writer(("Scoring JSON parse error:", e), writer=writer, stream_mode="custom")
         state.scores = None
         state.refinement_suggestions = [response.strip()]
-
-    await stream_writer("Scores:", writer=writer)
-    if state.scores:
-        for criterion, score in state.scores.items():
-            await stream_writer(f" - {criterion}: {score}", writer=writer)
+    if not state.scores:
+        await stream_writer("No scores available.", writer=writer, stream_mode="custom")
     else:
-        await stream_writer("No scores available.", writer=writer)
+        # Format scores as a readable string
+        scores_str = "Scores:\n" + "\n".join(f"  - {k}: {v}" for k, v in state.scores.items())
+        await stream_writer(scores_str, writer=writer, stream_mode="custom")
+
     return state
 
+# --- Node: Generate code for experiment design ---
 async def generate_code_node(state: ExperimentState, writer=None) -> ExperimentState:
     # Use the most refined design if available
     design = state.refined_design_content or state.full_design_content

@@ -163,7 +163,7 @@ async def cosine_similarity_search_experiments(hypothesis_text, faiss_db_path='.
     """Search FAISS database for experiment chunks with cosine similarity > min_similarity"""
     try:
         if not (os.path.exists(faiss_db_path) and os.path.exists(meta_db_path)):
-            await stream_writer(f"📂 No experiment FAISS database found", writer=writer)
+            await stream_writer(f"No experiment FAISS database found", writer=writer, stream_mode="custom")
             return []
 
         # Load FAISS index and metadata
@@ -182,7 +182,7 @@ async def cosine_similarity_search_experiments(hypothesis_text, faiss_db_path='.
         elif isinstance(meta, list):
             all_chunks = meta
         else:
-            await stream_writer(f"❌ Unexpected metadata format: {type(meta)}", writer=writer)
+            await stream_writer(f"Unexpected metadata format: {type(meta)}", writer=writer, stream_mode="custom")
             return []
 
         if len(all_chunks) == 0:
@@ -207,16 +207,16 @@ async def cosine_similarity_search_experiments(hypothesis_text, faiss_db_path='.
                     relevant_chunks.append(chunk)
 
         relevant_chunks.sort(key=lambda x: x['cosine_similarity'], reverse=True)
-        await stream_writer(f"🔍 Found {len(relevant_chunks)} relevant experiment chunks", writer=writer)
+        await stream_writer(f"Found {len(relevant_chunks)} relevant experiment chunks", writer=writer, stream_mode="custom")
         
         for i, chunk in enumerate(relevant_chunks[:10]):
-            title = chunk.get('paper_title', 'Unknown')[:50]
-            await stream_writer(f"   📄 {i+1}: {chunk['cosine_similarity']:.3f} - {title}...", writer=writer)
+            title = chunk.get('paper_title', 'Unknown')
+            await stream_writer(f"   📄 {i+1}: {chunk['cosine_similarity']:.3f} - {title}...", writer=writer, stream_mode="custom")
 
         return relevant_chunks
 
     except Exception as e:
-        await stream_writer(f"❌ FAISS experiment search failed: {e}", writer=writer)
+        await stream_writer(f"FAISS experiment search failed: {e}", writer=writer, stream_mode="custom")
         return []
 
 # --- LLM Experiment Validation ---
@@ -528,7 +528,7 @@ async def node_faiss_retrieve(state, writer=None):
     hypothesis = state['hypothesis']
     chunks = await cosine_similarity_search_experiments(hypothesis, min_similarity=0.7, writer=writer)
     state['retrieved_chunks'] = chunks
-    await stream_writer(f"📚 Retrieved {len(chunks)} chunks from FAISS", writer=writer)
+    await stream_writer(f"Retrieved {len(chunks)} chunks from FAISS", writer=writer, stream_mode="custom")
     return state
 
 # --- Node: Extract keywords (for ArXiv search) ---

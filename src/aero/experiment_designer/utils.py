@@ -68,14 +68,34 @@ async def get_gpt_llm_response(messages, temperature=0.2, max_tokens=None):
     except Exception as e:
         return f"Error: API call failed (e: {e})"
 
-async def stream_writer(message: str, writer=None):
+async def stream_writer(message, writer=None, stream_mode="update"):
+    payload = {"stream_mode": stream_mode, "data": message}
     if writer:
-        await writer(message)
+        await writer(payload)
     else:
-        # Optionally fallback to get_stream_writer() or logging
         default_writer = get_stream_writer()
-        if default_writer:
-            await default_writer(message)
+        if default_writer is not None:
+            # Make sure default_writer is awaitable
+            result = default_writer(payload)
+            if asyncio.iscoroutine(result):
+                await result
+        else:
+            # Optionally print for debugging, or just pass
+            print(f"[STREAM] {payload}")
+
+# --- Decorator: Stream step name ---
+def stream_step_name(func):
+    async def wrapper(state, *args, **kwargs):
+        # Get writer from dict or object
+        if isinstance(state, dict):
+            writer = state.get("writer")
+        else:
+            writer = getattr(state, "writer", None)
+        step_name = func.__name__
+        await stream_writer(step_name, writer=writer, stream_mode="update")
+        return await func(state, *args, **kwargs)
+    return wrapper
+
 
 # --- Research Plan Understanding ---
 async def extract_research_components(user_input):

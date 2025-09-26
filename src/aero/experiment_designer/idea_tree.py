@@ -1,4 +1,5 @@
 from __future__ import annotations
+import asyncio
 import re
 import sys
 from io import StringIO
@@ -6,7 +7,7 @@ import treequest as tq
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any
 from aero.experiment_designer.search import build_experiment_search_workflow
-from aero.experiment_designer.utils import get_llm_response, extract_research_components
+from aero.experiment_designer.utils import get_llm_response, extract_research_components, stream_writer
 from langchain_core.messages import AIMessage
 
 class FilteredStringIO(StringIO):
@@ -29,7 +30,7 @@ class SuppressOutput:
         sys.stderr = self._original_stderr
 
 @dataclass
-class ExperimentState:
+class IdeaState:
     level: str
     content: str
     score: float | None = None
@@ -56,8 +57,7 @@ class ExperimentTreeSystem:
         
     async def initialize(self):
         """Initialize search workflow and retrieve literature context"""
-        self.messages.append(AIMessage(content="🔍 Initializing literature search and context..."))
-        print("🔍 Initializing literature search and context...")
+        # await stream_writer("🔍 Initializing literature search and context...", writer=state.get("writer"), stream_mode="custom")
 
         # Extract research components from user input
         self.research_context = await extract_research_components(self.user_input)
@@ -99,7 +99,7 @@ class ExperimentTreeSystem:
         
         return context_text
 
-    async def generate_strategy(self, hypothesis: str) -> ExperimentState:
+    async def generate_strategy(self, hypothesis: str) -> IdeaState:
         """Generate high-level experimental strategy"""
         cache_key = hypothesis
         if cache_key in self.strategy_cache:
@@ -134,7 +134,7 @@ class ExperimentTreeSystem:
         citations = self.extract_citations(content)
         score = await self.evaluate_experiment(content, hypothesis, "strategy")
 
-        state = ExperimentState(
+        state = IdeaState(
             level="strategy",
             content=content,
             score=score,
@@ -145,7 +145,7 @@ class ExperimentTreeSystem:
 
         return state
 
-    async def generate_methodology(self, parent_strategy: ExperimentState, hypothesis: str) -> ExperimentState:
+    async def generate_methodology(self, parent_strategy: IdeaState, hypothesis: str) -> IdeaState:
         """Generate mid-level methodology from strategy"""
         if parent_strategy is not None:
             cache_key = (parent_strategy.content, hypothesis)
@@ -192,7 +192,7 @@ class ExperimentTreeSystem:
         citations = self.extract_citations(content)
         score = await self.evaluate_experiment(content, hypothesis, "methodology")
 
-        state = ExperimentState(
+        state = IdeaState(
             level="methodology",
             content=content,
             score=score,
@@ -285,38 +285,32 @@ class ExperimentTreeSystem:
             {"role": "user", "content": prompt}
         ]
 
-        try:
-            response = await get_llm_response(messages, temperature=0.1)
+        response = await get_llm_response(messages, temperature=0.1)
 
-            # Extract up to 4 integers
-            numbers = re.findall(r'\d+', response)
-            scores = [int(x) for x in numbers[:4]]
+        # Extract up to 4 integers
+        numbers = re.findall(r'\d+', response)
+        scores = [int(x) for x in numbers[:4]]
 
-            if len(scores) < 4:
-                print(f"Expected 4 scores but got: {response}")
-                return 0.5
+        if len(scores) < 4:
+            return 0.5
 
-            # Define weights depending on node level
-            # Order: Clarity, Feasibility, Novelty, Soundness
-            weight_map = {
-                "strategy": [0.2, 0.1, 0.4, 0.3],        # Novelty 0.4, Soundness 0.3, Clarity 0.2, Feasibility 0.1
-                "methodology": [0.2, 0.3, 0.15, 0.35],    # Soundness 0.35, Feasibility 0.3, Clarity 0.2, Novelty 0.15
-            }
-            weights = weight_map.get(level.lower(), [0.3, 0.3, 0.2, 0.2])
+        # Define weights depending on node level
+        # Order: Clarity, Feasibility, Novelty, Soundness
+        weight_map = {
+            "strategy": [0.2, 0.1, 0.4, 0.3],        # Novelty 0.4, Soundness 0.3, Clarity 0.2, Feasibility 0.1
+            "methodology": [0.2, 0.3, 0.15, 0.35],    # Soundness 0.35, Feasibility 0.3, Clarity 0.2, Novelty 0.15
+        }
+        weights = weight_map.get(level.lower(), [0.3, 0.3, 0.2, 0.2])
 
-            # Weighted sum → normalize to 0–1
-            weighted = sum(s * w for s, w in zip(scores, weights)) / 100.0
-            return min(max(weighted, 0.0), 1.0)
-
-        except Exception as e:
-            print(f"Scoring failed: {e}")
-
-        return 0.5  # Default score
+        # Weighted sum → normalize to 0–1
+        weighted = sum(s * w for s, w in zip(scores, weights)) / 100.0
+        return min(max(weighted, 0.0), 1.0)
 
 
 
 
-    def find_best_leaf_node(self, tree) -> ExperimentState:
+
+    def find_best_leaf_node(self, tree) -> IdeaState:
         """Find the highest-scoring leaf node (methodology level)"""
         def get_all_nodes(node):
             nodes = [node]
@@ -372,90 +366,81 @@ def sync_generate_methodology(parent_state, tree_system, hypothesis):
     except RuntimeError:
         state = asyncio.run(tree_system.generate_methodology(parent_state, hypothesis))
     return state, state.score
+import asyncio
+import asyncio
 
-async def run_experiment_tree_search(user_input: str, num_iterations: int):
-    """Main function to run the experiment tree search"""
-    
-    # Initialize system with literature context
-    tree_system = await ExperimentTreeSystem(user_input).initialize()
-    hypothesis = tree_system.research_context.get('hypotheses', [user_input])[0]
-    tree_system.messages.append(AIMessage(content=f"🧪 Starting experiment tree search for: {hypothesis}"))
-    
-    print(f"🧪 Starting experiment tree search for: {hypothesis}")
-    print(f"📖 Using {len(tree_system.literature_context)} literature chunks as context")
-    
-    # Setup sync generation functions for treequest
-    def strategy_gen(parent_state):
-        return sync_generate_strategy(parent_state, tree_system, hypothesis)
+def run_experiment_tree_search(user_input: str, num_iterations: int, writer=None, loop=None) -> Optional['IdeaState']:
+    """Main function to run the experiment tree search with streaming from sync context."""
 
-    def methodology_gen(parent_state):
-        return sync_generate_methodology(parent_state, tree_system, hypothesis)
+    if loop is None:
+        loop = asyncio.get_event_loop()
 
-    generate_fns = {
-        "strategy": strategy_gen,
-        "methodology": methodology_gen,
-    }
-    tree_system.messages.append(AIMessage(content=f"🌲 Building experiment design tree...(this may take a few mins)"))
-    print("🌲 Building experiment design tree...(this may take a few mins)")
-    
-    # Monkey patch print to filter sampling messages
-    original_print = print
-    def filtered_print(*args, **kwargs):
-        message = ' '.join(str(arg) for arg in args)
-        if "Sampling:" not in message:
-            original_print(*args, **kwargs)
-    
-    # Initialize search tree with filtered print
-    import builtins
-    builtins.print = filtered_print
-    try:
-        algo = tq.ABMCTSA()
-        search_tree = algo.init_tree()
-        search_tree.tree.root.state = ExperimentState(
-            level="hypothesis",
-            content=hypothesis,
-            score=1.0
-        )
-    finally:
-        builtins.print = original_print
+    def sync_stream_writer(msg):
+        if writer is not None:
+            fut = asyncio.run_coroutine_threadsafe(
+                stream_writer(msg, writer=writer, stream_mode="custom"),
+                loop
+            )
+            # Optionally: fut.result()
 
-    # Run tree search (sync loop) with output suppression
-    for i in range(num_iterations):
-        # Apply filtered print during tree search
+    # --- Move async initialization to a helper ---
+    async def async_init_and_search():
+        tree_system = await ExperimentTreeSystem(user_input).initialize()
+        hypothesis = tree_system.research_context.get('hypotheses', [user_input])[0]
+        sync_stream_writer(f"🔎 Starting experiment tree search for: {hypothesis}")
+        sync_stream_writer(f"Using {len(tree_system.literature_context)} literature chunks as context")
+
+        def strategy_gen(parent_state):
+            return sync_generate_strategy(parent_state, tree_system, hypothesis)
+
+        def methodology_gen(parent_state):
+            return sync_generate_methodology(parent_state, tree_system, hypothesis)
+
+        generate_fns = {
+            "strategy": strategy_gen,
+            "methodology": methodology_gen,
+        }
+        sync_stream_writer("🌲 Building experiment design tree...(this may take a few mins)")
+
+        # Monkey patch print to filter sampling messages
+        import builtins
+        original_print = print
+        def filtered_print(*args, **kwargs):
+            message = ' '.join(str(arg) for arg in args)
+            if "Sampling:" not in message:
+                original_print(*args, **kwargs)
+
         builtins.print = filtered_print
         try:
-            search_tree = algo.step(search_tree, generate_fns)
+            algo = tq.ABMCTSA()
+            search_tree = algo.init_tree()
+            search_tree.tree.root.state = IdeaState(
+                level="hypothesis",
+                content=hypothesis,
+                score=1.0
+            )
         finally:
             builtins.print = original_print
-            
-        # Log best current node
-        try:
-            best_interim_state, _ = tq.top_k(search_tree, algo, k=1)[0]
-            print(f"{i+1}/{num_iterations} iterations - best score: {best_interim_state.score:.3f} ({best_interim_state.level})")
-        except Exception:
-            print(f"{i+1}/{num_iterations} iterations - searching...")
 
-    # Find best leaf node (methodology)
-    best_methodology = tree_system.find_best_leaf_node(search_tree)
+        for i in range(num_iterations):
+            builtins.print = filtered_print
+            try:
+                search_tree = algo.step(search_tree, generate_fns)
+            finally:
+                builtins.print = original_print
 
-    if best_methodology:
-        print("\n" + "="*80)
-        print("🏆 BEST EXPERIMENT METHODLOGY (Methodology Level)")
-        print("="*80)
-        print(f"Score: {best_methodology.score:.3f}")
-        print(f"Level: {best_methodology.level}")
-        if best_methodology.citations:
-            print(f"Citations: {len(best_methodology.citations)} sources")
-        print("\nContent:")
-        print(best_methodology.content)
+            try:
+                best_interim_state, _ = tq.top_k(search_tree, algo, k=1)[0]
+                sync_stream_writer(f"{i+1}/{num_iterations} iterations - best score: {best_interim_state.score:.3f} ({best_interim_state.level})")
+            except Exception:
+                sync_stream_writer(f"{i+1}/{num_iterations} iterations - searching...")
 
-        # Add references section
-        if best_methodology.references:
-            references_section = tree_system.format_references_section(best_methodology.references)
-            print(references_section)
-        
-        print("="*80)
-        return best_methodology
-    else:
-        print("❌ No methodology-level nodes found")
-        return None
+        best_methodology = tree_system.find_best_leaf_node(search_tree)
+        if best_methodology:
+            return best_methodology
+        else:
+            sync_stream_writer("❌ No methodology-level nodes found")
+            return None
+
+    # Run the async helper in this thread
+    return asyncio.run(async_init_and_search())

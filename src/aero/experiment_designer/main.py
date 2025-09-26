@@ -10,7 +10,7 @@ from aero.experiment_designer.experiment import (
     score_node,
     remove_code_tags
 )
-from aero.experiment_designer.utils import extract_research_components, stream_writer
+from aero.experiment_designer.utils import extract_research_components, stream_writer, stream_step_name
 from aero.experiment_designer.idea_tree import run_experiment_tree_search
 from aero.experiment_designer.code import CodeGenState, build_codegen_graph
 
@@ -24,9 +24,10 @@ def add_arxiv_links(text):
     return re.sub(r'\((\d{4}\.\d{5}(v\d+)?)\)', repl, text)
 
 # --- Node: Extract research components ---
+@stream_step_name
 async def node_extract_components(state):
     user_input = state['user_input']
-    await stream_writer("🔎 Extracting research components...", writer=state.get("writer"))
+    await stream_writer("Extracting research components...", writer=state.get("writer"), stream_mode="custom")
     await asyncio.sleep(0.5)
     result = await extract_research_components(user_input)
     state['research_goal'] = result.get('research_goal', '')
@@ -34,9 +35,45 @@ async def node_extract_components(state):
     state['variables'] = result.get('variables', '')
     state['relevant_info'] = result.get('relevant_info', '')
     state['experiment_ideas'] = result.get('experiment_ideas', [])
+
+    # Format hypotheses as a bulleted list
+    hypotheses = state['hypotheses']
+    if isinstance(hypotheses, list):
+        hypotheses_str = "\n".join(f"- {h}" for h in hypotheses)
+    else:
+        hypotheses_str = str(hypotheses)
+
+    # Format experiment ideas as a bulleted list
+    experiment_ideas = state['experiment_ideas']
+    if isinstance(experiment_ideas, list):
+        ideas_str = ""
+        for idx, idea in enumerate(experiment_ideas, 1):
+            if isinstance(idea, dict):
+                name = idea.get("name", f"Idea {idx}")
+                details = idea.get("details", "")
+                ideas_str += f"{idx}. {name}: {details}\n"
+            else:
+                ideas_str += f"{idx}. {idea}\n"
+    else:
+        ideas_str = str(experiment_ideas)
+
+    components_str = (
+        f"Research Goal: {state['research_goal']}\n"
+        f"Hypotheses:\n{hypotheses_str}\n"
+        f"Variables: {state['variables']}\n"
+        f"Relevant Info: {state['relevant_info']}\n"
+        f"Experiment Ideas:\n{ideas_str}"
+    )
+
+    await stream_writer(
+        components_str,
+        writer=state.get("writer"),
+        stream_mode="custom"
+    )
     return state
 
 # --- Node: Tree search for experiment ideas if needed ---
+@stream_step_name
 async def node_tree_search(state):
     research_goal = state.get('research_goal', '')
     hypotheses = state.get('hypotheses', [])
@@ -47,36 +84,44 @@ async def node_tree_search(state):
     experiment_ideas = []
 
     if isinstance(hypotheses, list) and len(hypotheses) >= 2:
-        await stream_writer(f"🌳 Multiple hypotheses found ({len(hypotheses)}). Running tree search for each hypothesis...", writer=state.get("writer"))
-        await asyncio.sleep(0.5)  # Allow stream message to appear before LLM calls
+        await stream_writer(f"No explicit experiment ideas found. Multiple hypotheses found ({len(hypotheses)}). Running tree search for each hypothesis...", writer=state.get("writer"), stream_mode="custom")
         for idx, hypothesis in enumerate(hypotheses, 1):
-            await stream_writer(f"\n--- Tree Search for Hypothesis {idx}: {hypothesis} ---", writer=state.get("writer"))
-            await asyncio.sleep(0.5)
+            await stream_writer(f"\n--- Tree Search for Hypothesis {idx}: {hypothesis} ---", writer=state.get("writer"), stream_mode="custom")
             combined_input = f"""Research Goal: {research_goal}
                 Variables: {variables}
                 Relevant Info: {relevant_info}
                 Hypotheses: {hypothesis}
                 """
-            best_methodology = await run_experiment_tree_search(combined_input, num_iterations=5)
+            loop = asyncio.get_running_loop()
+            best_methodology = await asyncio.to_thread(
+                run_experiment_tree_search,
+                combined_input,
+                10,
+                state.get("writer"),
+                loop
+            )
             if best_methodology:
-                await stream_writer("\n--- BEST EXPERIMENT DESIGN (TREE SEARCH) ---", writer=state.get("writer"))
-                await asyncio.sleep(0.5)
-                await stream_writer(best_methodology.content, writer=state.get("writer"))
-                await asyncio.sleep(0.5)
                 tree_search_results.append({
                     "hypothesis": hypothesis,
                     "best_methodology": best_methodology.content
                 })
                 experiment_ideas.append(best_methodology.content)
+
     else:
-        await stream_writer("🌳 No explicit experiment ideas found. Running tree search to generate experiment ideas based on hypotheses...", writer=state.get("writer"))
-        await asyncio.sleep(0.5)  # Allow stream message to appear before LLM calls
+        await stream_writer(f"No explicit experiment ideas found. Running tree search to generate experiment ideas based on hypotheses...", writer=state.get("writer"), stream_mode="custom")
         combined_input = f"""Research Goal: {research_goal}
             Variables: {variables}
             Relevant Info: {relevant_info}
             Hypotheses: {', '.join(hypotheses) if hypotheses else 'N/A'}
             """
-        best_methodology = await run_experiment_tree_search(combined_input, num_iterations=7)
+        loop = asyncio.get_running_loop()
+        best_methodology = await asyncio.to_thread(
+            run_experiment_tree_search,
+            combined_input,
+            10,
+            state.get("writer"),
+            loop
+        )
         if best_methodology:
             tree_search_results.append({
                 "hypothesis": hypotheses[0] if hypotheses else 'N/A',
@@ -97,10 +142,10 @@ async def node_design_and_codegen(state):
     experiment_ideas = state.get('experiment_ideas', [])
 
     all_designs = []
-    await stream_writer(f"🧪 Found {len(experiment_ideas)} experiment idea(s). Generating detailed designs...", writer=state.get("writer"))
+    await stream_writer(f"Found {len(experiment_ideas)} experiment idea(s). Generating detailed designs...", writer=state.get("writer"), stream_mode="custom")
     await asyncio.sleep(0.5)  # Allow stream message to appear before LLM calls
     for idx, exp in enumerate(experiment_ideas, 1):
-        await stream_writer(f"\n=== Experiment Idea {idx} ===", writer=state.get("writer"))
+        await stream_writer(f"Experiment Idea {idx}:", writer=state.get("writer"), stream_mode="custom")
         exp_desc = exp.get('description', exp) if isinstance(exp, dict) else str(exp)
         experiment_input = f"""Research Goal: {research_goal}
             Hypotheses: {', '.join(hypotheses) if hypotheses else 'N/A'}
@@ -111,9 +156,14 @@ async def node_design_and_codegen(state):
         exp_state = ExperimentState(experiment_input=experiment_input.strip())
         # Run all experiment design nodes in sequence
         exp_state = await summarize_node(exp_state)
+
+        await stream_writer(f"experiment {idx} - literature_search", writer=state.get("writer"), stream_mode="update")
         exp_state = await literature_node(exp_state, writer=state.get("writer"))
+
+        await stream_writer(f"experiment {idx} - design_experiment", writer=state.get("writer"), stream_mode="update")
         exp_state = await plan_node(exp_state, writer=state.get("writer"))
         exp_state = await design_node(exp_state, writer=state.get("writer"))
+        
         # Cyclic refinement loop
         max_refinements = 3
         for _ in range(max_refinements):
@@ -129,6 +179,7 @@ async def node_design_and_codegen(state):
         design_text = add_arxiv_links(design_text)
 
         # --- Run codegen workflow directly ---
+        await stream_writer(f"experiment {idx} - code_generation", writer=state.get("writer"), stream_mode="update")
         code_state = CodeGenState(experiment_input=design_text)
         code_graph = build_codegen_graph(writer=state.get("writer"))
         final_code_state = await code_graph.ainvoke(code_state)
@@ -140,7 +191,7 @@ async def node_design_and_codegen(state):
         # Clean up any remaining code tags in the final design
         cleaned_design = remove_code_tags(design_text)
         cleaned_code = remove_code_tags(final_design_with_code)
-
+        
         all_designs.append({
             "experiment_idea": exp_desc,
             "design": cleaned_design,
