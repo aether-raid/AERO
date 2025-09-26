@@ -1,14 +1,3 @@
-"""
-Automated Experiment Code Generation Workflow (code.py)
-=======================================================
-- Extracts code generation tasks from experiment descriptions
-- Generates minimal Python code for each required step using LLMs
-- Validates generated code for syntax and missing imports
-- Iteratively refines code to fix errors and add pip install instructions as needed
-- Assembles and outputs the final experiment plan with inline, validated code snippets
-"""
-
-
 import re
 import ast
 import importlib.util
@@ -63,17 +52,15 @@ def validate_code(code: str):
     return True, missing, None
 
 # Node 1: Extract tags
-async def extract_tags_node(state: CodeGenState) -> CodeGenState:
-    stream_writer(f"🤖 Starting Code Generation Agent...")
-    await asyncio.sleep(0.5)  # Allow stream message to appear before LLM calls
+async def extract_tags_node(state: CodeGenState, writer=None) -> CodeGenState:
+    await stream_writer(f"🤖 Starting Code Generation Agent...", writer=writer)
 
     state.tags = extract_code_tags(state.experiment_input)
     return state
 
 # Node 2: Generate code for each tag (in parallel)
-async def generate_code_node(state: CodeGenState) -> CodeGenState:
-    stream_writer(f"👾 Performing {len(state.tags)} code generation tasks...")
-    await asyncio.sleep(0.5)  # Allow stream message to appear before LLM calls
+async def generate_code_node(state: CodeGenState, writer=None) -> CodeGenState:
+    await stream_writer(f"👾 Performing {len(state.tags)} code generation tasks...", writer=writer)
 
     async def generate_for_tag(full_tag, description):
         messages = [
@@ -108,9 +95,9 @@ async def validate_code_node(state: CodeGenState) -> CodeGenState:
     return state
 
 # Node 4: Refine code based on validation results
-async def refine_code_node(state: CodeGenState) -> CodeGenState:
-    stream_writer("🔧 Refining code based on validation results...")
-    await asyncio.sleep(0.5)  # Allow stream message to appear before LLM calls
+async def refine_code_node(state: CodeGenState, writer=None) -> CodeGenState:
+    await stream_writer("🔧 Refining code based on validation results...", writer=writer)
+
     refined_code = state.generated_code.copy()
     for idx, (code, val, (full_tag, description)) in enumerate(zip(state.generated_code, state.validation_results, state.tags)):
         # Fix syntax errors
@@ -175,12 +162,22 @@ async def needs_refine(state: CodeGenState):
     return "assemble_output"
 
 # Build the LangGraph workflow
-def build_codegen_graph():
+def build_codegen_graph(writer=None):
     graph = StateGraph(CodeGenState)
-    graph.add_node("extract_tags", extract_tags_node)
-    graph.add_node("generate_code", generate_code_node)
+    async def extract_tags(state):
+        return await extract_tags_node(state, writer=writer)
+    
+    async def generate_code(state):
+        return await generate_code_node(state, writer=writer)
+    
+    async def refine_code(state):
+        return await refine_code_node(state, writer=writer)
+
+
+    graph.add_node("extract_tags", extract_tags)
+    graph.add_node("generate_code", generate_code)
     graph.add_node("validate_code", validate_code_node)
-    graph.add_node("refine_code", refine_code_node)
+    graph.add_node("refine_code", refine_code)
     graph.add_node("assemble_output", assemble_output_node)
     graph.add_edge("extract_tags", "generate_code")
     graph.add_edge("generate_code", "validate_code")

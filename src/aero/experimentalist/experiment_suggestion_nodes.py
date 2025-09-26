@@ -1,4 +1,4 @@
-from typing import List, Dict, Any, TypedDict, Annotated, Optional
+from typing import List, Dict, Any, TypedDict, Annotated, Optional, Tuple
 from dataclasses import dataclass, asdict
 from dotenv import load_dotenv
 from langgraph.graph.message import add_messages
@@ -10,6 +10,7 @@ import os
 import time
 import asyncio
 import json
+from pathlib import Path
 
 import urllib.request as libreq
 import xml.etree.ElementTree as ET
@@ -17,6 +18,8 @@ import re
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import sys
+
+#from test_files.test_model_researcher_streaming import test_model_suggestion_streaming
 
 # Add parent directory to path for imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -80,6 +83,42 @@ class BaseState(TypedDict):
     current_step: str
     errors: List[str]
 
+
+
+
+
+
+# ==================================================================================
+# STREAMWRITER HELPER FUNCTION
+# ==================================================================================
+from langgraph.config import get_stream_writer
+def _write_stream(message: str, key: str = "status"):
+    """Helper function to write to StreamWriter if available."""
+    try:
+        # Use LangGraph's get_stream_writer() without parameters (proper way)
+        writer = get_stream_writer()
+        writer({key: message})
+    except Exception:
+        # Fallback: try to get stream from config (for testing compatibility)
+        try:
+            # This fallback is for test compatibility only
+            import inspect
+            frame = inspect.currentframe()
+            while frame:
+                if 'config' in frame.f_locals and frame.f_locals['config']:
+                    config = frame.f_locals['config']
+                    stream = config.get("configurable", {}).get("stream")
+                    if stream and hasattr(stream, 'write'):
+                        stream.write(message)
+                        return
+                frame = frame.f_back
+        except Exception:
+            pass
+        # Final fallback: silently fail
+        pass
+
+
+
 # ===== End moved from shared_constants.py =====
 
 def _clean_text_for_utf8(text):
@@ -98,6 +137,188 @@ def _clean_text_for_utf8(text):
     text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', text)
     
     return text
+
+
+def _load_text_file_safely(file_path: str) -> Tuple[List[str], List[str]]:
+    """Attempt to load file content as UTF-8 and gracefully skip binary data.
+
+    Returns a tuple of (text_snippets, warnings)."""
+
+    warnings: List[str] = []
+    if not file_path:
+        return [], warnings
+
+    path = Path(file_path)
+
+    if not path.exists():
+        raise FileNotFoundError(f"Input file not found: {file_path}")
+
+    suffix = path.suffix.lower()
+
+    if suffix in {".xlsx", ".xls", ".xlsm"}:
+        try:
+            import pandas as pd  # type: ignore
+        except ImportError:
+            warnings.append(
+                "⚠️ Unable to parse Excel file because pandas is not installed; skipping attachment content."
+            )
+            return [], warnings
+
+        try:
+            excel_data = pd.read_excel(path, sheet_name=None)
+        except Exception as exc:  # pragma: no cover - pandas-specific errors
+            warnings.append(
+                f"⚠️ Failed to parse Excel file '{path.name}': {exc}; skipping attachment content."
+            )
+            return [], warnings
+
+        text_snippets: List[str] = []
+        workbook = None
+        openpyxl_failed = False
+
+        for sheet_name, sheet_df in excel_data.items():
+            usable_df = None
+            if sheet_df is not None:
+                trimmed_df = sheet_df.dropna(how="all")
+                if not trimmed_df.empty:
+                    trimmed_df = trimmed_df.loc[:, trimmed_df.notna().any()]
+                if not trimmed_df.empty:
+                    usable_df = trimmed_df
+
+            if usable_df is None or usable_df.empty:
+                try:
+                    alt_df = pd.read_excel(path, sheet_name=sheet_name, header=None)
+                    alt_df = alt_df.dropna(how="all")
+                    if not alt_df.empty:
+                        alt_df = alt_df.loc[:, alt_df.notna().any()]
+                except Exception:  # pragma: no cover - pandas-specific errors
+                    alt_df = None
+                if alt_df is not None and not alt_df.empty:
+                    usable_df = alt_df
+                    warnings.append(
+                        f"ℹ️ Excel sheet '{sheet_name}' parsed without headers due to sparse data."
+                    )
+
+            if usable_df is None or usable_df.empty:
+                if workbook is None and not openpyxl_failed:
+                    try:
+                        from openpyxl import load_workbook  # type: ignore
+
+                        workbook = load_workbook(path, read_only=True, data_only=True)
+                    except Exception:  # pragma: no cover - openpyxl specific errors
+                        workbook = None
+                        openpyxl_failed = True
+
+                if workbook is not None and sheet_name in workbook.sheetnames:
+                    rows: List[str] = []
+                    for row in workbook[sheet_name].iter_rows(values_only=True):
+                        if not row or all(
+                            (cell is None)
+                            or (isinstance(cell, str) and not cell.strip())
+                            for cell in row
+                        ):
+                            continue
+                        row_values = ["" if cell is None else str(cell) for cell in row]
+                        rows.append(",".join(row_values))
+                        if len(rows) >= 200:
+                            break
+                    if rows:
+                        raw_text = "\n".join(rows)
+                        cleaned_rows = _clean_text_for_utf8(raw_text)
+                        snippet = f"Sheet: {sheet_name}\n{cleaned_rows}"
+                        if len(snippet) > 10000:
+                            snippet = snippet[:10000] + "\n... (truncated)"
+                            warnings.append(
+                                f"ℹ️ Excel sheet '{sheet_name}' truncated to 10k characters."
+                            )
+                        warnings.append(
+                            f"ℹ️ Excel sheet '{sheet_name}' extracted via openpyxl fallback."
+                        )
+                        text_snippets.append(snippet)
+                        continue
+
+            if usable_df is None or usable_df.empty:
+                continue
+
+            preview_df = usable_df.head(200)
+            if len(usable_df) > len(preview_df):
+                warnings.append(
+                    f"ℹ️ Excel sheet '{sheet_name}' large; attached first {len(preview_df)} rows only."
+                )
+            preview = preview_df.to_csv(index=False)
+            cleaned = _clean_text_for_utf8(preview)
+            snippet = f"Sheet: {sheet_name}\n{cleaned}"
+            if len(snippet) > 10000:
+                snippet = snippet[:10000] + "\n... (truncated)"
+                warnings.append(
+                    f"ℹ️ Excel sheet '{sheet_name}' truncated to 10k characters."
+                )
+            text_snippets.append(snippet)
+
+        if not text_snippets:
+            warnings.append(
+                f"ℹ️ Excel file '{path.name}' contained no tabular data to attach."
+            )
+
+        return text_snippets, warnings
+
+    if suffix in {".csv", ".tsv"}:
+        try:
+            import pandas as pd  # type: ignore
+        except ImportError:
+            warnings.append(
+                "⚠️ Unable to parse CSV/TSV file because pandas is not installed; falling back to raw text."
+            )
+        else:
+            sep = "\t" if suffix == ".tsv" else ","
+            try:
+                df = pd.read_csv(path, sep=sep)
+            except UnicodeDecodeError:
+                try:
+                    df = pd.read_csv(path, sep=sep, encoding="latin-1")
+                    warnings.append(
+                        "⚠️ CSV decoding failed with UTF-8; loaded using latin-1 encoding."
+                    )
+                except Exception as exc:
+                    warnings.append(
+                        f"⚠️ Failed to parse CSV/TSV file '{path.name}': {exc}; falling back to raw text."
+                    )
+                    df = None
+            except Exception as exc:  # pragma: no cover - pandas-specific errors
+                warnings.append(
+                    f"⚠️ Failed to parse CSV/TSV file '{path.name}': {exc}; falling back to raw text."
+                )
+                df = None
+
+            if df is not None:
+                preview_df = df.head(200)
+                if len(df) > len(preview_df):
+                    warnings.append(
+                        f"ℹ️ CSV/TSV file '{path.name}' large; attached first {len(preview_df)} rows only."
+                    )
+                preview_text = preview_df.to_csv(index=False)
+                cleaned = _clean_text_for_utf8(preview_text)
+                
+                return [cleaned], warnings
+
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            return [_clean_text_for_utf8(handle.read())], warnings
+    except UnicodeDecodeError:
+        try:
+            size = path.stat().st_size
+        except OSError:
+            size = None
+        size_note = f" ({size} bytes)" if size is not None else ""
+        warnings.append(
+            f"⚠️ Detected non-text input file '{path.name}'{size_note}; skipping attachment content."
+        )
+    except FileNotFoundError:
+        raise FileNotFoundError(f"Input file not found: {file_path}")
+    except Exception as exc:
+        raise Exception(f"Error reading input file: {exc}")
+
+    return [], warnings
 
 
 def format_search_string(query):
@@ -233,63 +454,6 @@ def create_experiment_ranking_context_from_analysis(state: ExperimentSuggestionS
     return ranking_context
 
 
-
-def create_experiment_ranking_context_from_analysis_huh(state: ExperimentSuggestionState) -> str:
-    """Create enhanced ranking context for experiment suggestions using extracted analysis."""
-    # Start with the original user query
-    context_parts = [f"User Query: {state['original_prompt']}"]
-    
-    # Add findings analysis if available
-    findings_analysis = state.get("findings_analysis", {})
-    if findings_analysis:
-        # Add domain information
-        domain_analysis = findings_analysis.get("domain_analysis", {})
-        if domain_analysis:
-            context_parts.append("Research Domain Context:")
-            if domain_analysis.get("primary_domain"):
-                context_parts.append(f"- Primary Domain: {domain_analysis['primary_domain']}")
-            if domain_analysis.get("task_type"):
-                context_parts.append(f"- Task Type: {domain_analysis['task_type']}")
-            if domain_analysis.get("application_area"):
-                context_parts.append(f"- Application: {domain_analysis['application_area']}")
-            if domain_analysis.get("data_type"):
-                context_parts.append(f"- Data Type: {domain_analysis['data_type']}")
-        
-        # Add research opportunities 
-        opportunities = findings_analysis.get("research_opportunities", [])
-        if opportunities:
-            context_parts.append("Research Focus Areas:")
-            for opp in opportunities[:3]:  # Top 3 opportunities
-                context_parts.append(f"- {opp}")
-        
-        # Add current state information
-        current_state = findings_analysis.get("current_state", {})
-        if current_state and current_state.get("findings"):
-            context_parts.append(f"Current Research State: {current_state['findings']}")
-    
-    # Add research direction if available
-    research_direction = state.get("research_direction", {})
-    if research_direction:
-        selected_direction = research_direction.get("selected_direction", {})
-        if selected_direction.get("direction"):
-            context_parts.append(f"Research Direction: {selected_direction['direction']}")
-        
-        # Add key questions
-        key_questions = selected_direction.get("key_questions", [])
-        if key_questions:
-            context_parts.append("Key Research Questions:")
-            for question in key_questions[:2]:  # Top 2 questions
-                context_parts.append(f"- {question}")
-    
-    # Combine all parts
-    ranking_context = '\n'.join(context_parts)
-    
-    # Limit total length to avoid token issues
-    if len(ranking_context) > 1500:
-        ranking_context = ranking_context[:1500] + "..."
-    
-    return ranking_context
-
 def create_custom_ranking_prompt(prompt_type: str = "default") -> str:
     """Create a custom ranking prompt based on prompt type."""
     
@@ -370,7 +534,7 @@ def create_custom_ranking_prompt(prompt_type: str = "default") -> str:
 
 async def _analyze_experiment_findings_node(state: ExperimentSuggestionState) -> ExperimentSuggestionState:
     """Node for analyzing experimental findings and research context for experiment suggestions."""
-    print("\n🔬 Experiment Analysis: Analyzing current findings and research context...")
+    _write_stream("Experiment Analysis: Analyzing current findings and research context...")
     
     # Extract dependencies from state (adapting from class method)
     client = state["client"]
@@ -385,25 +549,22 @@ async def _analyze_experiment_findings_node(state: ExperimentSuggestionState) ->
         # Combine user query with uploaded data (CSV or other file contents)
         full_prompt_context = _combine_query_and_data(original_prompt, uploaded_data)
         
-        # Display uploaded data info if present
-        if uploaded_data:
-            print(f"📎 Processing with {len(uploaded_data)} uploaded file(s)")
-            for i, data in enumerate(uploaded_data):
-                print(f"   📄 File {i+1}: {len(data)} characters")
         
+        # Display uploaded data info if present
+       
         # Check for previous analysis iterations and validation feedback
         analysis_iterations = state.get("analysis_iterations", [])
         analysis_validation_results = state.get("analysis_validation_results", {})
         current_iteration = len(analysis_iterations) + 1
         
         # DEBUG: Detailed iteration tracking
-        print(f"🐛 DEBUG _analyze_experiment_findings_node:")
-        print(f"  analysis_iterations length: {len(analysis_iterations)}")
-        print(f"  current_iteration calculated: {current_iteration}")
-        if analysis_iterations:
-            print(f"  last iteration in history: {analysis_iterations[-1].get('iteration', 'NO_ITERATION')}")
-        print(f"  state keys: {sorted(state.keys())}")
-        
+        #print(f"🐛 DEBUG _analyze_experiment_findings_node:")
+        #print(f"  analysis_iterations length: {len(analysis_iterations)}")
+        #print(f"  current_iteration calculated: {current_iteration}")
+        #if analysis_iterations:
+         #   #print(f"  last iteration in history: {analysis_iterations[-1].get('iteration', 'NO_ITERATION')}")
+        #print(f"  state keys: {sorted(state.keys())}")
+
         # Extract validation feedback for improvement
         validation_feedback = ""
         if analysis_validation_results and current_iteration > 1:
@@ -429,11 +590,11 @@ async def _analyze_experiment_findings_node(state: ExperimentSuggestionState) ->
 
                 CRITICAL: Address ALL the above issues in this iteration. Provide specific, accurate, and complete analysis.
             """
-        
-        print(f"📊 Generating analysis (iteration {current_iteration})")
+
+        _write_stream(f"Generating analysis (iteration {current_iteration})")
         if validation_feedback:
-            print(f"🔄 Incorporating validation feedback from previous iteration")
-        
+            _write_stream(f"Incorporating validation feedback from previous iteration")
+
         # Enhanced analysis prompt for experiment suggestions
         iteration_context = f"ITERATION {current_iteration}" if current_iteration > 1 else "INITIAL ANALYSIS"
         
@@ -446,6 +607,8 @@ async def _analyze_experiment_findings_node(state: ExperimentSuggestionState) ->
         Original Research Question/Problem: "{original_prompt}"
         
         Experimental Results/Context: {experimental_results if experimental_results else "User described their current experimental situation in the prompt above"}
+        
+        Uploaded data: {uploaded_data if uploaded_data else "No additional data provided"}
         
         **CRITICAL**: If the user hasn't explicitly described their problem domain, you must infer it from:
         - Keywords in their prompt (computer vision, NLP, object detection, classification, etc.)
@@ -531,7 +694,7 @@ async def _analyze_experiment_findings_node(state: ExperimentSuggestionState) ->
         
         # Parse the analysis
         analysis_text = response.choices[0].message.content.strip()
-        print(f"📋 Research Analysis: {analysis_text}")
+        #print(f"📋 Research Analysis: {analysis_text}")
         
         # Try to extract JSON from response
         try:
@@ -547,20 +710,20 @@ async def _analyze_experiment_findings_node(state: ExperimentSuggestionState) ->
             end = analysis_text.rfind('}') + 1
             if start != -1 and end != -1:
                 analysis_json = json.loads(analysis_text[start:end])
-                print(f"✅ Successfully parsed research analysis JSON")
+                #print(f"✅ Successfully parsed research analysis JSON")
                 
                 # Validate and ensure required fields are present
                 if "research_opportunities" not in analysis_json:
                     analysis_json["research_opportunities"] = ["Experimental validation", "Comparative studies", "Performance optimization"]
-                    print("⚠️ Added missing research_opportunities field")
+                    #print("⚠️ Added missing research_opportunities field")
                 
                 if "current_state" not in analysis_json:
                     analysis_json["current_state"] = {"status": "Analysis from LLM", "findings": "Based on user prompt and analysis"}
-                    print("⚠️ Added missing current_state field")
+                    #print("⚠️ Added missing current_state field")
                     
             else:
                 # Fallback: create structured analysis from domain inference
-                print("⚠️ No JSON found, creating structured analysis...")
+                #print("No JSON found, creating structured analysis...")
                 
                 # Try to infer domain from original prompt
                 prompt_lower = original_prompt.lower()
@@ -574,7 +737,7 @@ async def _analyze_experiment_findings_node(state: ExperimentSuggestionState) ->
                 }
                 
         except json.JSONDecodeError as e:
-            print(f"⚠️ JSON parsing failed: {e}, creating fallback analysis...")
+            _write_stream(f"JSON parsing failed: {e}, creating fallback analysis...")
             # Fallback: create structured analysis
             prompt_lower = original_prompt.lower()
             domain_info = _infer_domain_from_prompt(prompt_lower)
@@ -587,7 +750,7 @@ async def _analyze_experiment_findings_node(state: ExperimentSuggestionState) ->
             }
                 
         except Exception as e:
-            print(f"⚠️ JSON parsing failed: {e}, using fallback analysis")
+            _write_stream(f"JSON parsing failed: {e}, using fallback analysis")
             # Fallback analysis with extracted key information
             prompt_lower = original_prompt.lower()
             domain_info = _infer_domain_from_prompt(prompt_lower)
@@ -614,7 +777,7 @@ async def _analyze_experiment_findings_node(state: ExperimentSuggestionState) ->
         }
         
     except Exception as e:
-        print(f"❌ Error in analyze_experiment_findings: {str(e)}")
+        print(f"Error in analyze_experiment_findings: {str(e)}")
         return {
             **state,
             "current_analysis_iteration": state.get("current_analysis_iteration", 1),
@@ -681,24 +844,25 @@ async def _validate_analysis_node(state: ExperimentSuggestionState) -> Experimen
     """Node for validating the generated data analysis with hyper-strict criteria."""
     client = state["client"]
     model = state["model"]
-    print("\n🔍 Analysis Validation: Evaluating generated data analysis for accuracy, completeness, and grounding...")
+    _write_stream("Analysis Validation: Evaluating generated data analysis for accuracy, completeness, and grounding.")
     
     try:
         # Extract current analysis and context
         findings_analysis = state.get("findings_analysis", {})
         original_prompt = state.get("original_prompt", "")
         experimental_results = state.get("experimental_results", {})
+        uploaded_data = state.get("uploaded_data", [])
         
         # Track analysis iteration history
         analysis_iterations = state.get("analysis_iterations", [])
         current_iteration = len(analysis_iterations) + 1
         
         # DEBUG: Track validation iteration calculation
-        print(f"🐛 DEBUG _validate_analysis_node:")
-        print(f"  analysis_iterations length: {len(analysis_iterations)}")
-        print(f"  current_iteration calculated: {current_iteration}")
-        if analysis_iterations:
-            print(f"  last iteration in history: {analysis_iterations[-1].get('iteration', 'NO_ITERATION')}")
+        #print(f"🐛 DEBUG _validate_analysis_node:")
+        ##print(f"  analysis_iterations length: {len(analysis_iterations)}")
+        #print(f"  current_iteration calculated: {current_iteration}")
+        #if analysis_iterations:
+        #    print(f"  last iteration in history: {analysis_iterations[-1].get('iteration', 'NO_ITERATION')}")
         
         # Add current analysis to history
         current_analysis_record = {
@@ -723,6 +887,9 @@ async def _validate_analysis_node(state: ExperimentSuggestionState) -> Experimen
 
             EXPERIMENTAL CONTEXT:
             {experimental_results}
+            
+            Uploaded data: 
+            {uploaded_data if uploaded_data else "No additional data provided"}
 
             GENERATED ANALYSIS:
             {findings_analysis}
@@ -816,13 +983,13 @@ async def _validate_analysis_node(state: ExperimentSuggestionState) -> Experimen
             
             # Check iteration limit (max 3 iterations to prevent infinite loops)
             if current_iteration >= 3 and validation_result == "FAIL":
-                print(f"⚠️ Maximum analysis iterations reached ({current_iteration}). Forcing continuation with current analysis.")
-                print(f"🚨 WARNING: Validation found {len(critical_issues)} critical issues, {len(completeness_gaps)} completeness gaps, {len(accuracy_concerns)} accuracy concerns.")
-                print(f"🚨 This is a FORCED PASS to prevent infinite loops - analysis has unresolved validation issues!")
+                _write_stream(f"⚠️ Maximum analysis iterations reached ({current_iteration}). Forcing continuation with current analysis with {len(critical_issues)}, critical issues, {len(completeness_gaps)} completeness gaps, {len(accuracy_concerns)} accuracy concerns.")
+                #print(f"🚨 WARNING: Validation found {len(critical_issues)} critical issues, {len(completeness_gaps)} completeness gaps, {len(accuracy_concerns)} accuracy concerns.")
+                #print(f"🚨 This is a FORCED PASS to prevent infinite loops - analysis has unresolved validation issues!")
                 validation_result = "PASS"
                 validation_json["forced_pass"] = True
                 validation_json["decision_rationale"] = f"Forced pass after {current_iteration} iterations to prevent infinite loop. Original validation failed due to: {len(critical_issues)} critical issues, {len(completeness_gaps)} completeness gaps, {len(accuracy_concerns)} accuracy concerns."
-            
+            '''
             print("\n" + "=" * 80)
             print("🔍 HYPER-STRICT ANALYSIS VALIDATION RESULTS")
             print("=" * 80)
@@ -864,7 +1031,7 @@ async def _validate_analysis_node(state: ExperimentSuggestionState) -> Experimen
             print(f"  validation_result: {validation_result}")
             print(f"  analysis_validation_decision: {validation_result}")
             print(f"  analysis_iterations length: {len(analysis_iterations)}")
-            
+            '''
             # Store validation results in state
             updated_state = {
                 **state,
@@ -876,8 +1043,8 @@ async def _validate_analysis_node(state: ExperimentSuggestionState) -> Experimen
             }
             
             # DEBUG: Verify the state we're returning
-            print(f"🐛 DEBUG state being returned has keys: {list(updated_state.keys())}")
-            print(f"🐛 DEBUG state['analysis_validation_decision'] = {updated_state.get('analysis_validation_decision')}")
+           # print(f"🐛 DEBUG state being returned has keys: {list(updated_state.keys())}")
+           # print(f"🐛 DEBUG state['analysis_validation_decision'] = {updated_state.get('analysis_validation_decision')}")
             
             # CRITICAL FIX: Make the routing decision here instead of in separate function
             # Check if this was a forced pass due to max iterations
@@ -886,19 +1053,19 @@ async def _validate_analysis_node(state: ExperimentSuggestionState) -> Experimen
             # Safety check: After 3 iterations, force continue to avoid infinite loops
             if current_iteration >= 3:
                 if forced_pass:
-                    print(f"🔄 Maximum analysis iterations reached ({current_iteration}). Forced pass due to iteration limit - continuing to research direction despite validation issues.")
+                    _write_stream(f"Maximum analysis iterations reached ({current_iteration}). Forced pass due to iteration limit - continuing to research direction despite validation issues.")
                 else:
-                    print(f"🔄 Maximum analysis iterations reached ({current_iteration}). Continuing to research direction.")
+                    _write_stream(f"Maximum analysis iterations reached ({current_iteration}). Continuing to research direction.")
                 updated_state["next_node"] = "decide_research_direction"
             # Check validation result - but distinguish between genuine pass and forced pass
             elif validation_result == "PASS":
                 if forced_pass:
-                    print(f"⚠️ Analysis validation was FORCED to pass after max iterations. Continuing to research direction with unresolved issues.")
+                    _write_stream(f"Analysis validation was FORCED to pass after max iterations. Continuing to research direction with unresolved issues.")
                 else:
-                    print(f"✅ Analysis validation passed. Continuing to research direction.")
+                    _write_stream(f"Analysis validation passed. Continuing to research direction.")
                 updated_state["next_node"] = "decide_research_direction"
             else:
-                print(f"❌ Analysis validation failed. Iterating to improve analysis (iteration {current_iteration + 1}).")
+                _write_stream(f"Analysis validation failed. Iterating to improve analysis (iteration {current_iteration + 1}).")
                 updated_state["next_node"] = "analyze_findings"
             
             return updated_state
@@ -926,7 +1093,7 @@ async def _validate_analysis_node(state: ExperimentSuggestionState) -> Experimen
             }
             
     except Exception as e:
-        print(f"❌ Error in validate_analysis: {str(e)}")
+        print(f"Error in validate_analysis: {str(e)}")
         # Default to PASS to avoid blocking the workflow
         error_validation = {
             "validation_result": "PASS",
@@ -950,7 +1117,7 @@ async def _validate_analysis_node(state: ExperimentSuggestionState) -> Experimen
 
 async def _decide_research_direction_node(state: ExperimentSuggestionState) -> ExperimentSuggestionState:
     """Node for deciding the research direction based on analysis findings."""
-    print("\n🎯 Research Direction: Determining optimal research path with justification...")
+    _write_stream("Research Direction: Determining optimal research path with justification.")
     client = state["client"]
     model = state["model"]
     try:
@@ -999,7 +1166,7 @@ async def _decide_research_direction_node(state: ExperimentSuggestionState) -> E
         {original_prompt}
 
         EXPERIMENTAL FINDINGS SUMMARY:
-        {findings_summary}
+        {findings_analysis if findings_analysis else "No analysis available"}
 
         KEY INSIGHTS FROM ANALYSIS:
         {chr(10).join(f"• {insight}" for insight in key_insights[:5])}
@@ -1094,7 +1261,7 @@ async def _decide_research_direction_node(state: ExperimentSuggestionState) -> E
                 "reasoning": "Focus on addressing key limitations identified in analysis"
             }
 
-        print(f"✅ Research direction decided: {direction_decision.get('selected_direction', {}).get('direction', 'Unknown')}")
+        _write_stream(f"Research direction decided: {direction_decision.get('selected_direction', {}).get('direction', 'Unknown')}")
         
         return {
             **state,
@@ -1126,7 +1293,7 @@ async def _decide_research_direction_node(state: ExperimentSuggestionState) -> E
 
 async def _validate_research_direction_node(state: ExperimentSuggestionState) -> ExperimentSuggestionState:
     """Node for validating the proposed research direction and goals with strict evaluation."""
-    print("\n🔍 Research Direction Validation: Evaluating proposed research goals and methodology...")
+    _write_stream("Research Direction Validation: Evaluating proposed research goals and methodology.")
     model= state["model"]
     client = state["client"]
     try:
@@ -1251,13 +1418,13 @@ async def _validate_research_direction_node(state: ExperimentSuggestionState) ->
             
             # Check iteration limit (max 3 iterations to prevent infinite loops)
             if current_iteration >= 3 and validation_result == "FAIL":
-                print(f"⚠️ Maximum iterations reached ({current_iteration}). Forcing continuation with current direction.")
-                print(f"🚨 WARNING: Validation found {len(critical_issues)} critical issues.")
-                print(f"🚨 This is a FORCED PASS to prevent infinite loops - research direction has unresolved validation issues!")
+                _write_stream(f"Maximum iterations reached ({current_iteration}). Forcing continuation with current direction with {len(critical_issues)} critical issues.")
+               
+               
                 validation_result = "PASS"
                 validation_json["forced_pass"] = True
                 validation_json["decision_rationale"] = f"Forced pass after {current_iteration} iterations to prevent infinite loop. Original validation failed due to: {len(critical_issues)} critical issues."
-            
+            ''''
             print("\n" + "=" * 80)
             print("🔍 RESEARCH DIRECTION VALIDATION RESULTS")
             print("=" * 80)
@@ -1282,7 +1449,7 @@ async def _validate_research_direction_node(state: ExperimentSuggestionState) ->
             
             print(f"💭 Decision Rationale: {validation_json.get('decision_rationale', 'No rationale provided')}")
             print("=" * 80)
-            
+            '''
            
             # Check if this was a forced pass due to max iterations
             forced_pass = validation_json.get("forced_pass", False)
@@ -1290,20 +1457,20 @@ async def _validate_research_direction_node(state: ExperimentSuggestionState) ->
             # Safety check: After 3 iterations, force continue to avoid infinite loops
             if current_iteration >= 3:
                 if forced_pass:
-                    print(f"🔄 Maximum direction iterations reached ({current_iteration}). Forced pass due to iteration limit - continuing to experiments despite validation issues.")
+                    _write_stream(f"Maximum direction iterations reached ({current_iteration}). Forced pass due to iteration limit - continuing to experiments despite validation issues.")
                 else:
-                    print(f"🔄 Maximum direction iterations reached ({current_iteration}). Continuing to experiments.")
+                    _write_stream(f"Maximum direction iterations reached ({current_iteration}). Continuing to experiments.")
                 next_node = "generate_experiment_search_query"
                 
             # Check validation result - but distinguish between genuine pass and forced pass
             elif validation_result == "PASS":
                 if forced_pass:
-                    print(f"⚠️ Research direction validation was FORCED to pass after max iterations. Continuing to experiments with unresolved issues.")
+                    _write_stream(f"Research direction validation was FORCED to pass after max iterations. Continuing to experiments with unresolved issues.")
                 else:
-                    print(f"✅ Research direction validation passed. Continuing to experiments.")
+                    _write_stream(f"Research direction validation passed. Continuing to experiments.")
                 next_node = "generate_experiment_search_query"
             else:
-                print(f"❌ Research direction validation failed. Iterating to improve direction (iteration {current_iteration + 1}).")
+                _write_stream(f"Research direction validation failed. Iterating to improve direction (iteration {current_iteration + 1}).")
                 next_node = "decide_research_direction"
             
             # Store validation results in state
@@ -1362,7 +1529,7 @@ async def _validate_research_direction_node(state: ExperimentSuggestionState) ->
 
 def _generate_experiment_search_query_node(state: ExperimentSuggestionState) -> ExperimentSuggestionState:
     """Generate ArXiv search query for domain-specific experimental guidance papers."""
-    print("\n🔍 Experiment Search Query: Generating targeted search for experimental guidance...")
+    _write_stream("Experiment Search Query: Generating targeted search for experimental guidance.")
     model = state["model"]
     client = state["client"]
     try:
@@ -1443,8 +1610,8 @@ def _generate_experiment_search_query_node(state: ExperimentSuggestionState) -> 
             term4 = application_area or primary_domain
             search_query = f"{term1}/{term2}/{term3}/{term4}"
         
-        print(f"✅ Generated domain-specific search query: {search_query}")
-        print(f"🎯 Targeting domain: {primary_domain} | Task: {task_type} | Application: {application_area}")
+        _write_stream(f"Generated domain-specific search query: {search_query}")
+        #_write_stream(f"🎯 Targeting domain: {primary_domain} | Task: {task_type} | Application: {application_area}")
         
         return {
             **state,
@@ -1455,7 +1622,7 @@ def _generate_experiment_search_query_node(state: ExperimentSuggestionState) -> 
         }
         
     except Exception as e:
-        print(f"❌ Error generating experiment search query: {str(e)}")
+        print(f"Error generating experiment search query: {str(e)}")
         # Fallback query - try to extract domain from original prompt
         prompt_lower = original_prompt.lower()
         direction_lower = direction_text.lower()
@@ -1489,11 +1656,11 @@ async def _search_experiment_papers_node(state: ExperimentSuggestionState) -> Ex
     is_backup_search = validation_results.get("decision") == "search_backup"
     
     if search_iteration == 0:
-        print("\n📚 Experiment Papers Search: Searching ArXiv for experimental guidance...")
+        _write_stream("Experiment Papers Search: Searching ArXiv for experimental guidance...")
     elif is_backup_search:
-        print("\n🔄 Experiment Search (Backup): Searching for additional experimental papers...")
+        _write_stream("Experiment Search (Backup): Searching for additional experimental papers...")
     else:
-        print(f"\n🔄 Experiment Search (New Search {search_iteration + 1}): Searching with refined query...")
+        _write_stream(f"Experiment Search (New Search {search_iteration + 1}): Searching with refined query...")
         
     state["current_step"] = "search_experiment_papers"
     
@@ -1512,11 +1679,11 @@ async def _search_experiment_papers_node(state: ExperimentSuggestionState) -> Ex
     existing_papers = []
     if is_backup_search and state.get("experiment_papers"):
         existing_papers = state["experiment_papers"]
-        print(f"📚 Preserving {len(existing_papers)} papers from previous search")
+        _write_stream(f"Preserving {len(existing_papers)} papers from previous search")
     
     # Safety check: After 3 iterations, force continue to avoid infinite loops
     if search_iteration >= 3:
-        print(f"⚠️ Maximum search iterations reached ({search_iteration}). Proceeding with existing papers...")
+        _write_stream(f"Maximum search iterations reached ({search_iteration}). Proceeding with existing papers...")
         state["experiment_papers"] = existing_papers if existing_papers else []
         state["experiment_search_completed"] = True
         return state
@@ -1546,14 +1713,14 @@ async def _search_experiment_papers_node(state: ExperimentSuggestionState) -> Ex
             max_results = 100
             start_offset = 0
         
-        print("=" * 80)
+        
         
         # Format search query and build URL
         formatted_query = format_search_string(search_query)
         url = f"http://export.arxiv.org/api/query?search_query={formatted_query}&start={start_offset}&max_results={max_results}"
         
-        print(f"Formatted query: {formatted_query}")
-        print(f"🌐 Full URL: {url}")
+        #_write_stream(f"Formatted query: {formatted_query}")
+        _write_stream(f"Full search URL: {url}")
         
         # Fetch and parse ArXiv results
         with libreq.urlopen(url) as response:
@@ -1570,7 +1737,7 @@ async def _search_experiment_papers_node(state: ExperimentSuggestionState) -> Ex
         total_results_elem = root.find('opensearch:totalResults', ns)
         total_results = int(total_results_elem.text) if total_results_elem is not None else 0
         
-        print(f"Total papers found: {total_results}")
+        _write_stream(f"Total papers found: {total_results}")
         
         if total_results == 0:
             print("⚠️ No papers found for experiment search query")
@@ -1585,27 +1752,27 @@ async def _search_experiment_papers_node(state: ExperimentSuggestionState) -> Ex
         if len(entries) == 0:
             entries = root.findall('.//entry')  # Fallback without namespace
         
-        print(f"📄 Processing {len(entries)} paper entries...")
+        _write_stream(f"Processing {len(entries)} paper entries...")
         
         # Stage 1: Extract basic info (title, abstract, metadata) without downloading PDFs
-        print(f"📋 Stage 1: Extracting basic info for {len(entries)} experimental papers...")
+        _write_stream(f"Stage 1: Extracting basic info for {len(entries)} experimental papers...")
         papers = []
         for i, entry in enumerate(entries, 1):
             try:
                 paper_info = arxiv_processor.extract_basic_paper_info(entry, ns, i)
                 papers.append(paper_info)
-                print(f"✅ Basic info extracted for paper #{i}: {paper_info['title'][:50]}...")
+               # print(f"✅ Basic info extracted for paper #{i}: {paper_info['title'][:50]}...")
             except Exception as e:
                 print(f"⚠️ Error processing paper entry {i}: {e}")
                 continue
         
         # Stage 2: Rank papers by relevance using enhanced analysis context
-        print(f"\n🎯 Stage 2: Ranking experimental papers by relevance using extracted analysis...")
+        _write_stream(f"Ranking experimental papers by relevance using extracted analysis...")
         
         # Create enhanced ranking context from the analysis findings
         # Note: These are utility functions that should be called as standalone functions
         ranking_context = create_experiment_ranking_context_from_analysis(state)
-        print(f"📊 Using enhanced context for ranking: {ranking_context[:100]}...")
+        #print(f"📊 Using enhanced context for ranking: {ranking_context[:100]}...")
         
         # Create custom prompt for experimental ranking
         custom_prompt = create_custom_ranking_prompt("experimental")
@@ -1615,7 +1782,7 @@ async def _search_experiment_papers_node(state: ExperimentSuggestionState) -> Ex
         # Stage 3: Download full content for top 5 papers only
         top_papers = papers[:5]  # Get top 5 papers
         
-        print(f"\n🔄 Stage 3: Downloading full PDF content for top {len(top_papers)} experimental papers...")
+        _write_stream(f"Downloading full PDF content for top {len(top_papers)} experimental papers...")
 
         with ThreadPoolExecutor(max_workers=5) as executor:  # Limit concurrent downloads
             # Submit download tasks for top papers only
@@ -1633,8 +1800,8 @@ async def _search_experiment_papers_node(state: ExperimentSuggestionState) -> Ex
                         papers[i] = updated_paper
                         break
         
-        print(f"✅ PDF download stage completed for experimental papers.")
-        
+        _write_stream(f"PDF download stage completed for experimental papers.")
+        ''''
         # Print ranked results
         print("\n" + "=" * 80)
         print("📋 RANKED EXPERIMENTAL PAPERS (by relevance):")
@@ -1658,7 +1825,7 @@ async def _search_experiment_papers_node(state: ExperimentSuggestionState) -> Ex
                 print(f"Content Snippet: {paper['content'][:500]}...")
             
             print("-" * 60)
-        
+        '''
         # Combine with existing papers if this is a backup search
         final_papers = papers
         if is_backup_search and existing_papers:
@@ -1693,17 +1860,17 @@ def _validate_experiment_papers_node(state: ExperimentSuggestionState) -> Experi
     """Node to validate if retrieved experiment papers can answer the user's query and decide next steps."""
     model= state["model"]
     client = state["client"]
-    print("\n🔍 Step 4.5: Validating experiment paper relevance and determining next steps...")
+    _write_stream("Validating experiment paper relevance and determining next steps.")
     state["current_step"] = "validate_experiment_papers"
     
     # Early bypass: If max iterations reached, skip validation and proceed directly
     search_iteration = state.get("experiment_search_iteration", 0)
     if search_iteration >= 3:
-        print(f"⚠️ Maximum iterations ({search_iteration}) reached. Skipping validation and proceeding to experiment generation...")
+        _write_stream(f"⚠️ Maximum iterations ({search_iteration}) reached. Skipping validation and proceeding to experiment generation...")
         
         # CRITICAL FIX: Transfer papers to the correct state keys for new clean architecture
         papers = state.get("experiment_papers", [])
-        print(f"📚 Transferring {len(papers)} papers to validated_experiment_papers for clean architecture")
+        #print(f"📚 Transferring {len(papers)} papers to validated_experiment_papers for clean architecture")
         
         state["experiment_paper_validation_decision"] = "PROCEED_DIRECT"
         state["validated_experiment_papers"] = papers  # NEW: Transfer papers to the key the clean architecture expects
@@ -1865,11 +2032,7 @@ def _validate_experiment_papers_node(state: ExperimentSuggestionState) -> Experi
             # ALSO store decision in a separate key to avoid conflicts with other workflows
             state["experiment_paper_validation_decision"] = validation_data.get("decision", "continue")
             
-            # Print validation results with robust formatting
-            print("\n" + "=" * 70)
-            print("📋 EXPERIMENT PAPER VALIDATION & DECISION RESULTS")
-            print("=" * 70)
-            
+        
             # Safe extraction with defaults and formatting
             relevance = str(validation_data.get('relevance_assessment', 'Unknown')).title()
             methodology_coverage = str(validation_data.get('methodology_coverage', 'Unknown')).title()
@@ -1879,7 +2042,7 @@ def _validate_experiment_papers_node(state: ExperimentSuggestionState) -> Experi
             decision = str(validation_data.get('decision', 'continue')).upper()
             confidence = float(validation_data.get('confidence', 0))
             reasoning = str(validation_data.get('reasoning', 'No reasoning provided'))
-            
+            '''
             print(f"🎯 Relevance Assessment: {relevance}")
             print(f"🔬 Methodology Coverage: {methodology_coverage}")
             print(f"🧪 Experiment Coverage: {experiment_coverage}")
@@ -1888,9 +2051,10 @@ def _validate_experiment_papers_node(state: ExperimentSuggestionState) -> Experi
             print(f"🚀 Decision: {decision}")
             print(f"🎲 Confidence: {confidence:.2f}")
             print(f"💭 Reasoning: {reasoning}")
-            
+            '''
             # Handle missing aspects with proper formatting
             missing_aspects = validation_data.get('missing_aspects', [])
+            '''
             if missing_aspects and isinstance(missing_aspects, list):
                 print(f"🔍 Missing Experimental Aspects:")
                 for i, aspect in enumerate(missing_aspects[:5], 1):  # Limit to 5 items
@@ -1902,7 +2066,7 @@ def _validate_experiment_papers_node(state: ExperimentSuggestionState) -> Experi
                 print(f"🔧 Methodology Gaps:")
                 for i, gap in enumerate(methodology_gaps[:3], 1):  # Limit to 3 items
                     print(f"   {i}. {str(gap)}")
-            
+            '''
             # Handle search guidance for non-continue decisions
             if decision != 'CONTINUE':
                 search_guidance = validation_data.get('search_guidance', {})
@@ -1912,40 +2076,36 @@ def _validate_experiment_papers_node(state: ExperimentSuggestionState) -> Experi
                     avoid_terms = search_guidance.get('avoid_terms', [])
                     
                     if new_search_terms and isinstance(new_search_terms, list):
-                        print(f"🔄 Suggested Search Terms: {', '.join(str(term) for term in new_search_terms[:7])}")
+                        _write_stream(f"Suggested Search Terms: {', '.join(str(term) for term in new_search_terms[:7])}")
                     if focus_areas and isinstance(focus_areas, list):
-                        print(f"🎯 Focus Areas: {', '.join(str(area) for area in focus_areas[:5])}")
+                        _write_stream(f"Focus Areas: {', '.join(str(area) for area in focus_areas[:5])}")
                     if avoid_terms and isinstance(avoid_terms, list):
-                        print(f"❌ Avoid Terms: {', '.join(str(term) for term in avoid_terms[:5])}")
+                        _write_stream(f"Avoid Terms: {', '.join(str(term) for term in avoid_terms[:5])}")
             
-            print("=" * 70)
-            
+   
             # CRITICAL FIX: Make the routing decision here instead of in separate function
             validation_decision = validation_data.get("decision", "continue").upper()
             
             # Map validation decision to next node
             if validation_decision == "CONTINUE":
                 next_node = "distill_paper_methodologies"  # Route to distillation step first
-                print(f"✅ Experiment papers are adequate. Continuing to experiment suggestions.")
+                _write_stream(f"Experiment papers are adequate. Continuing to experiment suggestions.")
                 
-                # CRITICAL FIX: Transfer papers to validated_experiment_papers for clean architecture
-                print(f"📚 Transferring {len(papers)} papers to validated_experiment_papers for clean architecture")
                 state["validated_experiment_papers"] = papers
-                print(f"🔍 DEBUG: After transfer, validated_experiment_papers length: {len(state.get('validated_experiment_papers', []))}")
+                
                 
             elif validation_decision == "SEARCH_BACKUP":
                 next_node = "search_experiment_papers"
-                print(f"🔄 Papers need backup. Searching for additional papers.")
+                _write_stream(f"Papers need backup. Searching for additional papers.")
             elif validation_decision == "SEARCH_NEW":
                 next_node = "generate_experiment_search_query"
-                print(f"🔄 Papers inadequate. Generating new search query.")
+                _write_stream(f"Papers inadequate. Generating new search query.")
             else:
                 # Default fallback
                 next_node = "distill_paper_methodologies"  # Route to distillation step first
-                print(f"⚠️ Unknown validation decision '{validation_decision}'. Defaulting to continue.")
+                _write_stream(f"Unknown validation decision '{validation_decision}'. Defaulting to continue.")
                 
-                # CRITICAL FIX: Also transfer papers for default fallback
-                print(f"📚 Transferring {len(papers)} papers to validated_experiment_papers for clean architecture (fallback)")
+            
                 state["validated_experiment_papers"] = papers
             
             # Increment search iteration counter
@@ -1957,7 +2117,7 @@ def _validate_experiment_papers_node(state: ExperimentSuggestionState) -> Experi
             
         except json.JSONDecodeError as e:
             error_msg = f"Failed to parse validation JSON: {e}"
-            print(f"⚠️ {error_msg}")
+            print(f"ERROR: {error_msg}")
             
             # Fallback decision based on paper quality
             avg_score = sum(p.get('relevance_score', 0) for p in papers) / len(papers) if papers else 0
@@ -1978,7 +2138,7 @@ def _validate_experiment_papers_node(state: ExperimentSuggestionState) -> Experi
             if decision == "continue":
                 state["next_node"] = "distill_paper_methodologies"  # Route to distillation step first
                 # CRITICAL FIX: Transfer papers for continue decision in JSON error case
-                print(f"📚 Transferring {len(papers)} papers to validated_experiment_papers (JSON fallback)")
+               
                 state["validated_experiment_papers"] = papers
             else:
                 state["next_node"] = "search_experiment_papers"
@@ -1988,7 +2148,7 @@ def _validate_experiment_papers_node(state: ExperimentSuggestionState) -> Experi
             
     except Exception as e:
         error_msg = f"Validation failed: {str(e)}"
-        print(f"❌ {error_msg}")
+        print(f"ERROR: {error_msg}")
         
         # Default to continue on error
         state["experiment_paper_validation_results"] = {
@@ -2007,7 +2167,7 @@ def _validate_experiment_papers_node(state: ExperimentSuggestionState) -> Experi
         
         # CRITICAL FIX: Transfer papers for general error case too
         papers = state.get("experiment_papers", [])
-        print(f"📚 Transferring {len(papers)} papers to validated_experiment_papers (general error)")
+       # print(f"📚 Transferring {len(papers)} papers to validated_experiment_papers (general error)")
         state["validated_experiment_papers"] = papers
         
         state["experiment_search_iteration"] = state.get("experiment_search_iteration", 0) + 1
@@ -2016,7 +2176,7 @@ def _validate_experiment_papers_node(state: ExperimentSuggestionState) -> Experi
 
 async def _distill_paper_methodologies_node(state: ExperimentSuggestionState) -> ExperimentSuggestionState:
     """Distill and condense methodology and experimental information from validated papers."""
-    print("📚 Step 6: Distilling methodology and experimental information from papers...")
+    _write_stream("Distilling methodology and experimental information from papers...")
     state["current_step"] = "distill_methodologies"
 
     client = state["client"]
@@ -2036,10 +2196,10 @@ async def _distill_paper_methodologies_node(state: ExperimentSuggestionState) ->
             paper_content = paper.get('content', '')
 
             if not paper_content:
-                print(f"⚠️ Skipping paper {i} - no content available")
+                #print(f"⚠️ Skipping paper {i} - no content available")
                 continue
 
-            print(f"🔬 Distilling paper {i}: {paper_title[:50]}...")
+            #print(f"🔬 Distilling paper {i}: {paper_title[:50]}...")
 
             # Create distillation prompt with clearer instructions for brevity
             distillation_prompt = f"""Extract key methodology from this research paper in exactly 800 characters or less.
@@ -2067,12 +2227,12 @@ Provide methodology summary in under 600 characters:"""
                 )
 
                 distilled_content = response.choices[0].message.content
-                
+                '''
                 # Debug response info
                 print(f"🔍 API response finish_reason: {response.choices[0].finish_reason}")
                 print(f"🔍 Raw content type: {type(distilled_content)}")
                 print(f"🔍 Raw content length: {len(distilled_content) if distilled_content else 0}")
-
+                '''
                 # Handle None content
                 if distilled_content is None:
                     print(f"⚠️ API returned None content for paper {i}")
@@ -2088,15 +2248,10 @@ Provide methodology summary in under 600 characters:"""
                     "character_count": len(distilled_content) if distilled_content else 0
                 }
 
-                print(f"✅ Distilled paper {i}: {len(distilled_content) if distilled_content else 0} characters")
+                _write_stream(f"Distilled paper {i}: {len(distilled_content) if distilled_content else 0} characters")
                 
-                # Show a preview of the content for debugging
-                if distilled_content and len(distilled_content) > 0:
-                    preview = distilled_content[:100].replace('\n', ' ')
-                    print(f"📄 Preview: {preview}...")
-
             except Exception as api_error:
-                print(f"⚠️ API error for paper {i}: {api_error}")
+                print(f"API error for paper {i}: {api_error}")
                 distilled_methodologies[f"paper_{i}"] = {
                     "title": paper_title,
                     "distilled_content": f"API error: {str(api_error)}",
@@ -2114,12 +2269,12 @@ Provide methodology summary in under 600 characters:"""
         total_chars = sum(info['character_count'] for info in distilled_methodologies.values())
         successful_distillations = sum(1 for info in distilled_methodologies.values() if info['character_count'] > 0)
         
-        print(f"📚 Successfully distilled methodologies from {successful_distillations}/{len(distilled_methodologies)} papers")
-        print(f"📊 Total distilled content: {total_chars} characters")
+        #print(f"📚 Successfully distilled methodologies from {successful_distillations}/{len(distilled_methodologies)} papers")
+        _write_stream(f"Total distilled content: {total_chars} characters")
 
     except Exception as e:
         error_msg = f"Methodology distillation failed: {str(e)}"
-        print(f"❌ {error_msg}")
+        print(f"ERROR: {error_msg}")
         state["errors"].append(error_msg)
         state["distilled_methodologies"] = {}
         # Continue even on error - workflow will proceed to experiment generation
@@ -2131,9 +2286,9 @@ async def _suggest_experiments_tree_2_node(state: ExperimentSuggestionState) -> 
     # Extract dependencies from state
     client = state["client"]
     model = state["model"]
-    print("==="*30)
+
     
-    print("🧪 Step 7: Generating experiment suggestions...")
+    _write_stream("Generating experiment suggestions.")
     state["current_step"] = "suggest_experiments"
     
     try:
@@ -2150,7 +2305,7 @@ async def _suggest_experiments_tree_2_node(state: ExperimentSuggestionState) -> 
         current_suggestions = state.get("experiment_suggestions", "")
         if current_suggestions and current_iteration > 0:
             state["previous_experiment_suggestions"] = current_suggestions
-            print(f"📝 Stored previous experiment suggestions ({len(current_suggestions)} chars) for improvement guidance")
+           # print(f"📝 Stored previous experiment suggestions ({len(current_suggestions)} chars) for improvement guidance")
         
         # Get accumulated past mistakes for learning
         past_mistakes = state.get("past_experiment_mistakes", [])
@@ -2176,7 +2331,7 @@ async def _suggest_experiments_tree_2_node(state: ExperimentSuggestionState) -> 
                 papers_context += f"{paper_info['distilled_content']}\n\n"
         elif validated_papers:
             # Fallback to raw papers if distillation failed or produced no content
-            print("⚠️ Using raw paper content as fallback (distillation produced no meaningful content)")
+            _write_stream("Using raw paper content as fallback (distillation produced no meaningful content)")
             papers_context = "Relevant Research Papers:\n"
             for i, paper in enumerate(validated_papers[:5], 1):
                 papers_context += f"{i}. {paper.get('title', 'Unknown')}\n"
@@ -2198,7 +2353,7 @@ async def _suggest_experiments_tree_2_node(state: ExperimentSuggestionState) -> 
             if past_mistakes:
                 improvement_parts.append(f"""
         
-        📚 PAST MISTAKES HISTORY (LEARN FROM THESE - DO NOT REPEAT):
+        PAST MISTAKES HISTORY (LEARN FROM THESE - DO NOT REPEAT):
         You have failed validation {len(past_mistakes)} time(s) before. Study these mistakes carefully:""")
                 
                 for i, mistake in enumerate(past_mistakes, 1):
@@ -2213,7 +2368,7 @@ async def _suggest_experiments_tree_2_node(state: ExperimentSuggestionState) -> 
             if previous_experiment_suggestions:
                 improvement_parts.append(f"""
         
-        🔄 PREVIOUS EXPERIMENT SUGGESTIONS (IMPROVE UPON THESE):
+        PREVIOUS EXPERIMENT SUGGESTIONS (IMPROVE UPON THESE):
         Here are your most recent experiment suggestions that failed validation. Study them carefully and make targeted improvements:
         
         {previous_experiment_suggestions}
@@ -2295,7 +2450,7 @@ async def _suggest_experiments_tree_2_node(state: ExperimentSuggestionState) -> 
         CRITICAL: Your experiment MUST be 100% grounded in the provided literature. If you cannot design an experiment using ONLY the content from these papers, state this explicitly rather than introducing external knowledge.
         """
 
-        print("🧪 Generating first experiment...")
+        _write_stream("Generating first experiment...")
         response1 = client.chat.completions.create(
             model=model,
             temperature=0.3,
@@ -2310,7 +2465,7 @@ async def _suggest_experiments_tree_2_node(state: ExperimentSuggestionState) -> 
             raise ValueError("LLM returned None response for first experiment")
 
         first_experiment = str(first_experiment)
-        print("✅ First experiment generated successfully")
+        _write_stream("First experiment generated successfully")
 
         # Create experiment suggestion prompt for SECOND EXPERIMENT - ensuring novelty
         second_experiment_prompt = f"""
@@ -2379,7 +2534,7 @@ async def _suggest_experiments_tree_2_node(state: ExperimentSuggestionState) -> 
         - If you cannot design a sufficiently different experiment using ONLY the content from these papers, state this explicitly rather than creating a similar experiment
         """
 
-        print("🧪 Generating second experiment (ensuring novelty)...")
+        _write_stream("Generating second experiment (ensuring novelty)...")
         response2 = client.chat.completions.create(
             model=model,
             temperature=0.4,  # Slightly higher temperature for more creativity in second experiment
@@ -2394,7 +2549,7 @@ async def _suggest_experiments_tree_2_node(state: ExperimentSuggestionState) -> 
             raise ValueError("LLM returned None response for second experiment")
 
         second_experiment = str(second_experiment)
-        print("✅ Second experiment generated successfully")
+        _write_stream("second experiment generated successfully")
 
         # Combine both experiments into final suggestions
         experiment_suggestions = f"""
@@ -2418,7 +2573,7 @@ async def _suggest_experiments_tree_2_node(state: ExperimentSuggestionState) -> 
 - Deliverables aligned with literature outcomes
 """
 
-        print("✅ Both experiments combined successfully")
+        _write_stream("Both experiments combined successfully")
         
         state["experiment_suggestions"] = experiment_suggestions
         state["suggestion_source"] = "llm_generated"
@@ -2439,8 +2594,8 @@ async def _suggest_experiments_tree_2_node(state: ExperimentSuggestionState) -> 
             "iteration": state["current_experiment_iteration"]
         }
         
-        print("✅ Experiment suggestions generated successfully")
-        print(f"📋 Experiments designed: {state['experiment_summary']['total_experiments']}")
+        _write_stream("Experiment suggestions generated successfully")
+        _write_stream(f"Experiments designed: {state['experiment_summary']['total_experiments']}")
         
         # Set next node for workflow routing
         state["next_node"] = "validate_experiments_tree_2"
@@ -2452,7 +2607,7 @@ async def _suggest_experiments_tree_2_node(state: ExperimentSuggestionState) -> 
         
     except Exception as e:
         error_msg = f"Experiment suggestion generation failed: {str(e)}"
-        print(f"❌ {error_msg}")
+        print(f"Error: {error_msg}")
         state["errors"].append(error_msg)
         
         # Create fallback suggestions
@@ -2498,20 +2653,20 @@ async def _suggest_experiments_tree_2_node(state: ExperimentSuggestionState) -> 
 
 def _validate_experiments_tree_2_node(state: ExperimentSuggestionState) -> ExperimentSuggestionState:
     """Validate the generated experiment suggestions and decide whether to finalize or iterate."""
-    print("✅ Step 8: Validating experiment suggestions...")
+    _write_stream("Validating experiment suggestions.")
     state["current_step"] = "validate_experiments_tree_2"
     
     # Add infinite loop protection
     current_iteration = state.get("current_experiment_iteration", 0)
     if current_iteration >= 7:  # Higher safety limit
-        print(f"⚠️ Maximum experiment iterations reached ({current_iteration}). Forcing completion...")
+        _write_stream(f"Maximum experiment iterations reached ({current_iteration}). Forcing completion...")
         state["next_node"] = "END"
         state["experiments_validation_decision"] = "FORCE_PASS"
         return state
     experiment_suggestions = state.get("experiment_suggestions", "")
     
     if not experiment_suggestions:
-        print("❌ Experiment suggestions validation failed - no suggestions")
+        _write_stream("Experiment suggestions validation failed - no suggestions")
         state["next_node"] = "suggest_experiments_tree_2"
         state["validation_feedback"] = "No experiment suggestions generated"
         return state
@@ -2529,12 +2684,7 @@ def _validate_experiments_tree_2_node(state: ExperimentSuggestionState) -> Exper
         original_prompt = state.get("original_prompt", "")
 
         # DEBUG: Check validated_papers state
-        print(f"🔍 DEBUG: validated_papers length: {len(validated_papers)}")
-        if validated_papers:
-            print(f"🔍 DEBUG: First paper title: {validated_papers[0].get('title', 'No title')[:50]}...")
-        else:
-            print("🔍 DEBUG: No validated_papers found in state!")
-        
+       
         # Extract research direction details
         selected_direction = research_direction.get("selected_direction", {})
         direction_text = selected_direction.get("direction", "")
@@ -2639,8 +2789,8 @@ def _validate_experiments_tree_2_node(state: ExperimentSuggestionState) -> Exper
                 IMPORTANT: Respond with ONLY the JSON object, nothing else.
                 """
 
-        print("🔄 Starting LLM-based hyper-strict validation...")
-        print ("===="*30)
+        _write_stream("Starting LLM-based hyper-strict validation...")
+        
        # print('VALIDAITON rompt: '+ validation_prompt)
         #print ("===="*30)
         
@@ -2686,7 +2836,7 @@ def _validate_experiments_tree_2_node(state: ExperimentSuggestionState) -> Exper
             print(f"   - Required sections found: {sections_found}/4")
             
             if basic_score >= 0.7:  # Lower threshold when no papers available
-                print("✅ Experiment suggestions pass basic validation (no papers scenario)")
+                _write_stream("Experiment suggestions pass basic validation (no papers scenario)")
                 overall_score = basic_score
                 validation_result = "PASS"
                 critical_issues = []
@@ -2703,7 +2853,7 @@ def _validate_experiments_tree_2_node(state: ExperimentSuggestionState) -> Exper
                     "decision_rationale": decision_rationale
                 }
             else:
-                print(f"❌ Experiment suggestions failed basic validation - Score: {basic_score:.2f}/1.0")
+                _write_stream(f"Experiment suggestions failed basic validation - Score: {basic_score:.2f}/1.0")
                 validation_result = "FAIL"
                 overall_score = basic_score
                 critical_issues = ["Insufficient experiment detail", "Missing required sections"]
@@ -2725,7 +2875,7 @@ def _validate_experiments_tree_2_node(state: ExperimentSuggestionState) -> Exper
             try:
                 client = state.get('client')
                 if not client:
-                    print("❌ OpenAI client not found in state")
+                    print("OpenAI client not found in state")
                     return state
                     
                 response = client.chat.completions.create(
@@ -2766,27 +2916,16 @@ def _validate_experiments_tree_2_node(state: ExperimentSuggestionState) -> Exper
                     not min_score_met or
                     len(critical_issues) > 1):  # Reduced from 2 to be stricter
                     validation_result = "FAIL"
-                
-                print(f"\n🔍 LLM VALIDATION RESULTS:")
-                print(f"📊 Overall Score: {overall_score:.2f}/1.0 (Required: ≥0.90)")
-                print(f"🎯 Validation Result: {validation_result}")
+               
+                _write_stream(f"Validation Result: {validation_result}")
                 
                 for dimension, score in detailed_scores.items():
-                    status = "✅ PASS" if score >= 0.85 else "❌ FAIL"
-                    print(f"   {dimension.replace('_', ' ').title()}: {score:.2f}/1.0 {status}")
+                    status = "PASS" if score >= 0.85 else "FAIL"
+                    _write_stream(f"   {dimension.replace('_', ' ').title()}: {score:.2f}/1.0 {status}")
                 
-                if critical_issues:
-                    print(f"🔴 Critical Issues: {len(critical_issues)}")
-                    for issue in critical_issues[:3]:
-                        print(f"  • {issue}")
-                
-                if improvement_recommendations:
-                    print(f"🔧 Recommendations: {len(improvement_recommendations)}")
-                    for rec in improvement_recommendations[:3]:
-                        print(f"  • {rec}")
 
             except (json.JSONDecodeError, Exception) as e:
-                print(f"❌ LLM validation failed: {str(e)}")
+                print(f"LLM validation failed: {str(e)}")
                 validation_result = "FAIL"
                 overall_score = 0.0
                 validation_json = {
@@ -2804,7 +2943,7 @@ def _validate_experiments_tree_2_node(state: ExperimentSuggestionState) -> Exper
         papers_available = len(validated_papers) > 0
 
         # DEBUG: Log validation state
-        print(f"🔍 VALIDATION DEBUG: papers_available={papers_available}, validation_result='{validation_result}', overall_score={overall_score:.3f}, current_iteration={current_iteration}")
+        #print(f"🔍 VALIDATION DEBUG: papers_available={papers_available}, validation_result='{validation_result}', overall_score={overall_score:.3f}, current_iteration={current_iteration}")
 
         # Adjust thresholds based on paper availability - MODERATE STRICTNESS for literature-grounded experiments
         if papers_available:
@@ -2816,7 +2955,7 @@ def _validate_experiments_tree_2_node(state: ExperimentSuggestionState) -> Exper
         
         if pass_condition:
             context_note = "with literature context" if papers_available else "without literature context (relaxed criteria)"
-            print(f"✅ Experiment suggestions validation PASSED (LLM score: {overall_score:.2f}/{min_score_required}, {context_note})")
+            _write_stream(f"Experiment suggestions validation PASSED (LLM score: {overall_score:.2f}/{min_score_required}, {context_note})")
             state["next_node"] = "END"
             state["experiments_validation_decision"] = "PASS"
             
@@ -2865,7 +3004,7 @@ def _validate_experiments_tree_2_node(state: ExperimentSuggestionState) -> Exper
             )
         elif current_iteration < 5:  # Allow more retries for experiment generation
             threshold_note = f"minimum {min_score_required:.2f} required" + (" (relaxed - no papers)" if not papers_available else " (strict - with papers)")
-            print(f"❌ Experiment suggestions failed LLM validation - Score: {overall_score:.2f}/1.0 ({threshold_note})")
+            _write_stream(f"Experiment suggestions failed LLM validation - Score: {overall_score:.2f}/1.0 ({threshold_note})")
             state["next_node"] = "suggest_experiments_tree_2"
             state["experiments_validation_decision"] = "RETRY"
             
@@ -2902,7 +3041,7 @@ def _validate_experiments_tree_2_node(state: ExperimentSuggestionState) -> Exper
             past_mistakes.append(mistake_record)
             state["past_experiment_mistakes"] = past_mistakes
             
-            print(f" Accumulated {len(past_mistakes)} past mistake records for learning")
+            #print(f" Accumulated {len(past_mistakes)} past mistake records for learning")
             
         else:
             # Force pass after 3 iterations
@@ -2932,24 +3071,25 @@ def _validate_experiments_tree_2_node(state: ExperimentSuggestionState) -> Exper
 # WORKFLOW CONTROL FUNCTIONS
 # ==================================================================================
 
+
 def _debug_validation_routing(state: ExperimentSuggestionState) -> str:
     """Debug routing function for validate_experiments_tree_2 node."""
     next_node = state.get("next_node", "END")
     validation_decision = state.get("experiments_validation_decision", "PASS")
     current_iteration = state.get("current_experiment_iteration", 0)
 
-    print(f"🔍 ROUTING DEBUG: next_node='{next_node}', validation_decision='{validation_decision}', iteration={current_iteration}")
-
     # SAFETY CHECK: Prevent infinite loops - align with validation logic (max 5 iterations)
     MAX_ITERATIONS = 5
     if current_iteration >= MAX_ITERATIONS:
-        print(f"🛑 Maximum iterations reached ({MAX_ITERATIONS}), forcing workflow END to prevent infinite recursion")
+        _write_stream(f"Maximum iterations reached ({MAX_ITERATIONS}), forcing workflow END to prevent infinite recursion")
         return "END"
 
     if next_node == "END" or validation_decision in ["PASS", "FORCE_PASS"]:
         return "END"
     else:
         return "suggest_experiments_tree_2"
+    
+    
 def _should_continue_with_papers(state: ExperimentSuggestionState) -> str:
     """Determine whether to continue with current papers or search again."""
     validation_decision = state.get("experiment_paper_validation_decision", "continue")
@@ -2957,18 +3097,18 @@ def _should_continue_with_papers(state: ExperimentSuggestionState) -> str:
 
     # Safety check: After 3 iterations, force continue
     if search_iteration >= 3:
-        print("🛑 Maximum search iterations reached (3), forcing continue...")
+        _write_stream("Maximum search iterations reached (3), forcing continue...")
         return "continue"
 
     # Map validation decisions to workflow routing
     if validation_decision == "search_backup":
-        print("🔄 Searching for additional papers...")
+        _write_stream("Searching for additional papers...")
         return "search_backup"
     elif validation_decision == "search_new":
-        print("🔄 Starting new paper search...")
+        _write_stream("Starting new paper search...")
         return "search_new"
     else:
-        print("✅ Continuing with current papers...")
+        _write_stream("Continuing with current papers...")
         return "continue"
 
 
@@ -2979,7 +3119,7 @@ def _should_proceed_with_direction(state: ExperimentSuggestionState) -> str:
 
     # Safety check: After 3 iterations, force proceed
     if len(direction_iterations) >= 3:
-        print("🛑 Maximum direction validation iterations reached (3), forcing proceed...")
+        _write_stream("Maximum direction validation iterations reached (3), forcing proceed...")
         return "proceed"
 
     if validation_decision == "PASS":
@@ -2995,7 +3135,7 @@ def _should_proceed_with_analysis(state: ExperimentSuggestionState) -> str:
 
     # Safety check: After 3 iterations, force proceed to prevent infinite loops
     if len(analysis_iterations) >= 3:
-        print("🛑 Maximum analysis iterations reached (3), forcing proceed to research direction...")
+        _write_stream("Maximum analysis iterations reached (3), forcing proceed to research direction...")
         return "decide_research_direction"
 
     return next_node
@@ -3087,7 +3227,7 @@ def _build_analyze_and_suggest_experiment_graph() -> StateGraph:
 # MAIN WORKFLOW RUNNER
 # ==================================================================================
 
-async def run_experiment_suggestion_workflow(
+async def run_experiment_suggestion_workflow_nonstream(
     user_prompt: str,
     experimental_results: Dict[str, Any] = None,
     uploaded_data: List[str] = None,
@@ -3169,19 +3309,23 @@ async def run_experiment_suggestion_workflow(
     print("=" * 80)
 
     # Handle file input if provided
-    file_content = []
+    file_content: List[str] = []
+    file_warnings: List[str] = []
     if file_path:
         try:
             print(f"📖 Reading file: {file_path}")
-            with open(file_path, 'r', encoding='utf-8') as f:
-                file_content = [f.read()]
-            print(f"✅ File loaded successfully ({len(file_content[0])} characters)")
+            file_content, file_warnings = _load_text_file_safely(file_path)
+            if file_content:
+                print(f"✅ File loaded successfully ({len(file_content[0])} characters)")
         except FileNotFoundError:
             print(f"❌ Error: File not found - {file_path}")
-            raise FileNotFoundError(f"Input file not found: {file_path}")
+            raise
         except Exception as e:
             print(f"❌ Error reading file: {str(e)}")
-            raise Exception(f"Error reading input file: {str(e)}")
+            raise
+
+        for warning in file_warnings:
+            print(warning)
 
     # Combine uploaded_data with file_content if both are provided
     combined_uploaded_data = (uploaded_data or []) + file_content
@@ -3313,89 +3457,248 @@ async def run_experiment_suggestion_workflow(
 
 
 
-# Convenience function for quick testing
-async def test_experiment_suggestion_workflow():
-    """
-    Test function to run the workflow with sample data.
-    """
-    print("⚠️ This is a test template. Please provide actual experimental results.")
-    
-    # Sample experimental results
-    sample_experimental_results = {
-        "model_performance": {
-            "accuracy": 0.87,
-            "precision": 0.85,
-            "recall": 0.89,
-            "f1_score": 0.87
-        },
-        "training_details": {
-            "epochs": 50,
-            "learning_rate": 0.001,
-            "batch_size": 32,
-            "dataset_size": 10000
-        },
-        "observations": [
-            "Model converged after 35 epochs",
-            "Validation accuracy plateaued around epoch 40",
-            "Some overfitting observed in final epochs"
-        ],
-        "challenges": [
-            "Class imbalance in dataset",
-            "Limited computational resources"
-        ]
-    }
-    
-    # Run workflow
-    result = await run_experiment_suggestion_workflow(
-        user_prompt="I have completed initial experiments on image classification with CNNs. Need suggestions for follow-up experiments to improve model performance and generalization.",
-        experimental_results=sample_experimental_results
-        # Optional: Add file_path="path/to/your/file.txt" to load content from a file
-        # file_path="experimental_results.txt"
-    )
-    
-    print("Final result:", "Success" if result.get("experiment_suggestions") else "Failed")
-    print("===="*3)
-    print(result.get("experiment_suggestions", "No suggestions generated"))
-    return result
 
-
-async def run_experiment_suggestion_workflow_from_file(
-    file_path: str,
-    user_prompt: str = None,
-    experimental_results: Dict[str, Any] = None
+async def run_experiment_suggestion_workflow(
+    user_prompt: str,
+    experimental_results: Dict[str, Any] = None,
+    uploaded_data: List[str] = None,
+    file_path: str = None,
+    streaming: bool = False
 ) -> Dict[str, Any]:
     """
-    Convenience function to run experiment suggestion workflow with file input.
+    Compile and run the complete experiment suggestion workflow.
     
     Args:
-        file_path: Path to the input file containing experimental data or context
-        user_prompt: Optional user prompt (if None, will use file content as prompt)
-        experimental_results: Optional experimental results dict
+        user_prompt: The user's research query/context
+        experimental_results: Optional dictionary containing experimental data and results
+        uploaded_data: Optional list of uploaded file contents
+        file_path: Optional path to a file to read and include as input data
         
     Returns:
         Dictionary containing the final workflow state with results
     """
-    # Use file content as prompt if no prompt provided
-    if user_prompt is None:
+    # Move all imports and initialization inside the function
+    try:
+        import asyncio
+        import openai
+        from utils.arxiv_paper_utils import ArxivPaperProcessor
+    except ImportError as e:
+        error_msg = f"Failed to import required modules: {str(e)}. Please ensure all dependencies are installed."
+        print(f"❌ {error_msg}")
+        return {
+            "workflow_successful": False,
+            "error": error_msg,
+            "error_type": "ImportError",
+            "original_prompt": user_prompt
+        }
+    
+    try:
+        # Load configuration
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise ValueError("OPENAI_API_KEY not found in environment variables. Please ensure it is set.")
+
+        base_url = os.getenv("BASE_URL") or "https://agents.aetherraid.dev"
+        model = os.getenv("DEFAULT_MODEL") or "gemini/gemini-2.5-flash"
+        model_cheap = "gemini/gemini-2.5-flash-lite"
+        model_expensive = "gemini/gemini-2.5-pro"
+
+        # Initialize dependencies
         try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                user_prompt = f.read().strip()
-            print(f"📝 Using file content as prompt ({len(user_prompt)} characters)")
+            client = openai.OpenAI(api_key=api_key, base_url=base_url)
         except Exception as e:
-            raise Exception(f"Could not read file for prompt: {str(e)}")
+            raise ValueError(f"Failed to initialize OpenAI client: {str(e)}. Please check your API key and base URL configuration.")
+        
+        try:
+            arxiv_processor = ArxivPaperProcessor(llm_client=client, model_name=model_cheap)
+        except Exception as e:
+            raise ValueError(f"Failed to initialize ArxivPaperProcessor: {str(e)}. Please check the ArxivPaperProcessor implementation.")
+        
+    except ValueError as e:
+        print(f"❌ Configuration Error: {str(e)}")
+        return {
+            "workflow_successful": False,
+            "error": str(e),
+            "error_type": "ConfigurationError",
+            "original_prompt": user_prompt
+        }
+    except Exception as e:
+        error_msg = f"Unexpected error during initialization: {str(e)}"
+        print(f"❌ {error_msg}")
+        return {
+            "workflow_successful": False,
+            "error": error_msg,
+            "error_type": type(e).__name__,
+            "original_prompt": user_prompt
+        }
+    
+    print("🧪 Starting Experiment Suggestion Workflow...")
+    print(f"📝 User Prompt: {user_prompt}")
+    print(f"🔬 Experimental Results: {len(experimental_results) if experimental_results else 0} data points")
+    print(f"🤖 Model: {model}")
+    if file_path:
+        print(f"📁 File Input: {file_path}")
+    print("=" * 80)
 
-    # Default empty experimental results if not provided
-    if experimental_results is None:
-        experimental_results = {}
+    # Handle file input if provided
+    file_content: List[str] = []
+    file_warnings: List[str] = []
+    if file_path:
+        try:
+            print(f" Reading file: {file_path}")
+            file_content, file_warnings = _load_text_file_safely(file_path)
+            if file_content:
+                print(f"File loaded successfully ({len(file_content[0])} characters)")
+        except FileNotFoundError:
+            print(f"Error: File not found - {file_path}")
+            raise
+        except Exception as e:
+            print(f"Error reading file: {str(e)}")
+            raise
 
-    # Run the main workflow with file input
-    return await run_experiment_suggestion_workflow(
-        user_prompt=user_prompt,
-        experimental_results=experimental_results,
-        file_path=file_path
-    )
+        for warning in file_warnings:
+            print(warning)
 
+    # Combine uploaded_data with file_content if both are provided
+    combined_uploaded_data = (uploaded_data or []) + file_content
+    
+    try:
+        # Build the workflow graph
+        workflow_graph = _build_analyze_and_suggest_experiment_graph()
+        print("✅ Workflow graph compiled successfully")
+        
+        # Initialize the state with all required fields
+        initial_state = {
+            # Core workflow data
+            "messages": [],
+            "original_prompt": user_prompt,
+            "uploaded_data": combined_uploaded_data,
+            "current_step": "starting",
+            "errors": [],
+            "workflow_type": "experiment_suggestion",
+            
+            # Dependencies
+            "client": client,
+            "model": model,
+            "arxiv_processor": arxiv_processor,
+            
+            # Input data
+            "experimental_results": experimental_results or {},
+            "findings_analysis": {},
+            "research_context": {},
+            
+            # Processing state
+            "analysis_completed": False,
+            "experiment_categories": [],
+            "experiment_papers": [],
+            "experiment_search_query": "",
+            "experiment_search_iteration": 0,
+            "experiment_validation_results": {},
+            "experiment_paper_validation_decision": "",
+            "experiment_validation_decision": "",
+            
+            # New validation fields for the exact workflow structure
+            "analysis_validation_decision": "",
+            "direction_validation_decision": "",
+            "paper_validation_decision": "",
+            "experiments_validation_decision": "",
+            "validation_feedback": "",
+            
+            "experiment_iterations": [],
+            "research_direction": {},
+            "validated_experiment_papers": [],
+            "validated_experiment_papers": [],  # Add this key that the clean architecture uses
+            "distilled_methodologies": {},       # Distilled methodology content from papers
+            "current_experiment_iteration": 0,
+            "iteration_from_state": 0,
+            "analysis_iterations": [],  # Track analysis validation iterations (list for history)
+            "direction_iterations": [],  # Track research direction validation iterations (list for history)
+            
+            # Issue tracking
+            "past_fixed_issues": [],
+            "past_unresolved_issues": [],
+            "most_recent_generation_issues": [],
+            "cumulative_validation_feedback": [],
+            
+            # Solved issues tracking
+            "solved_issues_history": [],
+            "current_solved_issues": [],
+            "validation_issue_patterns": {},
+            "generation_feedback_context": "",
+            
+            # Output
+            "experiment_suggestions": "",
+            "experiment_summary": {},
+            "next_node": "",
+            "literature_context": "",
+            "suggestion_source": "",
+            "prioritized_experiments": [],
+            "implementation_roadmap": {},
+            "final_outputs": {}
+        }
+        
+        print("🔄 Running workflow...")
+        
+        if not streaming:
+            final_state = await workflow_graph.ainvoke(initial_state)
+            return final_state.get("validate_experiments_tree_2", final_state)
+        # Run the workflow with increased recursion limit to prevent infinite loops
+        async def _stream():
+            final_data = None  # track last update
 
+            async for chunk in workflow_graph.astream(initial_state, stream_mode=["updates","custom"]):
+                stream_mode, data = chunk
+
+                # Debugging / logging (optional, can remove to stay "silent")
+                if stream_mode == "updates":
+                    key = list(data.keys())[0] if data else None
+                    print(f"Step: {key}")
+                elif stream_mode == "custom" and data.get("status"):
+                    print(f"Updates: {data['status']}")
+
+                # Stream intermediate updates
+                yield data
+                final_data = data
+
+            # After loop ends, yield final state only if it has "validate_experiments_tree_2"
+            if final_data and "validate_experiments_tree_2" in final_data:
+                yield final_data["validate_experiments_tree_2"]
+
+        return _stream()
+
+    except Exception as e:
+        print(f"\n❌ WORKFLOW FAILED: {str(e)}")
+        print("Full error traceback:")
+        traceback.print_exc()
+        
+        # Return error state
+        return {
+            "workflow_successful": False,
+            "error": str(e),
+            "error_type": type(e).__name__,
+            "original_prompt": user_prompt,
+            "experimental_results": experimental_results
+        }
+
+async def test_experiment_stream():
+    #import asyncio
+    from dotenv import load_dotenv
+    load_dotenv()  # Load environment variables from .env file if present
+    test_prompt = "I have completed initial experiments on image classification with CNNs. Need suggestions for follow-up experiments to improve model performance and generalization."
+    data_dir=r"C:\Users\Jacobs laptop\Downloads\AETHER Hackathon.xlsx"
+    final_result = None
+    async for result in await run_experiment_suggestion_workflow(test_prompt,file_path=data_dir, streaming=False):
+        final_result = result  # keep overwriting, so last one wins
+        
+    result = final_result
+    
+    # FOR NON STREAMING
+    #result = await run_model_suggestion_workflow("Find models for X-rays", streaming=False)
+    
+   
+    return result
+    
+    
 if __name__ == "__main__":
     """
     Main entry point for testing the workflow.
@@ -3404,7 +3707,7 @@ if __name__ == "__main__":
     import asyncio
     from dotenv import load_dotenv
     load_dotenv()  # Load environment variables from .env file if present
+    result = asyncio.run(test_experiment_stream())
+    print("Final result:", "Success" if result.get("experiment_suggestions") else "Failed")
 
-    
-    asyncio.run(test_experiment_suggestion_workflow())
 

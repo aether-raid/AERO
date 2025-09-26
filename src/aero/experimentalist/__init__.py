@@ -1,49 +1,146 @@
-"""
-Experimentalist - ML Experiment Suggestion Workflow
+"""Experimentalist (Experiment Suggestion Workflow).
 
-This module provides an automated workflow for suggesting machine learning experiments
-based on user requirements. The workflow analyzes research questions, searches for
-relevant papers, distills methodologies, and suggests novel experimental approaches.
+This package exposes a high-level API for orchestrating the experiment suggestion
+workflow defined in :mod:`aero.experimentalist.experiment_suggestion_nodes`.
 
-Main Functions:
-- run_experiment_suggestion_workflow: Run the complete experiment suggestion workflow
+The workflow can operate in **non-streaming** (single result) or **streaming**
+mode. Both modes support attaching structured data via ``experimental_results``
+and file-based evidence via ``file_path`` (e.g. CSV/XLSX summaries).
+
+The primary entry point is :func:`experiment_suggestions`, which accepts a
+``streaming`` flag to opt into streaming updates. Convenience helpers are
+provided for the non-streaming (:func:`suggest_experiments`) and streaming
+(:func:`stream_experiment_suggestions`) cases.
+
+Example (non-streaming)::
+
+    import asyncio
+    from aero.experimentalist import suggest_experiments
+
+    async def main():
+        result = await suggest_experiments(
+            prompt="Improve CNN generalisation",
+            file_path="/path/to/experiments.xlsx"
+        )
+        print(result["experiment_suggestions"])
+
+    asyncio.run(main())
+
+Example (streaming updates)::
+
+    import asyncio
+    from aero.experimentalist import experiment_suggestions
+
+    async def main():
+        stream = await experiment_suggestions(
+            prompt="Improve CNN generalisation",
+            file_path="/path/to/experiments.xlsx",
+            streaming=True,
+        )
+
+        async for update in stream:
+            print("update", update)
+
+    asyncio.run(main())
 """
+
+from typing import Any, AsyncGenerator, Dict, List, Optional, Union, cast
 
 from .experiment_suggestion_nodes import run_experiment_suggestion_workflow
-from typing import List, Dict, Any, Optional
 
-# Expose the main function with a cleaner interface
-async def suggest_experiments(
+
+ExperimentSuggestionStream = AsyncGenerator[Dict[str, Any], None]
+ExperimentSuggestionResult = Union[Dict[str, Any], ExperimentSuggestionStream]
+
+
+async def experiment_suggestions(
     prompt: str,
     experimental_results: Optional[Dict[str, Any]] = None,
-    uploaded_data: Optional[List[str]] = None
-) -> Dict[str, Any]:
+    uploaded_data: Optional[List[str]] = None,
+    file_path: Optional[str] = None,
+    streaming: bool = False,
+) -> ExperimentSuggestionResult:
+    """Run the experiment suggestion workflow.
+
+    Parameters
+    ----------
+    prompt:
+        Description of the research question or experimental goal.
+    experimental_results:
+        Optional structured dictionary of existing experiment outcomes.
+    uploaded_data:
+        Optional list of string snippets (e.g. manual notes) to blend into prompts.
+    file_path:
+        Optional path to a CSV/XLS(X) file; contents are parsed and supplied to the
+        workflow's uploaded-data context.
+    streaming:
+        When ``True`` the function returns an async generator yielding updates.
+        When ``False`` (default) it returns the final workflow state.
     """
-    Suggest suitable ML experiments for a given research question.
 
-    This is a convenience wrapper around run_experiment_suggestion_workflow.
-
-    Args:
-        prompt: Description of the research question or experimental goal
-        experimental_results: Optional dictionary of existing experimental results
-        uploaded_data: Optional list of additional data files/content.
-            NOTE: Currently not processed by the workflow - reserved for future use.
-
-    Returns:
-        Dictionary containing workflow results including experiment suggestions
-
-    Example:
-        import asyncio
-        from aero.experimentalist import suggest_experiments
-
-        result = asyncio.run(suggest_experiments("How can I improve my CNN accuracy?"))
-        print(result['experiment_suggestions'])
-    """
-    return await run_experiment_suggestion_workflow(
+    result = await run_experiment_suggestion_workflow(
         user_prompt=prompt,
         experimental_results=experimental_results,
-        uploaded_data=uploaded_data
+        uploaded_data=uploaded_data,
+        file_path=file_path,
+        streaming=streaming,
     )
 
-# Also expose the full function for advanced users
-__all__ = ['suggest_experiments', 'run_experiment_suggestion_workflow']
+    if streaming:
+        return cast(ExperimentSuggestionStream, result)
+    return cast(Dict[str, Any], result)
+
+
+async def suggest_experiments_nostream(
+    prompt: str,
+    experimental_results: Optional[Dict[str, Any]] = None,
+    uploaded_data: Optional[List[str]] = None,
+    file_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Convenience wrapper returning the final state only."""
+
+    return cast(
+        Dict[str, Any],
+        await experiment_suggestions(
+            prompt=prompt,
+            experimental_results=experimental_results,
+            uploaded_data=uploaded_data,
+            file_path=file_path,
+            streaming=False,
+        ),
+    )
+
+
+async def stream_experiment_suggestions(
+    prompt: str,
+    experimental_results: Optional[Dict[str, Any]] = None,
+    uploaded_data: Optional[List[str]] = None,
+    file_path: Optional[str] = None,
+) -> ExperimentSuggestionStream:
+    """Yield streaming updates from the workflow.
+
+    Produces the same update payloads emitted by
+    :func:`run_experiment_suggestion_workflow` when ``streaming=True``.
+    """
+
+    stream = cast(
+        ExperimentSuggestionStream,
+        await experiment_suggestions(
+            prompt=prompt,
+            experimental_results=experimental_results,
+            uploaded_data=uploaded_data,
+            file_path=file_path,
+            streaming=True,
+        ),
+    )
+
+    async for update in stream:
+        yield update
+
+
+__all__ = [
+    "experiment_suggestions",
+    "suggest_experiments_nostream",
+    "stream_experiment_suggestions",
+    "run_experiment_suggestion_workflow",
+]

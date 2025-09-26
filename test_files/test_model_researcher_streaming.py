@@ -22,7 +22,7 @@ async def test_model_suggestion_streaming():
 
     try:
         # Import the streaming workflow function
-        from aero.model_researcher.model_suggestion_nodes import run_model_suggestion_workflow_streaming, run_model_suggestion_workflow, run_model_suggestion_workflow_test
+        from aero.model_researcher.model_suggestion_nodes import run_model_suggestion_workflow
 
         # Sample prompt for testing
         test_prompt = "I need help with image classification on medical images. I have a dataset of X-ray images and want to classify them into normal/abnormal categories."
@@ -38,17 +38,21 @@ async def test_model_suggestion_streaming():
             final_result = result  # keep overwriting, so last one wins
             
         result = final_result
+                
+       
+                
         
-        
+
         # FOR NON STREAMING
-        # result = await run_model_suggestion_workflow_test("Find models for X-rays")
-        # print(result["model_suggestions"]) 
+        #result = await run_model_suggestion_workflow("Find models for X-rays", streaming=False)
+        
         
         #check if we got anything
         if not result:
             print("❌ No results received from streaming workflow")
             return None
-        
+        print(type(result))
+    
         
         # Check if successful
         if result.get("model_suggestions", {}).get("suggestions_successful"):
@@ -56,7 +60,7 @@ async def test_model_suggestion_streaming():
             print("\n📋 MODEL SUGGESTIONS:")
             print("-" * 30)
             suggestions = result["model_suggestions"].get("model_suggestions", "")
-            print(suggestions[:1000] + "..." if len(suggestions) > 1000 else suggestions)
+            print(suggestions[:300] + "..." if len(suggestions) > 300 else suggestions)
         else:
             print("❌ Model suggestions failed")
             

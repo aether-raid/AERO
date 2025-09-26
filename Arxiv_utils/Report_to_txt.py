@@ -60,13 +60,13 @@ def extract_pdf_text(pdf_url, save_files=False, paper_title=None, paper_id=None)
         str: Extracted text content
     """
     try:
-        print(f"Fetching PDF from: {pdf_url}")
+       # print(f"Fetching PDF from: {pdf_url}")
         
         # Download the PDF
         response = requests.get(pdf_url)
         response.raise_for_status()
         
-        print(f"✅ PDF downloaded ({len(response.content):,} bytes)")
+        #print(f"✅ PDF downloaded ({len(response.content):,} bytes)")
         
         # Save PDF file if requested and metadata is available
         pdf_path = None
@@ -78,11 +78,12 @@ def extract_pdf_text(pdf_url, save_files=False, paper_title=None, paper_id=None)
                 
                 with open(pdf_path, 'wb') as f:
                     f.write(response.content)
-                print(f"💾 PDF saved to: {pdf_path}")
+                #print(f"💾 PDF saved to: {pdf_path}")
             except Exception as e:
-                print(f"⚠️ Failed to save PDF: {e}")
+                print(f"Failed to save PDF: {e}")
+                
         
-        print("📄 Extracting text content...")
+        #print("📄 Extracting text content...")
         
         # Create a BytesIO object from the PDF content
         pdf_file = BytesIO(response.content)
@@ -98,7 +99,7 @@ def extract_pdf_text(pdf_url, save_files=False, paper_title=None, paper_id=None)
             text_content += page_text
             text_content += "\n" + "="*50 + "\n"
         
-        print(f"✅ Text extracted successfully ({len(pdf_reader.pages)} pages)")
+        #print(f"✅ Text extracted successfully ({len(pdf_reader.pages)} pages)")
         
         # Save text file if requested and metadata is available
         if save_files and paper_title and paper_id and text_content:
@@ -111,17 +112,17 @@ def extract_pdf_text(pdf_url, save_files=False, paper_title=None, paper_id=None)
                 
                 with open(txt_path, 'w', encoding='utf-8') as f:
                     f.write(text_content)
-                print(f"💾 Text saved to: {txt_path}")
+                #print(f"💾 Text saved to: {txt_path}")
             except Exception as e:
                 print(f"⚠️ Failed to save text file: {e}")
         
         return text_content
         
     except requests.exceptions.RequestException as e:
-        print(f"❌ Error downloading PDF: {e}")
+        print(f"Error downloading PDF: {e}")
         return None
     except Exception as e:
-        print(f"❌ Error processing PDF: {e}")
+        print(f"Error processing PDF: {e}")
         return None
 
 def get_arxiv_paper_details(paper_id):

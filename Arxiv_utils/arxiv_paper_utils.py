@@ -235,8 +235,8 @@ class ArxivPaperProcessor:
             try:
                 return model.encode(text, show_progress_bar=False, normalize_embeddings=True)
             except Exception as e:
-                print(f"❌ Error creating embedding for text: {e}")
-                print(f"Text type: {type(text)}, Text preview: {repr(text[:100])}")
+                #print(f"❌ Error creating embedding for text: {e}")
+                #print(f"Text type: {type(text)}, Text preview: {repr(text[:100])}")
                 # Return a random embedding as fallback
                 import numpy as np
                 return np.random.randn(384).astype('float32')
@@ -310,7 +310,7 @@ class ArxivPaperProcessor:
             
             # Extract text from PDF
             if pdf_link:
-                print(f"Fetching PDF from: {pdf_link}")
+                #print(f"Fetching PDF from: {pdf_link}")
                 # Pass paper metadata for proper file saving
                 pdf_txt = extract_pdf_text(
                     pdf_link, 
@@ -320,14 +320,13 @@ class ArxivPaperProcessor:
                 )
                 paper_info['content'] = pdf_txt
                 paper_info['pdf_downloaded'] = True
-                print(f"✅ Downloaded PDF content for: {paper_info['title'][:50]}...")
-            else:
-                print(f"⚠️ No PDF link found for: {paper_info['title'][:50]}...")
+                #print(f"✅ Downloaded PDF content for: {paper_info['title'][:50]}...")
+            
             
             return paper_info
             
         except Exception as e:
-            print(f"❌ Error downloading PDF for {paper_info['title'][:50]}...: {e}")
+            print(f" Error downloading PDF for {paper_info['title'][:50]}...: {e}")
             return paper_info
     
     async def score_paper_relevance(self, paper_title: str, paper_content: str, original_query: str, custom_prompt: Optional[str] = None) -> float:
@@ -422,11 +421,11 @@ Paper content:
     
     async def rank_papers_by_relevance(self, papers: List[Dict], original_query: str, custom_prompt: str = None) -> List[Dict]:
         """Score and rank papers by relevance using cosine similarity (fast, deterministic)."""
-        print("\n🎯 Scoring papers for relevance using cosine similarity...")
+        #print("\n🎯 Scoring papers for relevance using cosine similarity...")
         
         # Create scoring tasks for all papers using the new cosine similarity method
         async def score_paper(i, paper):
-            print(f"⏳ Scoring paper {i}/{len(papers)}: {paper['title'][:50]}...")
+            #print(f"⏳ Scoring paper {i}/{len(papers)}: {paper['title'][:50]}...")
             
             # Use the new cosine similarity scoring method with optional custom prompt
             relevance_score = await self.score_paper_relevance(
@@ -437,7 +436,7 @@ Paper content:
             )
             
             paper['relevance_score'] = relevance_score
-            print(f"Relevance Score for paper {i:03d}: {relevance_score:.1f}/10.0")
+            #print(f"Relevance Score for paper {i:03d}: {relevance_score:.1f}/10.0")
             return paper
 
         
@@ -448,7 +447,7 @@ Paper content:
         # Sort by relevance score (highest first) and return top 5
         ranked_papers = sorted(scored_papers, key=lambda x: x.get('relevance_score', 0), reverse=True)
         
-        print(f"\n Papers ranked by cosine similarity to: '{original_query}'")
+        #print(f"\n Papers ranked by cosine similarity to: '{original_query}'")
         return ranked_papers[:5]  # Return only top 5
 
     async def chunk_and_embed(self, paper: Dict, faiss_db=None, embedding_dim: int = 768) -> List[Dict]:
