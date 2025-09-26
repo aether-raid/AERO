@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Test script for the Model Researcher Streaming Workflow.
+Test script for the Paper Writing Streaming Workflow.
 
-This script demonstrates how to use the streaming version of the suggest_models function
-from the aero.model_researcher module.
+This script demonstrates how to use the streaming version of the write_paper function
+from the aero.report_writer module.
 """
 
 import asyncio
@@ -17,32 +17,32 @@ load_dotenv()
 # Add the src directory to the path so we can import aero
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
-async def test_model_suggestion_streaming():
-    """Test the model suggestion streaming workflow with a sample prompt."""
+async def test_paper_writing_streaming():
+    """Test the paper writing streaming workflow with a sample prompt."""
 
     try:
         # Import the streaming workflow function
-        from aero.model_researcher.model_suggestion_nodes import run_model_suggestion_workflow_streaming, run_model_suggestion_workflow, run_model_suggestion_workflow_test
+        from aero.report_writer.paper_writing_nodes import write_paper
 
         # Sample prompt for testing
-        test_prompt = "I need help with image classification on medical images. I have a dataset of X-ray images and want to classify them into normal/abnormal categories."
+        test_prompt = "Write a comprehensive paper about machine learning fundamentals, covering supervised learning, unsupervised learning, and deep learning approaches."
 
-        print("🤖 Testing Model Researcher Streaming Workflow")
+        print("📝 Testing Paper Writing Streaming Workflow")
         print("=" * 60)
         print(f"📝 Test Prompt: {test_prompt}")
         print()
 
         # FOR STREAMING
         final_result = None
-        async for result in await run_model_suggestion_workflow(test_prompt, streaming=True):
+        async for result in await write_paper(test_prompt, streaming=True):
             final_result = result  # keep overwriting, so last one wins
             
         result = final_result
         
         
         # FOR NON STREAMING
-        # result = await run_model_suggestion_workflow_test("Find models for X-rays")
-        # print(result["model_suggestions"]) 
+        # result = await write_paper("Write a short paper about neural networks", streaming=False)
+        # print(result.get("formatted_paper", "No paper generated"))
         
         #check if we got anything
         if not result:
@@ -51,21 +51,23 @@ async def test_model_suggestion_streaming():
         
         
         # Check if successful
-        if result.get("model_suggestions", {}).get("suggestions_successful"):
-            print("✅ Model suggestions generated successfully!")
-            print("\n📋 MODEL SUGGESTIONS:")
+        if result.get("current_step") == "paper_finalized":
+            print("✅ Paper writing completed successfully!")
+            print("\n📄 FINAL PAPER:")
             print("-" * 30)
-            suggestions = result["model_suggestions"].get("model_suggestions", "")
-            print(suggestions[:1000] + "..." if len(suggestions) > 1000 else suggestions)
+            paper = (result.get("formatted_paper", "") or 
+                    result.get("final_outputs", {}).get("paper_content", "") or
+                    result.get("final_outputs", {}).get("markdown", ""))
+            print(paper[:1000] + "..." if len(paper) > 1000 else paper)
         else:
-            print("❌ Model suggestions failed")
+            print("❌ Paper writing failed")
             
         # Show workflow statistics
         print("\n📊 WORKFLOW STATISTICS:")
-        print(f"   - Papers analyzed: {len(result.get('arxiv_results', {}).get('papers', []))}")
-        print(f"   - Categories detected: {len(result.get('detected_categories', []))}")
-        print(f"   - Search iterations: {result.get('search_iteration', 0)}")
-        print(f"   - Suggestion iterations: {result.get('suggestion_iteration', 0)}")
+        print(f"   - Current step: {result.get('current_step', 'Unknown')}")
+        print(f"   - Paper length: {len(str(result.get('formatted_paper', '')))} characters")
+        print(f"   - Sections generated: {len(result.get('section_content', {}))}")
+        print(f"   - Refinement count: {result.get('refinement_count', 0)}")
 
         # Show any errors
         if result.get("errors"):
@@ -89,7 +91,7 @@ async def test_model_suggestion_streaming():
 
 if __name__ == "__main__":
     # Run the test
-    result = asyncio.run(test_model_suggestion_streaming())
+    result = asyncio.run(test_paper_writing_streaming())
 
     if result:
         print("\n🎉 Streaming test completed successfully!")

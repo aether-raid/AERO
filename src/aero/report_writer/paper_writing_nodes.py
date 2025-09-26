@@ -32,6 +32,7 @@ from pathlib import Path
 
 # LangGraph imports
 from langgraph.graph import StateGraph, END
+from langgraph.config import get_stream_writer
 from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
 from langgraph.graph.message import add_messages
 from typing import Dict, List, Any, Optional, TypedDict, Annotated
@@ -48,6 +49,35 @@ try:
     from docx import Document  # python-docx for DOCX
 except ImportError:
     Document = None
+
+# ==================================================================================
+# STREAMWRITER HELPER FUNCTION
+# ==================================================================================
+
+def _write_stream(message: str, key: str = "status"):
+    """Helper function to write to StreamWriter if available."""
+    try:
+        # Use LangGraph's get_stream_writer() without parameters (proper way)
+        writer = get_stream_writer()
+        writer({key: message})
+    except Exception:
+        # Fallback: try to get stream from config (for testing compatibility)
+        try:
+            # This fallback is for test compatibility only
+            import inspect
+            frame = inspect.currentframe()
+            while frame:
+                if 'config' in frame.f_locals and frame.f_locals['config']:
+                    config = frame.f_locals['config']
+                    stream = config.get("configurable", {}).get("stream")
+                    if stream and hasattr(stream, 'write'):
+                        stream.write(message)
+                        return
+                frame = frame.f_back
+        except Exception:
+            pass
+        # Final fallback: silently fail
+        pass
 
 class BaseState(TypedDict):
     """Base state for all workflows."""
@@ -327,6 +357,8 @@ def create_file_data_from_paths(file_paths: List[str]) -> List[Dict[str, Any]]:
 
 async def _analyze_results_node(state: PaperWritingState) -> PaperWritingState:
     """Node for analyzing experimental results and research context, including uploaded file data."""
+    
+    _write_stream("📊 Analyzing experimental results and research context")
 
     try:
         # Extract research context from the original prompt and any provided data
@@ -339,6 +371,7 @@ async def _analyze_results_node(state: PaperWritingState) -> PaperWritingState:
         data_analysis = ""
 
         if uploaded_data:
+            _write_stream(f"📎 Processing {len(uploaded_data)} uploaded files")
             uploaded_context = "\n\nUPLOADED FILE DATA:\n"
 
             for i, file_content in enumerate(uploaded_data, 1):
@@ -415,6 +448,8 @@ async def _analyze_results_node(state: PaperWritingState) -> PaperWritingState:
         Respond with a JSON object containing this analysis.
         """
 
+        _write_stream("🧠 Analyzing research context with AI")
+        
         response = await asyncio.get_event_loop().run_in_executor(
             None,
             lambda: client.chat.completions.create(
@@ -478,6 +513,10 @@ async def _analyze_results_node(state: PaperWritingState) -> PaperWritingState:
                 "methodology": "Data-driven analysis" if uploaded_data else "Theoretical approach"
             }
 
+        research_type = analysis_json.get("research_type", "unknown")
+        domain = analysis_json.get("domain", "unknown")
+        _write_stream(f"✅ Analysis complete - Type: {research_type}, Domain: {domain}")
+
         return {
             **state,
             "research_analysis": analysis_json,
@@ -494,6 +533,8 @@ async def _analyze_results_node(state: PaperWritingState) -> PaperWritingState:
 
 async def _setup_paper_node(state: PaperWritingState) -> PaperWritingState:
     """Node for LLM-driven template selection and comprehensive paper structure planning."""
+
+    _write_stream("🏗️ Setting up comprehensive paper structure")
 
     try:
         research_analysis = state.get("research_analysis", {})
@@ -601,6 +642,8 @@ async def _setup_paper_node(state: PaperWritingState) -> PaperWritingState:
         Focus on creating a structure that will result in a coherent, well-flowing academic paper when generated in a single comprehensive LLM call.
         """
 
+        _write_stream("🤖 Generating optimal paper structure with AI")
+
         response = await asyncio.get_event_loop().run_in_executor(
             None,
             lambda: client.chat.completions.create(
@@ -610,6 +653,7 @@ async def _setup_paper_node(state: PaperWritingState) -> PaperWritingState:
             )
         )
 
+        _write_stream("📋 Processing paper structure configuration")
         setup_text = response.choices[0].message.content.strip()
 
         # Try to extract JSON from response with robust parsing
@@ -791,6 +835,8 @@ async def _setup_paper_node(state: PaperWritingState) -> PaperWritingState:
 
         sections_count = len(setup_json.get("paper_structure", {}).get("sections", []))
 
+        _write_stream(f"✅ Paper structure ready - {sections_count} sections configured")
+
         return {
             **state,
             "paper_structure": setup_json.get("paper_structure", {}),
@@ -808,9 +854,12 @@ async def _setup_paper_node(state: PaperWritingState) -> PaperWritingState:
 async def _find_supporting_sources_node(state: PaperWritingState) -> PaperWritingState:
     """🔍 Find supporting sources and citations using Tavily web search, enhanced with uploaded file context."""
 
+    _write_stream("🔍 Finding supporting sources and citations")
+
     try:
         # Check if Tavily client is available
         if tavily_client is None:
+            _write_stream("⚠️ Web search unavailable - skipping source finding")
             return {
                 **state,
                 "supporting_sources": [],
@@ -829,6 +878,7 @@ async def _find_supporting_sources_node(state: PaperWritingState) -> PaperWritin
         # Extract file-specific context for enhanced search queries
         file_context = ""
         if uploaded_data:
+            _write_stream("📄 Analyzing uploaded files for search context")
 
             # Extract key terms and context from uploaded files
             csv_keywords = []
@@ -855,6 +905,7 @@ async def _find_supporting_sources_node(state: PaperWritingState) -> PaperWritin
             if doc_keywords:
                 file_context += f" Document keywords: {', '.join(doc_keywords[:8])}"
 
+        _write_stream("🔍 Generating search queries from research analysis")
         # Generate search queries based on research content
         key_findings = research_analysis.get("key_findings", [])
         methodology = research_analysis.get("methodology", "")
@@ -916,10 +967,14 @@ async def _find_supporting_sources_node(state: PaperWritingState) -> PaperWritin
         all_sources = []
         citation_database = {}
 
+        _write_stream(f"🌐 Performing {len(search_queries[:4])} web searches for sources")
+
         for i, search_item in enumerate(search_queries[:4]):  # Limit to 4 searches
             query = search_item["query"]
             purpose = search_item["purpose"]
             section = search_item["section"]
+
+            _write_stream(f"🔍 Search {i+1}: {query[:50]}...")
 
             try:
 
@@ -931,6 +986,7 @@ async def _find_supporting_sources_node(state: PaperWritingState) -> PaperWritin
 
                 if search_response and "results" in search_response:
                     sources_found = 0
+                    _write_stream(f"📄 Processing {len(search_response['results'])} results")
                     for result in search_response["results"]:
                         # Extract citation information
                         source_info = {
@@ -976,6 +1032,8 @@ async def _find_supporting_sources_node(state: PaperWritingState) -> PaperWritin
         total_sources = len(all_sources)
         sections_with_sources = len(citation_database)
 
+        _write_stream(f"✅ Found {total_sources} sources across {sections_with_sources} sections")
+
         return {
             **state,
             "supporting_sources": all_sources,
@@ -1001,15 +1059,22 @@ async def _find_supporting_sources_node(state: PaperWritingState) -> PaperWritin
 async def _generate_content_node(state: PaperWritingState) -> PaperWritingState:
     """Node for generating the entire paper content in a single comprehensive LLM call."""
     
+    _write_stream("🚀 Starting paper content generation")
+    
     # Check if this is a refinement iteration
     refinement_count = state.get("refinement_count", 0)
     critique_results = state.get("critique_results", {})
     
     if refinement_count > 0:
+        _write_stream(f"🔄 Refining paper based on critique (iteration {refinement_count})")
         major_issues = critique_results.get("major_issues", [])
         suggestions = critique_results.get("suggestions", [])
+    else:
+        _write_stream("✍️ Generating complete paper with citations")
 
     try:
+        _write_stream("📋 Preparing paper structure and context")
+        
         research_analysis = state.get("research_analysis", {})
         paper_structure = state.get("paper_structure", {})
         experimental_results = state.get("experimental_results", {})
@@ -1021,11 +1086,14 @@ async def _generate_content_node(state: PaperWritingState) -> PaperWritingState:
         citation_database = state.get("citation_database", {})
         source_validation = state.get("source_validation_results", {})
 
+        _write_stream("📚 Processing citations and sources")
+
         sections = paper_structure.get("sections", [])
 
         # Prepare comprehensive citations context for the entire paper
         citations_context = ""
         if supporting_sources:
+            _write_stream(f"🔗 Integrating {len(supporting_sources)} citations")
             citations_context = "\n\n📚 COMPREHENSIVE SOURCE DATABASE FOR CITATION:\n"
             citations_context += "=" * 60 + "\n"
             for i, source in enumerate(supporting_sources[:15], 1):  # Use up to 15 sources
@@ -1172,6 +1240,8 @@ Write a complete academic research paper based on the following requirements. Ge
 Generate the complete academic research paper now:
         """
 
+        _write_stream("🤖 Generating complete paper with AI")
+
         response = await asyncio.get_event_loop().run_in_executor(
             None,
             lambda: client.chat.completions.create(
@@ -1185,11 +1255,14 @@ Generate the complete academic research paper now:
             )
         )
 
+        _write_stream("📝 Processing generated paper content")
         complete_paper = response.choices[0].message.content.strip()
         
+        _write_stream("🔍 Parsing paper into sections")
         # Parse the complete paper into sections for compatibility with existing workflow
         section_content = _parse_complete_paper_into_sections(complete_paper, sections)
         
+        _write_stream("📚 Generating reference list")
         # Generate reference list from all used sources
         reference_list = _generate_reference_list(supporting_sources)
         if reference_list and "References" not in section_content:
@@ -1197,6 +1270,8 @@ Generate the complete academic research paper now:
 
         # Count citations used in the complete paper
         total_citations_used = sum(1 for i in range(1, len(supporting_sources) + 1) if f"[{i}]" in complete_paper)
+
+        _write_stream(f"✅ Paper generation complete - {len(complete_paper)} chars, {total_citations_used} citations")
 
         return {
             **state,
@@ -1724,6 +1799,8 @@ def _parse_critique_json(critique_response: str) -> Dict[str, Any]:
 async def _critique_paper_node(state: PaperWritingState) -> PaperWritingState:
     """Node for critiquing the complete paper generated via single LLM call."""
 
+    _write_stream("🔍 Critiquing paper quality and coherence")
+
     try:
         section_content = state.get("section_content", {})
         formatted_paper = state.get("formatted_paper", "")  # Get the complete paper from single call
@@ -1942,6 +2019,8 @@ Evaluate how well this paper demonstrates the advantages of comprehensive genera
 - "revise": Only if significant technical or content issues exist that don't disrupt the narrative flow
 """
 
+        _write_stream("🤖 Performing comprehensive AI critique")
+
         response = await asyncio.get_event_loop().run_in_executor(
             None,
             lambda: client.chat.completions.create(
@@ -1954,6 +2033,7 @@ Evaluate how well this paper demonstrates the advantages of comprehensive genera
             )
         )
 
+        _write_stream("📊 Processing critique results")
         critique_response = response.choices[0].message.content.strip()
 
         try:
@@ -2029,6 +2109,10 @@ Evaluate how well this paper demonstrates the advantages of comprehensive genera
                 }
             }
             state["critique_results"] = critique_data
+
+        overall_score = critique_data.get("overall_score", 0.0)
+        recommendation = critique_data.get("recommendation", "unknown")
+        _write_stream(f"✅ Critique complete - Score: {overall_score:.1f}/10, Recommendation: {recommendation}")
 
         return {
             **state,
@@ -2208,6 +2292,8 @@ async def _format_paper_node(state: PaperWritingState) -> PaperWritingState:
 async def _finalize_paper_node(state: PaperWritingState) -> PaperWritingState:
     """Node for finalizing the paper and creating output files."""
 
+    _write_stream("🎯 Finalizing paper and creating output")
+
     try:
         formatted_paper = state.get("formatted_paper", "")
         template_config = state.get("template_config", {})
@@ -2232,6 +2318,8 @@ async def _finalize_paper_node(state: PaperWritingState) -> PaperWritingState:
         # Store paper content in outputs but don't save to file
         final_outputs["paper_content"] = formatted_paper
         final_outputs["display_method"] = "terminal_output"
+
+        _write_stream("✅ Paper writing completed successfully!")
 
         return {
             **state,
@@ -2303,7 +2391,7 @@ async def write_paper(
     file_paths: List[str] = None,
     files_data: List[Dict[str, Any]] = None,
     target_venue: str = "general",
-    enable_streaming: bool = False
+    streaming: bool = False
 ) -> Dict[str, Any]:
     """
     Standalone function to write a research paper using the paper writing workflow.
@@ -2315,10 +2403,11 @@ async def write_paper(
         file_paths (List[str], optional): List of file paths to extract content from
         files_data (List[Dict[str, Any]], optional): List of file data dicts with 'content' (bytes) and 'filename' (str)
         target_venue (str, optional): Target publication venue
-        enable_streaming (bool, optional): Enable real-time streaming output
+        streaming (bool, optional): If True, yield updates as they happen. If False, return only final state.
 
     Returns:
-        Dict[str, Any]: Complete workflow results including the generated paper
+        - If streaming=False: final workflow state (dict)
+        - If streaming=True: async generator yielding updates
 
     Example:
         # Using pre-formatted data
@@ -2399,34 +2488,36 @@ async def write_paper(
         final_outputs={}
     )
 
-    # Execute the workflow
-    try:
-        if enable_streaming:
-            # Run with streaming (silent mode for clean streaming)
-            step_counter = 0
-            result = initial_state
-            config = {"recursion_limit": 50}
-            
-            async for chunk in graph.astream(initial_state, config=config, stream_mode="updates"):
-                if chunk:
-                    step_counter += 1
-                    
-                    for node_name, node_updates in chunk.items():
-                        # Update result with latest state (no printing)
-                        result.update(node_updates)
-        else:
-            # Run without streaming
-            result = await graph.ainvoke(initial_state)
+    # 🚀 Non-streaming mode
+    if not streaming:
+        final_state = await graph.ainvoke(initial_state)
+        return final_state
 
-        # Return the complete results silently
-        return dict(result)
+    # 🚀 Streaming mode
+    async def _stream():
+        final_data = None  # track last update
 
-    except Exception as e:
-        return {
-            "success": False,
-            "error": str(e),
-            "current_step": "workflow_error"
-        }
+        async for chunk in graph.astream(initial_state, stream_mode=["updates","custom"]):
+            stream_mode, data = chunk
+
+            # Debugging / logging (optional, can remove to stay "silent")
+            if stream_mode == "updates":
+                key = list(data.keys())[0] if data else None
+                print(f"Step: {key}")
+            elif stream_mode == "custom" and data.get("status"):
+                print(f"Updates: {data['status']}")
+
+            # Stream intermediate updates
+            yield data
+            final_data = data
+
+        # ✅ After loop ends, yield final state - extract from finalize_paper if available
+        if final_data:
+            # Extract the actual state from finalize_paper node if it exists
+            if 'finalize_paper' in final_data:
+                yield final_data['finalize_paper']
+
+    return _stream()
 
 # ==================================================================================
 # COMMAND LINE INTERFACE
