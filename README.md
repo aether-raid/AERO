@@ -95,12 +95,23 @@ Given a research task description, the system analyzes the problem characteristi
 
 #### Using it as a Python module:
 You can import and use the workflow in your own Python scripts:
-   ```python
-    from Suggest_models.model_suggestion_nodes import run_model_suggestion_workflow
+```python
+from aero.model_researcher import suggest_models
 
-    result = await run_model_suggestion_workflow(user_input)
-    print(result["model_suggestions"]["model_suggestions"])
-   ```
+# Non-streaming
+result = await suggest_models(
+   prompt="Classify chest X-rays",
+   streaming=False,
+)
+print(result["model_suggestions"])
+
+# Streaming
+async for update in await suggest_models(
+   prompt="Classify chest X-rays",
+   streaming=True,
+):
+   handle_stream(update)
+```
 
 #### General Workflow:
 1. **Task Analysis**: Extracts research properties and decomposes the task into ML categories (classification, regression, generation, etc.) using predefined ML research categories.
@@ -153,44 +164,38 @@ Given experimental results and research context, the system analyzes findings, d
 #### Using it as a Python module:
 You can import and use the workflow in your own Python scripts:
 
-**Basic Usage:**
-   ```python
-    from suggest_additional_experiments import suggest_experiments
+**Basic Usage (non-streaming):**
+```python
+from aero.experimentalist import experiment_suggestions
 
-    result = await suggest_experiments(
-        "I completed CNN experiments for image classification",
-        experimental_results={"model_performance": {"accuracy": 0.87}}
-    )
-    print(result["experiment_suggestions"])
-   ```
+result = await experiment_suggestions(
+   prompt="I completed CNN experiments for image classification",
+   experimental_results={"model_performance": {"accuracy": 0.87}},
+)
+print(result["experiment_suggestions"])
+```
 
-**File-Based Usage:**
-   ```python
-    from suggest_additional_experiments import run_experiment_suggestion_workflow_from_file
+**Streaming Usage:**
+```python
+from aero.experimentalist import experiment_suggestions
 
-    # Use file content as prompt
-    result = await run_experiment_suggestion_workflow_from_file(
-        file_path="experimental_results.txt"
-    )
+async for update in await experiment_suggestions(
+   prompt="I completed CNN experiments for image classification",
+   file_path="data/experiments.xlsx",
+   streaming=True,
+):
+   handle_stream(update)
+```
 
-    # Or provide custom prompt with file context
-    result = await run_experiment_suggestion_workflow_from_file(
-        file_path="experimental_data.json",
-        user_prompt="Analyze these experimental results and suggest follow-up experiments",
-        experimental_results={"additional": "context"}
-    )
-   ```
+**Convenience Helper (non-streaming):**
+```python
+from aero.experimentalist import suggest_experiments_nostream
 
-**Advanced Usage:**
-   ```python
-    from suggest_additional_experiments import run_experiment_suggestion_workflow
-
-    result = await run_experiment_suggestion_workflow(
-        user_prompt="Your research question here",
-        experimental_results={"your": "experimental data"},
-        uploaded_data=["additional context files"]
-    )
-   ```
+result = await suggest_experiments_nostream(
+   prompt="Analyze these results and suggest follow-up experiments",
+   experimental_results={"accuracy": 0.89},
+)
+```
 
 #### General Workflow:
 1. **Findings Analysis**: Analyzes experimental results and research context to understand current state and opportunities.
