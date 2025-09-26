@@ -549,11 +549,9 @@ async def _analyze_experiment_findings_node(state: ExperimentSuggestionState) ->
         # Combine user query with uploaded data (CSV or other file contents)
         full_prompt_context = _combine_query_and_data(original_prompt, uploaded_data)
         
+        
         # Display uploaded data info if present
-        if uploaded_data:
-            for i, data in enumerate(uploaded_data):
-                _write_stream(f"Processing file {i+1}: {len(data)} characters")
-
+       
         # Check for previous analysis iterations and validation feedback
         analysis_iterations = state.get("analysis_iterations", [])
         analysis_validation_results = state.get("analysis_validation_results", {})
@@ -2178,7 +2176,7 @@ def _validate_experiment_papers_node(state: ExperimentSuggestionState) -> Experi
 
 async def _distill_paper_methodologies_node(state: ExperimentSuggestionState) -> ExperimentSuggestionState:
     """Distill and condense methodology and experimental information from validated papers."""
-    print("📚 Step 6: Distilling methodology and experimental information from papers...")
+    _write_stream("Distilling methodology and experimental information from papers...")
     state["current_step"] = "distill_methodologies"
 
     client = state["client"]
@@ -2452,7 +2450,7 @@ async def _suggest_experiments_tree_2_node(state: ExperimentSuggestionState) -> 
         CRITICAL: Your experiment MUST be 100% grounded in the provided literature. If you cannot design an experiment using ONLY the content from these papers, state this explicitly rather than introducing external knowledge.
         """
 
-        print("🧪 Generating first experiment...")
+        _write_stream("Generating first experiment...")
         response1 = client.chat.completions.create(
             model=model,
             temperature=0.3,
@@ -2536,7 +2534,7 @@ async def _suggest_experiments_tree_2_node(state: ExperimentSuggestionState) -> 
         - If you cannot design a sufficiently different experiment using ONLY the content from these papers, state this explicitly rather than creating a similar experiment
         """
 
-        print("🧪 Generating second experiment (ensuring novelty)...")
+        _write_stream("Generating second experiment (ensuring novelty)...")
         response2 = client.chat.completions.create(
             model=model,
             temperature=0.4,  # Slightly higher temperature for more creativity in second experiment
@@ -2575,7 +2573,7 @@ async def _suggest_experiments_tree_2_node(state: ExperimentSuggestionState) -> 
 - Deliverables aligned with literature outcomes
 """
 
-        print("✅ Both experiments combined successfully")
+        _write_stream("Both experiments combined successfully")
         
         state["experiment_suggestions"] = experiment_suggestions
         state["suggestion_source"] = "llm_generated"
@@ -2596,7 +2594,7 @@ async def _suggest_experiments_tree_2_node(state: ExperimentSuggestionState) -> 
             "iteration": state["current_experiment_iteration"]
         }
         
-        _#write_stream("✅ Experiment suggestions generated successfully")
+        _write_stream("Experiment suggestions generated successfully")
         _write_stream(f"Experiments designed: {state['experiment_summary']['total_experiments']}")
         
         # Set next node for workflow routing
@@ -3099,18 +3097,18 @@ def _should_continue_with_papers(state: ExperimentSuggestionState) -> str:
 
     # Safety check: After 3 iterations, force continue
     if search_iteration >= 3:
-        print("🛑 Maximum search iterations reached (3), forcing continue...")
+        _write_stream("Maximum search iterations reached (3), forcing continue...")
         return "continue"
 
     # Map validation decisions to workflow routing
     if validation_decision == "search_backup":
-        print("🔄 Searching for additional papers...")
+        _write_stream("Searching for additional papers...")
         return "search_backup"
     elif validation_decision == "search_new":
-        print("🔄 Starting new paper search...")
+        _write_stream("Starting new paper search...")
         return "search_new"
     else:
-        print("✅ Continuing with current papers...")
+        _write_stream("Continuing with current papers...")
         return "continue"
 
 
@@ -3121,7 +3119,7 @@ def _should_proceed_with_direction(state: ExperimentSuggestionState) -> str:
 
     # Safety check: After 3 iterations, force proceed
     if len(direction_iterations) >= 3:
-        print("🛑 Maximum direction validation iterations reached (3), forcing proceed...")
+        _write_stream("Maximum direction validation iterations reached (3), forcing proceed...")
         return "proceed"
 
     if validation_decision == "PASS":
@@ -3137,7 +3135,7 @@ def _should_proceed_with_analysis(state: ExperimentSuggestionState) -> str:
 
     # Safety check: After 3 iterations, force proceed to prevent infinite loops
     if len(analysis_iterations) >= 3:
-        print("🛑 Maximum analysis iterations reached (3), forcing proceed to research direction...")
+        _write_stream("Maximum analysis iterations reached (3), forcing proceed to research direction...")
         return "decide_research_direction"
 
     return next_node
@@ -3229,7 +3227,7 @@ def _build_analyze_and_suggest_experiment_graph() -> StateGraph:
 # MAIN WORKFLOW RUNNER
 # ==================================================================================
 
-async def run_experiment_suggestion_workflow(
+async def run_experiment_suggestion_workflow_nonstream(
     user_prompt: str,
     experimental_results: Dict[str, Any] = None,
     uploaded_data: List[str] = None,
@@ -3311,19 +3309,23 @@ async def run_experiment_suggestion_workflow(
     print("=" * 80)
 
     # Handle file input if provided
-    file_content = []
+    file_content: List[str] = []
+    file_warnings: List[str] = []
     if file_path:
         try:
             print(f"📖 Reading file: {file_path}")
-            with open(file_path, 'r', encoding='utf-8') as f:
-                file_content = [f.read()]
-            print(f"✅ File loaded successfully ({len(file_content[0])} characters)")
+            file_content, file_warnings = _load_text_file_safely(file_path)
+            if file_content:
+                print(f"✅ File loaded successfully ({len(file_content[0])} characters)")
         except FileNotFoundError:
             print(f"❌ Error: File not found - {file_path}")
-            raise FileNotFoundError(f"Input file not found: {file_path}")
+            raise
         except Exception as e:
             print(f"❌ Error reading file: {str(e)}")
-            raise Exception(f"Error reading input file: {str(e)}")
+            raise
+
+        for warning in file_warnings:
+            print(warning)
 
     # Combine uploaded_data with file_content if both are provided
     combined_uploaded_data = (uploaded_data or []) + file_content
@@ -3455,95 +3457,13 @@ async def run_experiment_suggestion_workflow(
 
 
 
-# Convenience function for quick testing
-async def test_experiment_suggestion_workflow():
-    """
-    Test function to run the workflow with sample data.
-    """
-    print("⚠️ This is a test template. Please provide actual experimental results.")
-    
-    # Sample experimental results
-    sample_experimental_results = {
-        "model_performance": {
-            "accuracy": 0.87,
-            "precision": 0.85,
-            "recall": 0.89,
-            "f1_score": 0.87
-        },
-        "training_details": {
-            "epochs": 50,
-            "learning_rate": 0.001,
-            "batch_size": 32,
-            "dataset_size": 10000
-        },
-        "observations": [
-            "Model converged after 35 epochs",
-            "Validation accuracy plateaued around epoch 40",
-            "Some overfitting observed in final epochs"
-        ],
-        "challenges": [
-            "Class imbalance in dataset",
-            "Limited computational resources"
-        ]
-    }
-    
-    # Run workflow
-    result = await run_experiment_suggestion_workflow(
-        user_prompt="I have completed initial experiments on image classification with CNNs. Need suggestions for follow-up experiments to improve model performance and generalization.",
-        experimental_results=sample_experimental_results
-        # Optional: Add file_path="path/to/your/file.txt" to load content from a file
-        # file_path="experimental_results.txt"
-    )
-    
-    print("Final result:", "Success" if result.get("experiment_suggestions") else "Failed")
-    print("===="*3)
-    print(result.get("experiment_suggestions", "No suggestions generated"))
-    return result
 
-
-async def run_experiment_suggestion_workflow_from_file(
-    file_path: str,
-    user_prompt: str = None,
-    experimental_results: Dict[str, Any] = None
-) -> Dict[str, Any]:
-    """
-    Convenience function to run experiment suggestion workflow with file input.
-    
-    Args:
-        file_path: Path to the input file containing experimental data or context
-        user_prompt: Optional user prompt (if None, will use file content as prompt)
-        experimental_results: Optional experimental results dict
-        
-    Returns:
-        Dictionary containing the final workflow state with results
-    """
-    # Use file content as prompt if no prompt provided
-    if user_prompt is None:
-        try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                user_prompt = f.read().strip()
-            print(f"📝 Using file content as prompt ({len(user_prompt)} characters)")
-        except Exception as e:
-            raise Exception(f"Could not read file for prompt: {str(e)}")
-
-    # Default empty experimental results if not provided
-    if experimental_results is None:
-        experimental_results = {}
-
-    # Run the main workflow with file input
-    return await run_experiment_suggestion_workflow(
-        user_prompt=user_prompt,
-        experimental_results=experimental_results,
-        file_path=file_path
-    )
-
-
-
-async def run_experiment_suggestion_workflow_stream(
+async def run_experiment_suggestion_workflow(
     user_prompt: str,
     experimental_results: Dict[str, Any] = None,
     uploaded_data: List[str] = None,
-    file_path: str = None
+    file_path: str = None,
+    streaming: bool = False
 ) -> Dict[str, Any]:
     """
     Compile and run the complete experiment suggestion workflow.
@@ -3719,8 +3639,9 @@ async def run_experiment_suggestion_workflow_stream(
         
         print("🔄 Running workflow...")
         
-       
-        
+        if not streaming:
+            final_state = await workflow_graph.ainvoke(initial_state)
+            return final_state.get("validate_experiments_tree_2", final_state)
         # Run the workflow with increased recursion limit to prevent infinite loops
         async def _stream():
             final_data = None  # track last update
@@ -3766,10 +3687,13 @@ async def test_experiment_stream():
     test_prompt = "I have completed initial experiments on image classification with CNNs. Need suggestions for follow-up experiments to improve model performance and generalization."
     data_dir=r"C:\Users\Jacobs laptop\Downloads\AETHER Hackathon.xlsx"
     final_result = None
-    async for result in await run_experiment_suggestion_workflow_stream(test_prompt,file_path=data_dir):
+    async for result in await run_experiment_suggestion_workflow(test_prompt,file_path=data_dir, streaming=False):
         final_result = result  # keep overwriting, so last one wins
         
     result = final_result
+    
+    # FOR NON STREAMING
+    #result = await run_model_suggestion_workflow("Find models for X-rays", streaming=False)
     
    
     return result
