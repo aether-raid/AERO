@@ -1,15 +1,17 @@
 # AERO: Automated Exploration, Research & Orchestration – A Framework for Machine Learning Research
 
-AERO is a modular, end-to-end framework designed to streamline and enhance machine learning research. It consists of **five main workflows** that collectively support the research lifecycle, from problem formulation to publication. The system leverages Large Language Models (LLMs) within a graph-based orchestration engine (LangGraph) to enable flexible, interpretable, and automated guidance for researchers, ensuring that each stage of the workflow is context-aware and informed by prior knowledge.
+Modern machine learning research involves many interdependent yet complex steps, from identifying suitable models for a problem to designing reproducible experiments and ultimately communicating results. Researchers often need to consume a large set of rapidly growing literature, populated by various new and emerging models, and translate these to concrete experiments with their research tasks.
 
+This library presents **AERO**, a flexible toolkit for researchers to move faster from ideas to insight and capable of reducing friction in this process, while still ensuring researchers have full control on the research direction.
 
-## 📝 Abstract
-Machine learning researchers often face significant challenges in conducting end-to-end research due to the complexity of modern problems, the rapidly growing volume of literature, and the multi-step nature of tasks such as model selection, experiment design, data analysis, and paper writing. In recent years, Large Language Models (LLMs) have shown remarkable capabilities in knowledge extraction, reasoning, code generation, and summarization, making them well-suited to assist researchers across these tasks. A modular architecture is ideal, where core LLM capabilities operate independently of any specific workflow, enabling flexible orchestration and integration.
+AERO includes a set of modular, LLM-driven workflows that can be used independently or in combination:
+- **Model Researcher**: decomposes ML tasks into properties and recommends suitable models.
+- **Research Planner**: builds structured research plans from problem statements.
+- **Experiment Designer**: translates plans into experimental setups and even generates code.
+- **Experimentalist**: analyzes experimental data and suggests possible next steps.
+- **Report Writer**: drafts reports based on results and context.
 
-We propose AERO, a modular and adaptable framework for machine learning research, which integrates LLMs as a core component and orchestrates five main workflows: **model recommendation, research planning, experiment design, data analysis, and paper writing**. This modular and adaptable approach highlights the value of LLM-driven workflows in supporting efficient, systematic, and context-aware machine learning research.
-
-
----
+These workflows are powered by [LangGraph](https://github.com/langchain-ai/langgraph) for graph-based orchestration of LLM nodes, and many utilize the [arXiv API](https://arxiv.org/help/api/index) for paper search and research.
 
 ## 🛠️ Installation and Set-Up
 
@@ -88,13 +90,16 @@ TAVILY_API_KEY='YOUR_TAVILY_API_KEY'
 
 ---
 
-## 🚀 Running the Workflows
+## 🚀 Getting Started
 
-### 1. Model Recommendation 🤖
-Given a research task description, the system analyzes the problem characteristics, searches for relevant literature, and recommends the most suitable machine learning models. The final output includes model suggestions with detailed justifications, implementation considerations, and literature references.
+### Model Researcher 🤖
 
-#### Using it as a Python module:
+Given a problem statement, this system analyzes the problem characteristics, searches for relevant literature, and recommends the most suitable machine learning models. The final output includes model suggestions with detailed justifications, implementation considerations, and literature references.
+
+#### General Usage
+
 You can import and use the workflow in your own Python scripts:
+
 ```python
 from aero.model_researcher import suggest_models
 
@@ -113,7 +118,8 @@ async for update in await suggest_models(
    handle_stream(update)
 ```
 
-#### General Workflow:
+#### Overall Workflow
+
 1. **Task Analysis**: Extracts research properties and decomposes the task into ML categories (classification, regression, generation, etc.) using predefined ML research categories.
 2. **Literature Search**: Generates optimized arXiv search queries and retrieves relevant research papers using semantic search and relevance ranking.
 3. **Paper Validation**: Filters and validates retrieved papers for methodological relevance and quality.
@@ -123,33 +129,46 @@ async for update in await suggest_models(
 
 ![Model Researcher Workflow](diagrams/model_researcher_flow.png)
 
-### 2. Research Planning
+### Research Planner 📋
+
+Given a domain task, this system generates a novel problem statement and then designs a comprehensive research plan for that problem.
+
+#### General Usage
+
+blah blah
+
+#### Overall Workflow
+
 blah blah
 
 ![Research Planner Workflow](diagrams/research_planner_flow.png)
 
-### 3. Experiment Design 🧪
+### Experiment Designer ⚗️
+
 Given a research plan, the system extracts key information and retrieves supporting literature to generate experiment ideas and designs. The final output is a detailed experimental design accompanied by executable Python code.
 
-#### Using it as a Python module:
+#### General Usage
+
 You can import and use the workflow in your own Python scripts:
-   ```python
-    from design_experiment import run_experiment_designer # Full Workflow 
 
-   # Regular Usage
-    result = run_experiment_designer(user_input)
-    print(result["design"])
-    print(result["code"])
+```python
+ from design_experiment import run_experiment_designer # Full Workflow 
 
-   # Streaming Usage (yields status updates, final output is a dict):
-   async for update in await run_experiment_designer(user_input, stream=True):
-      print(update)
-   ```
+# Regular Usage
+ result = run_experiment_designer(user_input)
+ print(result["design"])
+ print(result["code"])
 
-#### General Workflow:
+# Streaming Usage (yields status updates, final output is a dict):
+async for update in await run_experiment_designer(user_input, stream=True):
+   print(update)
+```
+
+#### Overall Workflow
+
 1. Input Processing: Extracts goals, hypotheses, experiment ideas (if provided), and other relevant details from a research plan.
 2. Literature Retrieval System: Uses a Hybrid-RAG (Retrieval-Augmented Generation) approach to search and retrieve supporting literature (arXiv API).
-3. Idea Generation: Employs [SakanaAI’s Tree-based Experimentation Module](https://github.com/SakanaAI/treequest) to generate promising experiment ideas (when no experiment idea is provided).
+3. Idea Generation: Employs [AB-MCTS by Sakana AI](https://github.com/SakanaAI/treequest) to generate promising experiment ideas (when no experiment idea is provided).
 4. Design Refinement: Refines experiment ideas into structured experiment designs that include:
    - Datasets
    - Methodologies and implementation steps
@@ -160,39 +179,32 @@ You can import and use the workflow in your own Python scripts:
 
 ![Experiment Designer Workflow](diagrams/experiment_designer_flow.png)
 
-
-
-### 4. Data Analysis & Suggest Experiments 🧪
+### Experimentalist 🔬
 Given experimental results and research context, the system analyzes findings, determines research direction, searches for supporting literature, and generates comprehensive experiment suggestions. The final output includes detailed experimental designs with literature grounding and iterative validation.
 
-#### Using it as a Python module:
+#### General Usage
+
 You can import and use the workflow in your own Python scripts:
 
-**Basic Usage (non-streaming):**
 ```python
 from aero.experimentalist import experiment_suggestions
 
+# Non-streaming
 result = await experiment_suggestions(
    prompt="I completed CNN experiments for image classification",
    experimental_results={"model_performance": {"accuracy": 0.87}},
 )
 print(result["experiment_suggestions"])
-```
 
-**Streaming Usage:**
-```python
-from aero.experimentalist import experiment_suggestions
-
+# Streaming
 async for update in await experiment_suggestions(
    prompt="I completed CNN experiments for image classification",
    file_path="data/experiments.xlsx",
    streaming=True,
 ):
    handle_stream(update)
-```
 
-**Convenience Helper (non-streaming):**
-```python
+# Convenience Helper (non-streaming)
 from aero.experimentalist import suggest_experiments_nostream
 
 result = await suggest_experiments_nostream(
@@ -201,7 +213,8 @@ result = await suggest_experiments_nostream(
 )
 ```
 
-#### General Workflow:
+#### Overall Workflow
+
 1. **Findings Analysis**: Analyzes experimental results and research context to understand current state and opportunities.
 2. **Analysis Validation**: Ensures the research analysis is comprehensive and well-structured.
 3. **Research Direction**: Determines optimal research direction based on analysis and key questions.
@@ -213,21 +226,27 @@ result = await suggest_experiments_nostream(
 9. **Quality Validation**: LLM-based validation with iterative improvement (up to 5 iterations).
 10. **Final Suggestions**: Produces validated experiment designs with detailed methodologies, expected outcomes, and success metrics.
 
-![Experimentalist Worfklow](diagrams/experimentalist_flow.png)
+![Experimentalist Workflow](diagrams/experimentalist_flow.png)
 
-### 5. Paper Writing 
+### Report Writer 📑
+
+Given the research context and a set of experimental data, this system generates a complete report with integrated citations and additional context.
+
+#### General Usage
+
+blah blah
+
+#### Overall Workflow
+
 blah blah
 
 ![Report Writer Workflow](diagrams/report_writer_flow.png)
 
----
+## References
 
-
-## 📄 License
-This project is open source and available under the MIT License.
-
-
-## 🤝 Acknowledgements
-- [LangGraph](https://github.com/langchain-ai/langgraph)
-- [arXiv API](https://arxiv.org/help/api/index)
-- [SakanaAI](https://sakana.ai/)
+[1] Inoue, Y., Misaki, K., Imajuku, Y., Kuroki, S., Nakamura, T., & Akiba, T. (2025). Wider or deeper? scaling llm inference-time compute with adaptive branching tree search. _arXiv preprint arXiv:2503.04412_.
+[2] Lu, C., Lu, C., Lange, R. T., Foerster, J., Clune, J., & Ha, D. (2024). The ai scientist: Towards fully automated open-ended scientific discovery. _arXiv preprint arXiv:2408.06292_.
+[3] Yamada, Y., Lange, R. T., Lu, C., Hu, S., Lu, C., Foerster, J., ... & Ha, D. (2025). The ai scientist-v2: Workshop-level automated scientific discovery via agentic tree search. _arXiv preprint arXiv:2504.08066_.
+[4] Wehr, G., Rideaux, R., Fox, A. J., Lightfoot, D. R., Tangen, J., Mattingley, J. B., & Ehrhardt, S. E. (2025). Virtuous Machines: Towards Artificial General Science. _arXiv preprint arXiv:2508.13421_.
+[5] Gottweis, J., Weng, W. H., Daryin, A., Tu, T., Palepu, A., Sirkovic, P., ... & Natarajan, V. (2025). Towards an AI co-scientist. _arXiv preprint arXiv:2502.18864_.
+[6] Schmidgall, S., Su, Y., Wang, Z., Sun, X., Wu, J., Yu, X., ... & Barsoum, E. (2025). Agent laboratory: Using llm agents as research assistants. _arXiv preprint arXiv:2501.04227._
