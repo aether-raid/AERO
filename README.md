@@ -1,4 +1,15 @@
-# AERO: Automated Exploration, Research & Orchestration – A Framework for Machine Learning Research
+<div align="center">
+   <h1>
+    <b>AERO: Automated Exploration, Research & Orchestration</b><br>
+    <b>A Framework for Machine Learning Research</b>
+  </h1>
+</div>
+
+<!-- <p align="center">
+  📚 <a href="https://pub.sakana.ai/ai-scientist-v2/paper">[Paper]</a> |
+  📝 <a href="https://sakana.ai/ai-scientist-first-publication/"> [Blog Post]</a> |
+  📂 <a href="https://github.com/SakanaAI/AI-Scientist-ICLR2025-Workshop-Experiment"> [ICLR2025 Workshop Experiment]</a>
+</p> -->
 
 Modern machine learning research involves many interdependent yet complex steps, from identifying suitable models for a problem to designing reproducible experiments and ultimately communicating results. Researchers often need to consume a large set of rapidly growing literature, populated by various new and emerging models, and translate these to concrete experiments with their research tasks.
 
@@ -12,6 +23,21 @@ AERO includes a set of modular, LLM-driven workflows that can be used independen
 - **Report Writer**: drafts reports based on results and context.
 
 These workflows are powered by [LangGraph](https://github.com/langchain-ai/langgraph) for graph-based orchestration of LLM nodes, and many utilize the [arXiv API](https://arxiv.org/help/api/index) for paper search and research.
+
+## Table of Contents
+
+1. [Installation and Set-Up](#%EF%B8%8F-installation-and-set-up)
+   * [Installing from PyPI](#installing-from-pypi)
+   * [Installing from Source](#installing-from-source)
+   * [Contributing](#contributing)
+   * [Configuring Environment Variables](#configuring-environment-variables)
+2. [Getting Started](#-getting-started)
+   * [Model Researcher](#model-researcher-)
+   * [Research Planner](#research-planner-)
+   * [Experiment Designer](#experiment-designer-%EF%B8%8F)
+   * [Experimentalist](#experimentalist-)
+   * [Report Writer](#report-writer-)
+3.  [References](#references)
 
 ## 🛠️ Installation and Set-Up
 
