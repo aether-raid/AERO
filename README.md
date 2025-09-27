@@ -1,9 +1,9 @@
-<div align="center">
-   <h1>
-    <b>AERO: Automated Exploration, Research & Orchestration</b><br>
-    <b>A Framework for Machine Learning Research</b>
-  </h1>
-</div>
+# AERO: Automated Exploration, Research & Orchestration – A Framework for Machine Learning Research
+
+<!-- [![PyPI Latest Release](https://img.shields.io/pypi/v/aero-ml.svg?logo=python&logoColor=white&color=blue)](https://pypi.org/project/aero-ml/)
+[![GitHub Release Date](https://img.shields.io/github/release-date/aether-raid/aero?logo=github&label=latest%20release&color=blue)](https://github.com/aether-raid/aero/releases/latest)
+![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/aether-raid/aero/python-publish.yml?label=PyPI%20Publish&color=blue) -->
+
 
 <!-- <p align="center">
   📚 <a href="https://pub.sakana.ai/ai-scientist-v2/paper">[Paper]</a> |
