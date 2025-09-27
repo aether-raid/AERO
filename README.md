@@ -245,8 +245,13 @@ blah blah
 ## References
 
 [1] Inoue, Y., Misaki, K., Imajuku, Y., Kuroki, S., Nakamura, T., & Akiba, T. (2025). Wider or deeper? scaling llm inference-time compute with adaptive branching tree search. _arXiv preprint arXiv:2503.04412_.
+
 [2] Lu, C., Lu, C., Lange, R. T., Foerster, J., Clune, J., & Ha, D. (2024). The ai scientist: Towards fully automated open-ended scientific discovery. _arXiv preprint arXiv:2408.06292_.
+
 [3] Yamada, Y., Lange, R. T., Lu, C., Hu, S., Lu, C., Foerster, J., ... & Ha, D. (2025). The ai scientist-v2: Workshop-level automated scientific discovery via agentic tree search. _arXiv preprint arXiv:2504.08066_.
+
 [4] Wehr, G., Rideaux, R., Fox, A. J., Lightfoot, D. R., Tangen, J., Mattingley, J. B., & Ehrhardt, S. E. (2025). Virtuous Machines: Towards Artificial General Science. _arXiv preprint arXiv:2508.13421_.
+
 [5] Gottweis, J., Weng, W. H., Daryin, A., Tu, T., Palepu, A., Sirkovic, P., ... & Natarajan, V. (2025). Towards an AI co-scientist. _arXiv preprint arXiv:2502.18864_.
+
 [6] Schmidgall, S., Su, Y., Wang, Z., Sun, X., Wu, J., Yu, X., ... & Barsoum, E. (2025). Agent laboratory: Using llm agents as research assistants. _arXiv preprint arXiv:2501.04227._
