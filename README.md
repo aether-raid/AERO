@@ -1,8 +1,8 @@
 # AERO: Automated Exploration, Research & Orchestration – A Framework for Machine Learning Research
 
-<!-- [![PyPI Latest Release](https://img.shields.io/pypi/v/aero-ml.svg?logo=python&logoColor=white&color=blue)](https://pypi.org/project/aero-ml/)
+[![PyPI Latest Release](https://img.shields.io/pypi/v/aeroml.svg?logo=python&logoColor=white&color=blue)](https://pypi.org/project/aeroml/)
 [![GitHub Release Date](https://img.shields.io/github/release-date/aether-raid/aero?logo=github&label=latest%20release&color=blue)](https://github.com/aether-raid/aero/releases/latest)
-![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/aether-raid/aero/python-publish.yml?label=PyPI%20Publish&color=blue) -->
+![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/aether-raid/aero/python-publish.yml?label=PyPI%20Publish&color=blue)
 
 
 <!-- <p align="center">
