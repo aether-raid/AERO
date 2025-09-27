@@ -976,7 +976,8 @@ async def _validate_analysis_node(state: ExperimentSuggestionState) -> Experimen
             completeness_gaps = validation_json.get("completeness_gaps", [])
             accuracy_concerns = validation_json.get("accuracy_concerns", [])
             improvement_recommendations = validation_json.get("improvement_recommendations", [])
-            
+            _write_stream(f"Analysis Validation Result: {validation_result} with overall score {overall_score:.2f}, needs 0.9 to pass.")
+            _write_stream(f"Critical Issues: {len(critical_issues)}, Completeness Gaps: {len(completeness_gaps)}, Accuracy Concerns: {len(accuracy_concerns)}")
             # Safety check: Enforce RUTHLESS thresholds
             if overall_score < 0.90 or len(critical_issues) > 0 or len(completeness_gaps) > 0 or len(accuracy_concerns) > 0:
                 validation_result = "FAIL"
@@ -1529,7 +1530,15 @@ async def _validate_research_direction_node(state: ExperimentSuggestionState) ->
 
 def _generate_experiment_search_query_node(state: ExperimentSuggestionState) -> ExperimentSuggestionState:
     """Generate ArXiv search query for domain-specific experimental guidance papers."""
-    _write_stream("Experiment Search Query: Generating targeted search for experimental guidance.")
+    search_iteration = state.get("experiment_search_iteration", 0)
+    validation_results = state.get("experiment_paper_validation_results", {})
+    is_search_new = validation_results.get("decision") == "search_new"
+    
+    if search_iteration == 0:
+        _write_stream("Experiment Search Query: Generating targeted search for experimental guidance.")
+    else:
+        _write_stream(f"Experiment Search Query (Retry {search_iteration + 1}): Generating refined search based on validation feedback...")
+        
     model = state["model"]
     client = state["client"]
     try:
@@ -1549,7 +1558,15 @@ def _generate_experiment_search_query_node(state: ExperimentSuggestionState) -> 
         application_area = domain_analysis.get("application_area", "")
         data_type = domain_analysis.get("data_type", "")
         
-        # Generate domain-specific search query
+        # Get previous search query and validation feedback for retries
+        previous_query = state.get("experiment_search_query", "")
+        search_guidance = {}
+        
+        if is_search_new and validation_results.get("validation_data"):
+            search_guidance = validation_results["validation_data"].get("search_guidance", {})
+            _write_stream("Using validation feedback to generate improved search query...")
+        
+        # Generate domain-specific search query with conditional previous query info
         query_prompt = f"""
         Generate a focused ArXiv search query to find papers in the same research domain that contain experimental methodologies and guidance.
 
@@ -1562,7 +1579,35 @@ def _generate_experiment_search_query_node(state: ExperimentSuggestionState) -> 
         
         RESEARCH DIRECTION: {direction_text}
         
-        KEY QUESTIONS: {chr(10).join(f"• {q}" for q in key_questions[:3])}
+        KEY QUESTIONS: {chr(10).join(f"• {q}" for q in key_questions[:3])}"""
+        
+        # Only add previous query info if it exists and this is a retry
+        if previous_query and search_iteration > 0:
+            query_prompt += f"""
+            
+        PREVIOUS FAILED QUERY: {previous_query}
+        SEARCH ITERATION: {search_iteration + 1}
+        
+        VALIDATION FEEDBACK:
+        {validation_results.get("reasoning", "Previous papers lacked sufficient experimental methodology")}
+        
+        SEARCH GUIDANCE FROM VALIDATION:
+        - New search terms: {search_guidance.get('new_search_terms', [])}
+        - Focus areas: {search_guidance.get('focus_areas', [])}
+        - Avoid terms: {search_guidance.get('avoid_terms', [])}
+        
+        Generate 4 DIFFERENT search terms for ArXiv API, separated by forward slashes (/):
+        
+        Rules for RETRY query:
+        - Term 1: Different primary technique than "{previous_query.split('/')[0] if '/' in previous_query else ''}"
+        - Term 2: Alternative task perspective or methodology focus
+        - Term 3: Stronger experimental focus (e.g., "experimental validation", "empirical study", "systematic evaluation")
+        - Term 4: Specific experimental context (e.g., "ablation", "benchmark", "comparison study")
+        
+        Focus on finding papers with STRONGER experimental methodology than the previous search.
+        Use the suggested new search terms if provided: {search_guidance.get('new_search_terms', [])}"""
+        else:
+            query_prompt += """
 
         Generate 4 search terms for ArXiv API, separated by forward slashes (/), that will find papers in the SAME DOMAIN with experimental guidance:
         
@@ -1587,11 +1632,14 @@ def _generate_experiment_search_query_node(state: ExperimentSuggestionState) -> 
         Return ONLY the 4-term query string (no explanation).
         """
     
+        # Use higher temperature for retries to get different results
+        temperature = 0.3 if search_iteration > 0 else 0.1
+        
         response = client.chat.completions.create(
             model=model,
-            temperature=0.1,
+            temperature=temperature,
             messages=[
-                {"role": "system", "content": "Generate focused domain-specific ArXiv search queries. Return only the 4-term query separated by forward slashes."},
+                {"role": "system", "content": "Generate focused domain-specific ArXiv search queries. For retries, ensure the new query is significantly different from previous attempts."},
                 {"role": "user", "content": query_prompt}
             ]
         )
@@ -1600,6 +1648,36 @@ def _generate_experiment_search_query_node(state: ExperimentSuggestionState) -> 
         
         # Clean the query (remove quotes, extra spaces)
         search_query = search_query.replace('"', '').replace("'", "").strip()
+        
+        # Validate that retry query is actually different
+        if search_iteration > 0 and previous_query and search_query == previous_query:
+            _write_stream("Generated query is identical to previous - creating fallback different query...")
+            
+            # Create a guaranteed different query
+            base_terms = previous_query.split('/') if '/' in previous_query else ["machine learning", "experimental", "evaluation", "methodology"]
+            
+            # Alternative search strategies for different domains
+            if "computer vision" in primary_domain.lower() or "cv" in primary_domain.lower():
+                alternative_queries = [
+                    "ResNet/image classification/systematic evaluation/ImageNet",
+                    "convolutional neural network/experimental analysis/performance comparison/computer vision",
+                    "deep learning/ablation study/benchmark evaluation/visual recognition"
+                ]
+            elif "nlp" in primary_domain.lower() or "text" in primary_domain.lower():
+                alternative_queries = [
+                    "BERT/text classification/experimental evaluation/NLP",
+                    "transformer/language model/systematic comparison/text analysis",
+                    "neural language processing/empirical study/benchmark/natural language"
+                ]
+            else:
+                alternative_queries = [
+                    "neural network/experimental methodology/empirical evaluation/machine learning",
+                    "deep learning/systematic study/performance analysis/artificial intelligence",
+                    "machine learning/experimental validation/comparative study/methodology"
+                ]
+            
+            # Pick different query based on iteration
+            search_query = alternative_queries[search_iteration % len(alternative_queries)]
         
         # Ensure it has the right format (4 terms separated by /)
         if search_query.count('/') != 3:
@@ -1610,8 +1688,9 @@ def _generate_experiment_search_query_node(state: ExperimentSuggestionState) -> 
             term4 = application_area or primary_domain
             search_query = f"{term1}/{term2}/{term3}/{term4}"
         
-        _write_stream(f"Generated domain-specific search query: {search_query}")
-        #_write_stream(f"🎯 Targeting domain: {primary_domain} | Task: {task_type} | Application: {application_area}")
+        _write_stream(f"Generated {'refined' if search_iteration > 0 else 'initial'} search query: {search_query}")
+        if search_iteration > 0 and previous_query:
+            _write_stream(f"Previous query was: {previous_query}")
         
         return {
             **state,
@@ -1623,12 +1702,18 @@ def _generate_experiment_search_query_node(state: ExperimentSuggestionState) -> 
         
     except Exception as e:
         print(f"Error generating experiment search query: {str(e)}")
-        # Fallback query - try to extract domain from original prompt
+        # Enhanced fallback for retries
         prompt_lower = original_prompt.lower()
         direction_lower = direction_text.lower()
         
-        # Check for self-supervised learning direction
-        if "self-supervised" in direction_lower or "ssl" in direction_lower:
+        if search_iteration > 0:
+            fallback_queries = [
+                "experimental methodology/systematic evaluation/empirical study/research methodology",
+                "performance analysis/comparative study/experimental validation/machine learning",
+                "ablation study/experimental design/empirical analysis/systematic comparison"
+            ]
+            fallback_query = fallback_queries[search_iteration % len(fallback_queries)]
+        elif "self-supervised" in direction_lower or "ssl" in direction_lower:
             fallback_query = "SimCLR/contrastive learning/CIFAR-10/pretraining"
         elif "object detection" in prompt_lower or "detection" in prompt_lower:
             fallback_query = "object detection/evaluation/experimental/computer vision"
@@ -3132,11 +3217,16 @@ def _should_proceed_with_analysis(state: ExperimentSuggestionState) -> str:
     """Determine whether to proceed with analysis or revise it."""
     next_node = state.get("next_node", "decide_research_direction")
     analysis_iterations = state.get("analysis_iterations", [])
+    validation_result = state.get("analysis_validation_decision", "FAIL")
 
     # Safety check: After 3 iterations, force proceed to prevent infinite loops
     if len(analysis_iterations) >= 3:
         _write_stream("Maximum analysis iterations reached (3), forcing proceed to research direction...")
         return "decide_research_direction"
+    elif validation_result == "PASS":
+        return "decide_research_direction"
+    else:
+        return "analyze_findings"
 
     return next_node
 # ==================================================================================
@@ -3652,7 +3742,8 @@ async def run_experiment_suggestion_workflow(
                 # Debugging / logging (optional, can remove to stay "silent")
                 if stream_mode == "updates":
                     key = list(data.keys())[0] if data else None
-                    print(f"Step: {key}")
+                    print(f"Node Complete: {key}.")
+                    print("-" * 20)
                 elif stream_mode == "custom" and data.get("status"):
                     print(f"Updates: {data['status']}")
 
@@ -3687,7 +3778,7 @@ async def test_experiment_stream():
     test_prompt = "I have completed initial experiments on image classification with CNNs. Need suggestions for follow-up experiments to improve model performance and generalization."
     data_dir=r"C:\Users\Jacobs laptop\Downloads\AETHER Hackathon.xlsx"
     final_result = None
-    async for result in await run_experiment_suggestion_workflow(test_prompt,file_path=data_dir, streaming=False):
+    async for result in await run_experiment_suggestion_workflow(test_prompt,file_path=data_dir, streaming=True):
         final_result = result  # keep overwriting, so last one wins
         
     result = final_result

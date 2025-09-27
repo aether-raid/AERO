@@ -2145,7 +2145,8 @@ async def run_model_suggestion_workflow(
             # Debugging / logging (optional, can remove to stay "silent")
             if stream_mode == "updates":
                 key = list(data.keys())[0] if data else None
-                print(f"Step: {key}")
+                print(f"Node Complete: {key}.")
+                print("-" * 20)
             elif stream_mode == "custom" and data.get("status"):
                 print(f"Updates: {data['status']}")
 
