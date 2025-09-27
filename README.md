@@ -43,16 +43,16 @@ These workflows are powered by [LangGraph](https://github.com/langchain-ai/langg
 
 ### Installing from PyPI
 
-Yes, we have published our framework on PyPI! To install the aero library and all its dependencies, the easiest method would be to use `pip` to query PyPI. This should, by default, be present in your Python installation. To, install run the following command in a terminal or Command Prompt / Powershell:
+Yes, we have published our framework on PyPI at `aeroml`! To install the `aero` library and all its dependencies, the easiest method would be to use `pip` to query PyPI. This should, by default, be present in your Python installation. To, install run the following command in a terminal or Command Prompt / Powershell:
 
 ```bash
-$ pip install aero
+$ pip install aeroml
 ```
 
 Depending on the OS, you might need to use `pip3` instead. If the command is not found, you can choose to use the following command too:
 
 ```bash
-$ python -m pip install aero
+$ python -m pip install aeroml
 ```
 
 Here too, `python` or `pip` might be replaced with `py` or `python3` and `pip3` depending on the OS and installation configuration. If you have any issues with this, it is always helpful to consult 
