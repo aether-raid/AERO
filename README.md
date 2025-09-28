@@ -1,8 +1,8 @@
 # AERO: Automated Exploration, Research & Orchestration – A Framework for Machine Learning Research
 
-<!-- [![PyPI Latest Release](https://img.shields.io/pypi/v/aero-ml.svg?logo=python&logoColor=white&color=blue)](https://pypi.org/project/aero-ml/)
+[![PyPI Latest Release](https://img.shields.io/pypi/v/aeroml.svg?logo=python&logoColor=white&color=blue)](https://pypi.org/project/aeroml/)
 [![GitHub Release Date](https://img.shields.io/github/release-date/aether-raid/aero?logo=github&label=latest%20release&color=blue)](https://github.com/aether-raid/aero/releases/latest)
-![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/aether-raid/aero/python-publish.yml?label=PyPI%20Publish&color=blue) -->
+![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/aether-raid/aero/python-publish.yml?label=PyPI%20Publish&color=blue)
 
 
 <!-- <p align="center">
@@ -43,16 +43,16 @@ These workflows are powered by [LangGraph](https://github.com/langchain-ai/langg
 
 ### Installing from PyPI
 
-Yes, we have published our framework on PyPI! To install the aero library and all its dependencies, the easiest method would be to use `pip` to query PyPI. This should, by default, be present in your Python installation. To, install run the following command in a terminal or Command Prompt / Powershell:
+Yes, we have published our framework on PyPI at `aeroml`! To install the `aero` library and all its dependencies, the easiest method would be to use `pip` to query PyPI. This should, by default, be present in your Python installation. To, install run the following command in a terminal or Command Prompt / Powershell:
 
 ```bash
-$ pip install aero
+$ pip install aeroml
 ```
 
 Depending on the OS, you might need to use `pip3` instead. If the command is not found, you can choose to use the following command too:
 
 ```bash
-$ python -m pip install aero
+$ python -m pip install aeroml
 ```
 
 Here too, `python` or `pip` might be replaced with `py` or `python3` and `pip3` depending on the OS and installation configuration. If you have any issues with this, it is always helpful to consult 
