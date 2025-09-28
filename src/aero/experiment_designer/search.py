@@ -4,35 +4,14 @@ import pickle
 import numpy as np
 import xml.etree.ElementTree as ET
 import urllib.request as libreq
-from dotenv import load_dotenv
 from openai import AsyncOpenAI
 from concurrent.futures import ThreadPoolExecutor
 from aero.utils.arxiv_paper_utils import ArxivPaperProcessor
 from aero.experiment_designer.utils import get_llm_response, stream_writer
 from langgraph.graph import StateGraph, END
 import asyncio
-
-# --- Initialize clients and ArXiv processor ---
-try:
-    load_dotenv('env.example')  # Load from env.example first
-    load_dotenv()  # This will override with .env if present
-except:
-    pass  # dotenv not available, will rely on system environment variables
-
-primary_client = AsyncOpenAI(
-    api_key=os.getenv("OPENAI_API_KEY"),
-    base_url=os.getenv("BASE_URL")
-)
-
-PRIMARY_MODEL = os.getenv("DEFAULT_MODEL", "gemini/gemini-2.5-flash")
-arxiv_processor = None
-
 from sentence_transformers import SentenceTransformer
-embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
 import requests
-import os
-from dotenv import load_dotenv
-
 
 # --- Dataset Links Searcher ---
 # List of known dataset repository domains
@@ -102,9 +81,14 @@ def search_dataset_online(dataset_name: str, num_results: int = 5):
 # --- ArXiv Processor Initialization ---
 def initialize_arxiv_processor():
     """Initialize ArXiv processor with LLM client"""
-    global arxiv_processor
-    if arxiv_processor is None:
-        arxiv_processor = ArxivPaperProcessor(primary_client, PRIMARY_MODEL)
+    
+    primary_client = AsyncOpenAI(
+        api_key=os.getenv("OPENAI_API_KEY"),
+        base_url=os.getenv("BASE_URL")
+    )
+
+    PRIMARY_MODEL = os.getenv("DEFAULT_MODEL", "gemini/gemini-2.5-flash")
+    arxiv_processor = ArxivPaperProcessor(primary_client, PRIMARY_MODEL)
     return arxiv_processor
 
 # --- Extract Keywords ---
@@ -127,18 +111,20 @@ async def extract_keywords_from_hypothesis(hypothesis):
     keywords = [kw.strip() for kw in response.replace('*', '').split(',') if kw.strip()]
     return keywords[:5]
 
+def get_embedding_model():
+    model_name = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
+    return SentenceTransformer(model_name, device='cpu')
+
 # --- Vectorization Helper Functions ---
-async def vectorize(text):
+async def vectorize(text, arxiv_processor=None, embedding_model=None):
     """Vectorize text using sentence-transformers"""
-    global arxiv_processor
-    if not arxiv_processor:
+    if arxiv_processor is None:
         arxiv_processor = initialize_arxiv_processor()
     
-    model = embedding_model
-    if model is None:
-        return None
+    if embedding_model is None:
+        embedding_model = get_embedding_model()
+    embedding = embedding_model.encode([text], convert_to_tensor=False, show_progress_bar=False)
 
-    embedding = model.encode([text], convert_to_tensor=False, show_progress_bar=False)
     normalized_embedding = normalize_vector(embedding[0])
     return normalized_embedding
 
@@ -254,16 +240,15 @@ async def llm_experiment_relevance_validation(chunk, hypothesis):
         return False
 
 # --- Filter Papers by Relevance ---
-async def filter_papers_by_relevance(papers, hypothesis, min_relevance=0.6):
+async def filter_papers_by_relevance(papers, hypothesis, min_relevance=0.6, arxiv_processor=None):
     """Filter papers by title+abstract relevance to hypothesis using cosine similarity"""
     try:
-        global arxiv_processor
-        if not arxiv_processor:
+        if arxiv_processor is None:
             arxiv_processor = initialize_arxiv_processor()
         
         # Vectorize hypothesis
-        hypothesis_embedding = await vectorize(hypothesis)
-        
+        hypothesis_embedding = await vectorize(hypothesis, arxiv_processor=arxiv_processor)
+
         relevant_papers = []
         for paper in papers:
             # Vectorize paper title + abstract
@@ -288,7 +273,7 @@ async def filter_papers_by_relevance(papers, hypothesis, min_relevance=0.6):
         return papers
 
 # --- ArXiv Search by Abstracts ---
-async def search_arxiv_by_abstracts(keywords, hypothesis, max_papers=20):
+async def search_arxiv_by_abstracts(keywords, hypothesis, max_papers=20, arxiv_processor=None):
     """Search ArXiv and filter papers by abstract relevance to hypothesis"""
     #stream_writer(f"🔍 Searching ArXiv for: {', '.join(keywords[:3])}")
     await asyncio.sleep(0.5)  # Allow stream message to appear before LLM calls
@@ -311,8 +296,7 @@ async def search_arxiv_by_abstracts(keywords, hypothesis, max_papers=20):
         return []
 
     # Initialize processor
-    global arxiv_processor
-    if not arxiv_processor:
+    if arxiv_processor is None:
         arxiv_processor = initialize_arxiv_processor()
 
     # Extract basic paper info
@@ -322,7 +306,7 @@ async def search_arxiv_by_abstracts(keywords, hypothesis, max_papers=20):
         papers.append(paper)
 
     # Filter by abstract relevance to hypothesis
-    relevant_papers = await filter_papers_by_relevance(papers, hypothesis, min_relevance=0.6)
+    relevant_papers = await filter_papers_by_relevance(papers, hypothesis, min_relevance=0.6, arxiv_processor=arxiv_processor)
     #stream_writer(f"📊 {len(relevant_papers)}/{len(papers)} papers relevant based on abstracts")
     await asyncio.sleep(0.5)
     
@@ -334,8 +318,7 @@ async def download_and_extract_experiments(papers, hypothesis):
     """Download papers and extract experiment designs using LLM"""
     if not papers:
         return []
-    global arxiv_processor
-    if not arxiv_processor:
+    if arxiv_processor is None:
         arxiv_processor = initialize_arxiv_processor()
     #stream_writer(f"📥 Downloading {len(papers)} papers and extracting experiments...")
     await asyncio.sleep(0.5)
