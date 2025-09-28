@@ -21,7 +21,7 @@ except:
 
 primary_client = AsyncOpenAI(
     api_key=os.getenv("OPENAI_API_KEY"),
-    base_url=os.getenv("BASE_URL", "https://agents.aetherraid.dev")
+    base_url=os.getenv("BASE_URL")
 )
 
 PRIMARY_MODEL = os.getenv("DEFAULT_MODEL", "gemini/gemini-2.5-flash")

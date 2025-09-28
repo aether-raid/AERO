@@ -103,7 +103,7 @@ def _initialize_clients(config: Optional[Dict[str, Any]] = None):
     if _client is None:
         try:
             api_key = os.getenv("OPENAI_API_KEY")
-            base_url = os.getenv("BASE_URL") or "https://agents.aetherraid.dev"
+            base_url = os.getenv("BASE_URL")
             _model = os.getenv("MODEL") or "gemini/gemini-2.5-flash"
 
             if api_key:

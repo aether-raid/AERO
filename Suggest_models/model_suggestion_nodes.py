@@ -2063,7 +2063,7 @@ async def run_model_suggestion_workflow(
         if not api_key:
             raise ValueError("OPENAI_API_KEY not found in env.example file. Please ensure the file exists and contains a valid API key.")
         
-        base_url = _load_from_env_file("BASE_URL") or "https://agents.aetherraid.dev"
+        base_url = _load_from_env_file("BASE_URL")
         model = _load_from_env_file("DEFAULT_MODEL") or "gemini/gemini-2.5-flash"
         model_cheap = "gemini/gemini-2.5-flash-lite"
         model_expensive = "gemini/gemini-2.5-pro"
