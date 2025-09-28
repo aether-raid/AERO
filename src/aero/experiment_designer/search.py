@@ -38,11 +38,6 @@ def search_dataset_online(dataset_name: str, num_results: int = 5):
     Search for dataset source/download links using Google Custom Search API.
     Only returns links from known dataset repositories.
     """
-    try:
-        load_dotenv('env.example')  # Load from env.example first
-        load_dotenv()  # This will override with .env if present
-    except:
-        pass  # dotenv not available, will rely on system environment variables
     api_key = os.getenv("GOOGLE_API_KEY")
     cx = os.getenv("CX")
     if not api_key or not cx:
