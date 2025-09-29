@@ -3,10 +3,9 @@ import re
 import json
 import asyncio
 from dataclasses import dataclass, field
-from aero.experiment_designer.utils import get_llm_response, get_gpt_llm_response, stream_writer, stream_step_name
+from aero.experiment_designer.utils import get_llm_response, stream_writer
 from aero.experiment_designer.search import build_experiment_search_workflow, search_dataset_online
 from aero.experiment_designer.code import build_codegen_graph, CodeGenState
-from langchain_core.messages import AIMessage
 
 @dataclass
 class ExperimentState:
@@ -185,7 +184,7 @@ async def design_node(state: ExperimentState, writer=None) -> ExperimentState:
             {code_tag_instructions}
 
             """
-        content = await get_gpt_llm_response([{"role": "user", "content": prompt}])
+        content = await get_llm_response([{"role": "user", "content": prompt}])
         state.refined_design_content = content.strip()
     else:
         state.refinement_round += 1
@@ -224,7 +223,7 @@ async def design_node(state: ExperimentState, writer=None) -> ExperimentState:
             {code_tag_instructions}
 
             """
-    content = await get_gpt_llm_response([{"role": "user", "content": prompt}])
+    content = await get_llm_response([{"role": "user", "content": prompt}])
     if state.refinement_round > 0:
         state.refined_design_content = content.strip()
     else:
@@ -289,33 +288,6 @@ async def score_node(state: ExperimentState, writer=None) -> ExperimentState:
         # Format scores as a readable string
         scores_str = "Scores:\n" + "\n".join(f"  - {k}: {v}" for k, v in state.scores.items())
         await stream_writer(scores_str, writer=writer, stream_mode="custom")
-
-    return state
-
-# --- Node: Generate code for experiment design ---
-async def generate_code_node(state: ExperimentState, writer=None) -> ExperimentState:
-    # Use the most refined design if available
-    design = state.refined_design_content or state.full_design_content
-    if design:
-        code_state = CodeGenState(experiment_input=design)
-        code_graph = build_codegen_graph(writer=writer)
-        final_code_state = await code_graph.ainvoke(code_state)
-  
-        if hasattr(final_code_state, "final_output"):
-            state.generated_code = final_code_state.final_output
-        elif isinstance(final_code_state, dict) and "final_output" in final_code_state:
-            state.generated_code = final_code_state["final_output"]
-        else:
-            # fallback: if code workflow returned full generated_code list or text
-            if hasattr(final_code_state, "generated_code"):
-                state.generated_code = final_code_state.generated_code
-            elif isinstance(final_code_state, dict) and "generated_code" in final_code_state:
-                state.generated_code = final_code_state["generated_code"]
-
-        # Clean the design output using remove_code_tags
-        cleaned_design = remove_code_tags(design)
-        state.full_design_content = cleaned_design
-        state.refined_design_content = cleaned_design
 
     return state
 

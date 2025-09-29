@@ -3356,7 +3356,7 @@ async def run_experiment_suggestion_workflow_nonstream(
         if not api_key:
             raise ValueError("OPENAI_API_KEY not found in environment variables. Please ensure it is set.")
 
-        base_url = os.getenv("BASE_URL") or "https://agents.aetherraid.dev"
+        base_url = os.getenv("BASE_URL")
         model = os.getenv("DEFAULT_MODEL") or "gemini/gemini-2.5-flash"
         model_cheap = "gemini/gemini-2.5-flash-lite"
         model_expensive = "gemini/gemini-2.5-pro"
@@ -3588,7 +3588,7 @@ async def run_experiment_suggestion_workflow(
         if not api_key:
             raise ValueError("OPENAI_API_KEY not found in environment variables. Please ensure it is set.")
 
-        base_url = os.getenv("BASE_URL") or "https://agents.aetherraid.dev"
+        base_url = os.getenv("BASE_URL")
         model = os.getenv("DEFAULT_MODEL") or "gemini/gemini-2.5-flash"
         model_cheap = "gemini/gemini-2.5-flash-lite"
         model_expensive = "gemini/gemini-2.5-pro"

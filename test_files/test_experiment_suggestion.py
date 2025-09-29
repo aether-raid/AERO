@@ -24,7 +24,7 @@ async def test_experiment_suggestion():
 
     try:
         # Import the workflow function
-        from src.aero.experiment_designer.experiment_suggestion_nodes import run_experiment_suggestion_workflow
+        from src.aero.experimentalist.experiment_suggestion_nodes import run_experiment_suggestion_workflow
 
         # Sample experimental results for testing
         sample_experimental_results = {

@@ -1,33 +1,14 @@
-import os
 import json
 import re
 import asyncio
-from openai import AsyncOpenAI
-from dotenv import load_dotenv
 from langgraph.config import get_stream_writer
-
-# --- Load environment variables ---
-try:
-    load_dotenv('env.example')  # Load from env.example first
-    load_dotenv()  # This will override with .env if present
-except:
-    pass  # dotenv not available, will rely on system environment variables
-
-# Initialize clients and ArXiv processor
-primary_client = AsyncOpenAI(
-    api_key=os.getenv("OPENAI_API_KEY"),
-    base_url=os.getenv("BASE_URL", "https://agents.aetherraid.dev")
-)
-
-PRIMARY_MODEL = os.getenv("DEFAULT_MODEL", "gemini/gemini-2.5-flash")
-arxiv_processor = None
-
-GPT_MODEL = os.getenv("DEFAULT_MODEL", "gpt-4o")
-arxiv_processor = None
+from aero.utils.llm_client import load_openai_client
 
 # --- LLM response ---
 async def get_llm_response(messages, temperature=0.2, max_tokens=None):
     """Get LLM response using OpenAI API with cost tracking"""
+    # Initialize clients and ArXiv processor
+    primary_client, PRIMARY_MODEL = load_openai_client()
     
     await asyncio.sleep(0.02)
     
@@ -36,29 +17,7 @@ async def get_llm_response(messages, temperature=0.2, max_tokens=None):
         if max_tokens:
             kwargs["max_tokens"] = max_tokens
 
-        response = await primary_client.chat.completions.create(**kwargs)
-        content = response.choices[0].message.content
-        if content is None:
-            content = "No response"
-                
-        return content.strip()
-                                    
-    except Exception as e:
-        return f"Error: API call failed (e: {e})"
-
-
-# --- GPT LLM response ---
-async def get_gpt_llm_response(messages, temperature=0.2, max_tokens=None):
-    """Get LLM response using OpenAI API with cost tracking"""
-    
-    await asyncio.sleep(0.02)
-    
-    try:
-        kwargs = {"model": GPT_MODEL, "messages": messages, "temperature": temperature}
-        if max_tokens:
-            kwargs["max_tokens"] = max_tokens
-
-        response = await primary_client.chat.completions.create(**kwargs)
+        response = primary_client.chat.completions.create(**kwargs)
         content = response.choices[0].message.content
         if content is None:
             content = "No response"
@@ -127,7 +86,7 @@ async def extract_research_components(user_input):
     
     try:
         content = await get_llm_response([
-            {"role": "system", "content": "Extract research components. Return only valid JSON with hypotheses as string array."},
+            {"role": "system", "content": "Extract research components from possibly unstructured or single-paragraph input. Return only valid JSON with hypotheses as string array."},
             {"role": "user", "content": prompt}
         ], temperature=0.2)
         

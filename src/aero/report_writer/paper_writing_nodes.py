@@ -148,7 +148,7 @@ def _initialize_clients():
     if client is None:
         # Load configuration from env.example file
         api_key = os.getenv("OPENAI_API_KEY")
-        base_url = os.getenv("BASE_URL") or "https://agents.aetherraid.dev"
+        base_url = os.getenv("BASE_URL")
         model = os.getenv("DEFAULT_MODEL") or "gemini/gemini-2.5-flash"
 
         if not api_key:

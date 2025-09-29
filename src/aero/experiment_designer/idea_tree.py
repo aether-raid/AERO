@@ -291,9 +291,6 @@ class ExperimentTreeSystem:
         numbers = re.findall(r'\d+', response)
         scores = [int(x) for x in numbers[:4]]
 
-        if len(scores) < 4:
-            return 0.5
-
         # Define weights depending on node level
         # Order: Clarity, Feasibility, Novelty, Soundness
         weight_map = {
