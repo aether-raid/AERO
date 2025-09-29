@@ -22,7 +22,7 @@ async def test_research_planning_streaming():
 
     try:
         # Import the streaming workflow function
-        from aero.research_planner.research_planning_nodes import plan_research
+        from research_planner.main import plan_research
 
         # Sample prompt for testing
         test_prompt = "Develop a comprehensive research plan for investigating the effectiveness of transformer-based models in natural language processing applications."

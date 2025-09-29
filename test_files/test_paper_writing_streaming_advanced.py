@@ -22,7 +22,7 @@ async def test_paper_writing_streaming():
 
     try:
         # Import the streaming workflow function
-        from aero.report_writer.paper_writing_nodes import write_paper
+        from report_writer.main import write_paper
 
         # Sample prompt for testing
         test_prompt = "Write a comprehensive paper about machine learning fundamentals, covering supervised learning, unsupervised learning, and deep learning approaches."

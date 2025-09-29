@@ -58,7 +58,7 @@ __package_info__ = {
 def _import_main_functions():
     """Lazy import to avoid dependency issues."""
     try:
-        from ..src.aero.research_planner.research_planning_nodes import plan_research, build_research_planning_graph
+        from .main import plan_research, build_research_planning_graph
         return plan_research, build_research_planning_graph
     except ImportError as e:
         print(f"Warning: Cannot import research planning functions: {e}")
@@ -239,7 +239,7 @@ __all__ = [
 
 # Try to import and expose main functions if dependencies are available
 try:
-    from ..src.aero.research_planner.research_planning_nodes import plan_research, build_research_planning_graph
+    from .main import plan_research, build_research_planning_graph
     __all__.extend(['plan_research', 'build_research_planning_graph'])
 except ImportError:
     # Dependencies not available, will use lazy loading
