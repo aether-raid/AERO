@@ -18,7 +18,7 @@ from langchain_core.messages import AIMessage
 from dataclasses import dataclass, field
 import sys
 import os
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from utils.arxiv_paper_utils import ArxivPaperProcessor
 from langgraph.graph import StateGraph, END
 from typing import Dict, List, Any, Optional, TypedDict, Annotated
@@ -2068,6 +2068,7 @@ async def run_model_suggestion_workflow(
     try:
         import openai
         from utils.arxiv_paper_utils import ArxivPaperProcessor
+        
         
     except ImportError as e:
         error_msg = f"Failed to import required modules: {e}"
