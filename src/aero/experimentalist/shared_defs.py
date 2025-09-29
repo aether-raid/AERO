@@ -5,6 +5,10 @@ from pathlib import Path
 from typing import List, Dict, Any, TypedDict, Annotated, Tuple
 from langchain_core.messages import BaseMessage
 from langgraph.graph import add_messages
+import pandas as pd 
+from langgraph.config import get_stream_writer
+import inspect
+from openpyxl import load_workbook 
 @dataclass
 class Evidence:
     snippet: str
@@ -109,8 +113,7 @@ class ExperimentSuggestionState(BaseState):
 # ==================================================================================
 # STREAMWRITER HELPER FUNCTION
 # ==================================================================================
-from langgraph.config import get_stream_writer
-import inspect
+
 def _write_stream(message: str, key: str = "status"):
     """Helper function to write to StreamWriter if available."""
     try:
@@ -252,14 +255,7 @@ def _load_text_file_safely(file_path: str) -> Tuple[List[str], List[str]]:
     suffix = path.suffix.lower()
 
     if suffix in {".xlsx", ".xls", ".xlsm"}:
-        try:
-            import pandas as pd  # type: ignore
-        except ImportError:
-            warnings.append(
-                "⚠️ Unable to parse Excel file because pandas is not installed; skipping attachment content."
-            )
-            return [], warnings
-
+       
         try:
             excel_data = pd.read_excel(path, sheet_name=None)
         except Exception as exc:  # pragma: no cover - pandas-specific errors
@@ -292,13 +288,13 @@ def _load_text_file_safely(file_path: str) -> Tuple[List[str], List[str]]:
                 if alt_df is not None and not alt_df.empty:
                     usable_df = alt_df
                     warnings.append(
-                        f"ℹ️ Excel sheet '{sheet_name}' parsed without headers due to sparse data."
+                        f"Excel sheet '{sheet_name}' parsed without headers due to sparse data."
                     )
 
             if usable_df is None or usable_df.empty:
                 if workbook is None and not openpyxl_failed:
                     try:
-                        from openpyxl import load_workbook  # type: ignore
+                         # type: ignore
 
                         workbook = load_workbook(path, read_only=True, data_only=True)
                     except Exception:  # pragma: no cover - openpyxl specific errors
@@ -339,7 +335,7 @@ def _load_text_file_safely(file_path: str) -> Tuple[List[str], List[str]]:
             preview_df = usable_df.head(200)
             if len(usable_df) > len(preview_df):
                 warnings.append(
-                    f"ℹ️ Excel sheet '{sheet_name}' large; attached first {len(preview_df)} rows only."
+                    f"Excel sheet '{sheet_name}' large; attached first {len(preview_df)} rows only."
                 )
             preview = preview_df.to_csv(index=False)
             cleaned = _clean_text_for_utf8(preview)
@@ -347,55 +343,49 @@ def _load_text_file_safely(file_path: str) -> Tuple[List[str], List[str]]:
             if len(snippet) > 10000:
                 snippet = snippet[:10000] + "\n... (truncated)"
                 warnings.append(
-                    f"ℹ️ Excel sheet '{sheet_name}' truncated to 10k characters."
+                    f"Excel sheet '{sheet_name}' truncated to 10k characters."
                 )
             text_snippets.append(snippet)
 
         if not text_snippets:
             warnings.append(
-                f"ℹ️ Excel file '{path.name}' contained no tabular data to attach."
+                f"Excel file '{path.name}' contained no tabular data to attach."
             )
 
         return text_snippets, warnings
 
     if suffix in {".csv", ".tsv"}:
+    
+        sep = "\t" if suffix == ".tsv" else ","
         try:
-            import pandas as pd  # type: ignore
-        except ImportError:
-            warnings.append(
-                "⚠️ Unable to parse CSV/TSV file because pandas is not installed; falling back to raw text."
-            )
-        else:
-            sep = "\t" if suffix == ".tsv" else ","
+            df = pd.read_csv(path, sep=sep)
+        except UnicodeDecodeError:
             try:
-                df = pd.read_csv(path, sep=sep)
-            except UnicodeDecodeError:
-                try:
-                    df = pd.read_csv(path, sep=sep, encoding="latin-1")
-                    warnings.append(
-                        "⚠️ CSV decoding failed with UTF-8; loaded using latin-1 encoding."
-                    )
-                except Exception as exc:
-                    warnings.append(
-                        f"⚠️ Failed to parse CSV/TSV file '{path.name}': {exc}; falling back to raw text."
-                    )
-                    df = None
-            except Exception as exc:  # pragma: no cover - pandas-specific errors
+                df = pd.read_csv(path, sep=sep, encoding="latin-1")
                 warnings.append(
-                    f"⚠️ Failed to parse CSV/TSV file '{path.name}': {exc}; falling back to raw text."
+                    "CSV decoding failed with UTF-8; loaded using latin-1 encoding."
+                )
+            except Exception as exc:
+                warnings.append(
+                    f"Failed to parse CSV/TSV file '{path.name}': {exc}; falling back to raw text."
                 )
                 df = None
+        except Exception as exc:  # pragma: no cover - pandas-specific errors
+            warnings.append(
+                f"Failed to parse CSV/TSV file '{path.name}': {exc}; falling back to raw text."
+            )
+            df = None
 
-            if df is not None:
-                preview_df = df.head(200)
-                if len(df) > len(preview_df):
-                    warnings.append(
-                        f"ℹ️ CSV/TSV file '{path.name}' large; attached first {len(preview_df)} rows only."
-                    )
-                preview_text = preview_df.to_csv(index=False)
-                cleaned = _clean_text_for_utf8(preview_text)
-                
-                return [cleaned], warnings
+        if df is not None:
+            preview_df = df.head(200)
+            if len(df) > len(preview_df):
+                warnings.append(
+                    f"CSV/TSV file '{path.name}' large; attached first {len(preview_df)} rows only."
+                )
+            preview_text = preview_df.to_csv(index=False)
+            cleaned = _clean_text_for_utf8(preview_text)
+            
+            return [cleaned], warnings
 
     # Fallback for text files
     try:
@@ -408,7 +398,7 @@ def _load_text_file_safely(file_path: str) -> Tuple[List[str], List[str]]:
             size = None
         size_note = f" ({size} bytes)" if size is not None else ""
         warnings.append(
-            f"⚠️ Detected non-text input file '{path.name}'{size_note}; skipping attachment content."
+            f"Detected non-text input file '{path.name}'{size_note}; skipping attachment content."
         )
     except FileNotFoundError:
         raise FileNotFoundError(f"Input file not found: {file_path}")

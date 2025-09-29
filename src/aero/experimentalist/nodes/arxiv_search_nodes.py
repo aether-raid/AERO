@@ -117,7 +117,7 @@ def _generate_experiment_search_query_node(state: ExperimentSuggestionState) -> 
             temperature=temperature,
             messages=[
                 {"role": "system", "content": "Generate focused domain-specific ArXiv search queries. For retries, ensure the new query is significantly different from previous attempts."},
-                {"role": "user", "content": query_prompt}
+                {"role": "user", "content": _clean_text_for_utf8(query_prompt)}
             ]
         )
 
@@ -489,7 +489,7 @@ def _validate_experiment_papers_node(state: ExperimentSuggestionState) -> Experi
                 Paper {i} [{content_status}] - Relevance: {relevance_score:.1f}/10.0:
                 Title: {clean_title}
                 Abstract: {clean_abstract}
-                content_snippet: {full_content[:4000]}...
+                content_snippet: {_clean_text_for_utf8(full_content[:4000])}...
                 Content Analysis: {methodology_status} | {experiment_status}
                 ---
             """
@@ -504,12 +504,12 @@ def _validate_experiment_papers_node(state: ExperimentSuggestionState) -> Experi
             You are a HYPER-STRICT research analyst. Only papers with DETAILED METHODOLOGY and CONCRETE EXPERIMENTS should pass validation.
 
             USER'S QUERY: {_clean_text_for_utf8(user_query)}
-            RESEARCH DIRECTION: {direction_text}
-            KEY QUESTIONS: {', '.join(key_questions[:3]) if key_questions else 'General experimental guidance'}
+            RESEARCH DIRECTION: {_clean_text_for_utf8(direction_text)}
+            KEY QUESTIONS: {_clean_text_for_utf8(', '.join(key_questions[:3]) if key_questions else 'General experimental guidance')}
             CURRENT SEARCH ITERATION: {search_iteration + 1}
 
             RETRIEVED PAPERS:
-            {papers_summary}
+            {_clean_text_for_utf8(papers_summary)}
 
             SEARCH STATISTICS:
             - Total papers found: {len(papers)}
@@ -560,7 +560,7 @@ def _validate_experiment_papers_node(state: ExperimentSuggestionState) -> Experi
             model=model,
             temperature=0,
             messages=[
-                {"content": validation_prompt, "role": "user"}
+                {"content": _clean_text_for_utf8(validation_prompt), "role": "user"}
             ]
         )
         

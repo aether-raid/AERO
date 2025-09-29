@@ -3,7 +3,7 @@ from .shared_defs import ModelSuggestionState
 from ..utils.arxiv_paper_utils import ArxivPaperProcessor
 from langgraph.graph import StateGraph, END
 from typing import Dict, List, Any
-
+import traceback
 
 # import nodes and edges needed. 
 from .nodes.suggestion_nodes import (
@@ -200,7 +200,7 @@ async def run_model_suggestion_workflow_nonstream(
     except Exception as e:
         print(f"\n❌ WORKFLOW FAILED: {str(e)}")
         print("Full error traceback:")
-        import traceback
+       
         traceback.print_exc()
         
         # Return error state

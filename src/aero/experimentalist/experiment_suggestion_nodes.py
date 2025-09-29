@@ -12,6 +12,14 @@ import traceback
 
 from .shared_defs import ExperimentSuggestionState, _load_text_file_safely
 
+import asyncio
+
+import openai
+
+from ..utils.arxiv_paper_utils import ArxivPaperProcessor
+
+from ..utils.llm_client import load_openai_client
+
 # ==================================================================================
 # WORKFLOW GRAPH BUILDER
 # ==================================================================================
@@ -129,42 +137,16 @@ async def run_experiment_suggestion_workflow_nonstream(
         Dictionary containing the final workflow state with results
     """
     # Move all imports and initialization inside the function
+   
     try:
-        import asyncio
-        import openai
-        from ..utils.arxiv_paper_utils import ArxivPaperProcessor
-    except ImportError as e:
-        error_msg = f"Failed to import required modules: {str(e)}. Please ensure all dependencies are installed."
-        print(f"❌ {error_msg}")
-        return {
-            "workflow_successful": False,
-            "error": error_msg,
-            "error_type": "ImportError",
-            "original_prompt": user_prompt
-        }
-    
-    try:
-        # Load configuration
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            raise ValueError("OPENAI_API_KEY not found in environment variables. Please ensure it is set.")
-
-        base_url = os.getenv("BASE_URL")
-        model = os.getenv("DEFAULT_MODEL") or "gemini/gemini-2.5-flash"
-        model_cheap = "gemini/gemini-2.5-flash-lite"
-        model_expensive = "gemini/gemini-2.5-pro"
+        
+        try:
+            client, model = load_openai_client()
+        except ValueError as e:
+            raise ValueError(str(e))
 
         # Initialize dependencies
-        try:
-            client = openai.OpenAI(api_key=api_key, base_url=base_url)
-        except Exception as e:
-            raise ValueError(f"Failed to initialize OpenAI client: {str(e)}. Please check your API key and base URL configuration.")
-        
-        try:
-            arxiv_processor = ArxivPaperProcessor(llm_client=client, model_name=model_cheap)
-        except Exception as e:
-            raise ValueError(f"Failed to initialize ArxivPaperProcessor: {str(e)}. Please check the ArxivPaperProcessor implementation.")
-        
+        arxiv_processor = ArxivPaperProcessor(llm_client=client, model_name=model)
     except ValueError as e:
         print(f"❌ Configuration Error: {str(e)}")
         return {
@@ -360,45 +342,18 @@ async def run_experiment_suggestion_workflow(
     Returns:
         Dictionary containing the final workflow state with results
     """
-    # Move all imports and initialization inside the function
-    try:
-        import asyncio
-        import openai
-        from ..utils.arxiv_paper_utils import ArxivPaperProcessor
-    except ImportError as e:
-        error_msg = f"Failed to import required modules: {str(e)}. Please ensure all dependencies are installed."
-        print(f"❌ {error_msg}")
-        return {
-            "workflow_successful": False,
-            "error": error_msg,
-            "error_type": "ImportError",
-            "original_prompt": user_prompt
-        }
-    
-    try:
-        # Load configuration
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            raise ValueError("OPENAI_API_KEY not found in environment variables. Please ensure it is set.")
 
-        base_url = os.getenv("BASE_URL")
-        model = os.getenv("DEFAULT_MODEL") or "gemini/gemini-2.5-flash"
-        model_cheap = "gemini/gemini-2.5-flash-lite"
-        model_expensive = "gemini/gemini-2.5-pro"
+    try:
+        
+        try:
+            client, model = load_openai_client()
+        except ValueError as e:
+            raise ValueError(str(e))
 
         # Initialize dependencies
-        try:
-            client = openai.OpenAI(api_key=api_key, base_url=base_url)
-        except Exception as e:
-            raise ValueError(f"Failed to initialize OpenAI client: {str(e)}. Please check your API key and base URL configuration.")
-        
-        try:
-            arxiv_processor = ArxivPaperProcessor(llm_client=client, model_name=model_cheap)
-        except Exception as e:
-            raise ValueError(f"Failed to initialize ArxivPaperProcessor: {str(e)}. Please check the ArxivPaperProcessor implementation.")
-        
+        arxiv_processor = ArxivPaperProcessor(llm_client=client, model_name=model)
     except ValueError as e:
-        print(f"❌ Configuration Error: {str(e)}")
+        print(f"Configuration Error: {str(e)}")
         return {
             "workflow_successful": False,
             "error": str(e),
@@ -415,12 +370,12 @@ async def run_experiment_suggestion_workflow(
             "original_prompt": user_prompt
         }
     
-    print("🧪 Starting Experiment Suggestion Workflow...")
-    print(f"📝 User Prompt: {user_prompt}")
-    print(f"🔬 Experimental Results: {len(experimental_results) if experimental_results else 0} data points")
-    print(f"🤖 Model: {model}")
+    print("Starting Experiment Suggestion Workflow...")
+    print(f"User Prompt: {user_prompt}")
+    print(f"Experimental Results: {len(experimental_results) if experimental_results else 0} data points")
+    print(f"Model: {model}")
     if file_path:
-        print(f"📁 File Input: {file_path}")
+        print(f"File Input: {file_path}")
     print("=" * 80)
 
     # Handle file input if provided
@@ -520,8 +475,8 @@ async def run_experiment_suggestion_workflow(
             "final_outputs": {}
         }
         
-        print("🔄 Running workflow...")
-        
+        print("Running workflow...")
+
         if not streaming:
             final_state = await workflow_graph.ainvoke(initial_state)
             return final_state.get("validate_experiments_tree_2", final_state)
@@ -551,7 +506,7 @@ async def run_experiment_suggestion_workflow(
         return _stream()
 
     except Exception as e:
-        print(f"\n❌ WORKFLOW FAILED: {str(e)}")
+        print(f"\nWORKFLOW FAILED: {str(e)}")
         print("Full error traceback:")
         traceback.print_exc()
         
