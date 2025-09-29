@@ -309,7 +309,7 @@ async def search_arxiv_by_abstracts(keywords, hypothesis, max_papers=20, arxiv_p
     return relevant_papers
 
 # --- Download and Extract Experiments ---
-async def download_and_extract_experiments(papers, hypothesis):
+async def download_and_extract_experiments(papers, hypothesis, arxiv_processor=None):
     """Download papers and extract experiment designs using LLM"""
     if not papers:
         return []

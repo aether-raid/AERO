@@ -4,8 +4,8 @@ version = "0.1.0"
 description = "AERO: Automated Exploration, Research & Orchestration – A Framework for Machine Learning Research"
 readme = "README.md"
 authors = [
-    { name = "Jacob Wong", email = "" },
-    { name = "Ethan Lau", email = "" },
+    { name = "Jacob Wong", email = "Jwwl6424@gmail.com" },
+    { name = "Ethan Lau", email = "ethan7lau@gmail.com" },
     { name = "Charmaine Chua", email = "chuacharmaine648@gmail.com" },
 ]
 requires-python = ">=3.11"
@@ -15,6 +15,7 @@ dependencies = [
     "feedparser>=6.0.0",
     "h5py>=3.11.0",
     "langchain-core>=0.1.0",
+    "langchain>=0.3.27",
     "langgraph>=0.0.40",
     "litellm>=1.0.0",
     "matplotlib>=3.5.0",
@@ -33,7 +34,7 @@ dependencies = [
     "tiktoken>=0.5.0",
     "torch>=1.9.0",
     "transformers>=4.0.0",
-    "treequest==0.1.2",
+    "treequest==0.1.2"
 ]
 
 [build-system]

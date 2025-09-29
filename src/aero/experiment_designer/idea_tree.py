@@ -8,7 +8,9 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any
 from aero.experiment_designer.search import build_experiment_search_workflow
 from aero.experiment_designer.utils import get_llm_response, extract_research_components, stream_writer
-from langchain_core.messages import AIMessage
+import asyncio
+import concurrent.futures
+import builtins
 
 class FilteredStringIO(StringIO):
     def write(self, s):
@@ -329,10 +331,8 @@ class ExperimentTreeSystem:
 
 # Sync wrapper functions for treequest
 def sync_generate_strategy(parent_state, tree_system, hypothesis):
-    import asyncio
     try:
         # If already in an event loop, create a new one in a thread
-        import concurrent.futures
         def run_in_thread():
             new_loop = asyncio.new_event_loop()
             asyncio.set_event_loop(new_loop)
@@ -348,9 +348,7 @@ def sync_generate_strategy(parent_state, tree_system, hypothesis):
     return state, state.score
 
 def sync_generate_methodology(parent_state, tree_system, hypothesis):
-    import asyncio
     try:
-        import concurrent.futures
         def run_in_thread():
             new_loop = asyncio.new_event_loop()
             asyncio.set_event_loop(new_loop)
@@ -363,8 +361,7 @@ def sync_generate_methodology(parent_state, tree_system, hypothesis):
     except RuntimeError:
         state = asyncio.run(tree_system.generate_methodology(parent_state, hypothesis))
     return state, state.score
-import asyncio
-import asyncio
+
 
 def run_experiment_tree_search(user_input: str, num_iterations: int, writer=None, loop=None) -> Optional['IdeaState']:
     """Main function to run the experiment tree search with streaming from sync context."""
@@ -400,7 +397,6 @@ def run_experiment_tree_search(user_input: str, num_iterations: int, writer=None
         sync_stream_writer("🌲 Building experiment design tree...(this may take a few mins)")
 
         # Monkey patch print to filter sampling messages
-        import builtins
         original_print = print
         def filtered_print(*args, **kwargs):
             message = ' '.join(str(arg) for arg in args)
