@@ -132,59 +132,6 @@ class PaperWritingState(BaseState):
     # Output
     final_outputs: Dict[str, str]             # Multiple format versions
 
-# ==================================================================================
-# CLIENT INITIALIZATION
-# ==================================================================================
-
-def _initialize_clients_in_state(state: PaperWritingState) -> PaperWritingState:
-    """Initialize OpenAI and Tavily clients and store them in the state."""
-    
-    # Initialize OpenAI client if not already done
-    if not state.get("client"):
-        api_key = os.getenv("OPENAI_API_KEY")
-        base_url = os.getenv("BASE_URL")
-        model = os.getenv("DEFAULT_MODEL") or "gemini/gemini-2.5-flash"
-
-        if not api_key:
-            _write_stream("⚠️ OPENAI_API_KEY not found - some features may not work")
-            state["client"] = None
-            state["model"] = model
-        else:
-            try:
-                state["client"] = openai.OpenAI(
-                    api_key=api_key,
-                    base_url=base_url
-                )
-                state["model"] = model
-                _write_stream("✅ OpenAI client initialized")
-            except Exception as e:
-                _write_stream(f"❌ Failed to initialize OpenAI client: {e}")
-                state["client"] = None
-                state["model"] = model
-
-    # Initialize Tavily client if not already done
-    if not state.get("tavily_client"):
-        tavily_api_key = os.getenv("TAVILY_API_KEY")
-        if not tavily_api_key:
-            _write_stream("⚠️ TAVILY_API_KEY not found - web search unavailable")
-            state["tavily_client"] = None
-        else:
-            try:
-                state["tavily_client"] = TavilyClient(api_key=tavily_api_key)
-                _write_stream("✅ Tavily client initialized")
-            except Exception as e:
-                _write_stream(f"❌ Failed to initialize Tavily client: {e}")
-                state["tavily_client"] = None
-    
-    return state
-
-# ==================================================================================
-# FILE EXTRACTION UTILITIES
-# ==================================================================================
-
-# ==================================================================================
-# PAPER WRITING WORKFLOW NODES
-# ==================================================================================
 
 def _generate_reference_list(sources: List[Dict[str, Any]]) -> str:
     """Generate a properly formatted reference list from Tavily sources."""

@@ -55,7 +55,7 @@ __package_info__ = {
 def _import_main_functions():
     """Lazy import to avoid dependency issues."""
     try:
-        from ..src.aero.report_writer.paper_writing_nodes import write_paper, build_paper_writing_graph
+        from .paper_writing_nodes import write_paper, build_paper_writing_graph
         return write_paper, build_paper_writing_graph
     except ImportError as e:
         print(f"Warning: Cannot import paper writing functions: {e}")
@@ -152,7 +152,7 @@ __all__ = [
 
 # Try to import and expose main functions if dependencies are available
 try:
-    from ..src.aero.report_writer.paper_writing_nodes import write_paper, build_paper_writing_graph
+    from .paper_writing_nodes import write_paper, build_paper_writing_graph
     __all__.extend(['write_paper', 'build_paper_writing_graph'])
 except ImportError:
     # Dependencies not available, will use lazy loading
