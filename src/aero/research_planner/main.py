@@ -173,18 +173,6 @@ def _initialize_clients_in_state(state: ResearchPlanningState) -> ResearchPlanni
         
     return state
 
-
-
-
-    
-
-
-
-
-
-    # --- PHASE 3: PLAN CRITIQUE & ITERATIVE REFINEMENT ---
-
-
     # ==================================================================================
     # WORKFLOW CONTROL & ROUTING FUNCTIONS
     # ==================================================================================
