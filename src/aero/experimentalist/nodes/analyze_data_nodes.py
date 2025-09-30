@@ -411,8 +411,7 @@ async def _validate_analysis_node(state: ExperimentSuggestionState) -> Experimen
             # Check iteration limit (max 3 iterations to prevent infinite loops)
             if current_iteration >= 3 and validation_result == "FAIL":
                 _write_stream(f"⚠️ Maximum analysis iterations reached ({current_iteration}). Forcing continuation with current analysis with {len(critical_issues)}, critical issues, {len(completeness_gaps)} completeness gaps, {len(accuracy_concerns)} accuracy concerns.")
-                #print(f"🚨 WARNING: Validation found {len(critical_issues)} critical issues, {len(completeness_gaps)} completeness gaps, {len(accuracy_concerns)} accuracy concerns.")
-                #print(f"🚨 This is a FORCED PASS to prevent infinite loops - analysis has unresolved validation issues!")
+               
                 validation_result = "PASS"
                 validation_json["forced_pass"] = True
                 validation_json["decision_rationale"] = f"Forced pass after {current_iteration} iterations to prevent infinite loop. Original validation failed due to: {len(critical_issues)} critical issues, {len(completeness_gaps)} completeness gaps, {len(accuracy_concerns)} accuracy concerns."
@@ -426,13 +425,9 @@ async def _validate_analysis_node(state: ExperimentSuggestionState) -> Experimen
                 "current_analysis_iteration": current_iteration,
                 "current_step": "analysis_validated"
             }
-            
-            # DEBUG: Verify the state we're returning
-           # print(f"🐛 DEBUG state being returned has keys: {list(updated_state.keys())}")
-           # print(f"🐛 DEBUG state['analysis_validation_decision'] = {updated_state.get('analysis_validation_decision')}")
-            
-            # CRITICAL FIX: Make the routing decision here instead of in separate function
-            # Check if this was a forced pass due to max iterations
+
+            _write_stream(f"DEBUG VALIDATION RESULT FORM STATE SET: {updated_state['analysis_validation_decision']}")
+
             forced_pass = validation_json.get("forced_pass", False)
             
             # Safety check: After 3 iterations, force continue to avoid infinite loops

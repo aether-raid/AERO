@@ -12,6 +12,14 @@ import traceback
 
 from .shared_defs import ExperimentSuggestionState, _load_text_file_safely
 
+import asyncio
+
+import openai
+
+from ..utils.arxiv_paper_utils import ArxivPaperProcessor
+
+from ..utils.llm_client import load_openai_client
+
 # ==================================================================================
 # WORKFLOW GRAPH BUILDER
 # ==================================================================================
@@ -47,10 +55,10 @@ def _build_analyze_and_suggest_experiment_graph() -> StateGraph:
     # Conditional edge after analysis validation - use next_node field
     workflow.add_conditional_edges(
         "validate_analysis",
-        _should_proceed_with_analysis,
+        lambda state: state.get("next_node", "decide_research_direction"),
         {
-            "decide_research_direction": "decide_research_direction",  # Analysis is valid, continue
-            "analyze_findings": "analyze_findings"  # Analysis needs improvement, iterate
+            "decide_research_direction": "decide_research_direction",
+            "analyze_findings": "analyze_findings"
         }
     )
     
@@ -129,44 +137,18 @@ async def run_experiment_suggestion_workflow_nonstream(
         Dictionary containing the final workflow state with results
     """
     # Move all imports and initialization inside the function
+   
     try:
-        import asyncio
-        import openai
-        from ..utils.arxiv_paper_utils import ArxivPaperProcessor
-    except ImportError as e:
-        error_msg = f"Failed to import required modules: {str(e)}. Please ensure all dependencies are installed."
-        print(f"❌ {error_msg}")
-        return {
-            "workflow_successful": False,
-            "error": error_msg,
-            "error_type": "ImportError",
-            "original_prompt": user_prompt
-        }
-    
-    try:
-        # Load configuration
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            raise ValueError("OPENAI_API_KEY not found in environment variables. Please ensure it is set.")
-
-        base_url = os.getenv("BASE_URL")
-        model = os.getenv("DEFAULT_MODEL") or "gemini/gemini-2.5-flash"
-        model_cheap = "gemini/gemini-2.5-flash-lite"
-        model_expensive = "gemini/gemini-2.5-pro"
+        
+        try:
+            client, model = load_openai_client()
+        except ValueError as e:
+            raise ValueError(str(e))
 
         # Initialize dependencies
-        try:
-            client = openai.OpenAI(api_key=api_key, base_url=base_url)
-        except Exception as e:
-            raise ValueError(f"Failed to initialize OpenAI client: {str(e)}. Please check your API key and base URL configuration.")
-        
-        try:
-            arxiv_processor = ArxivPaperProcessor(llm_client=client, model_name=model_cheap)
-        except Exception as e:
-            raise ValueError(f"Failed to initialize ArxivPaperProcessor: {str(e)}. Please check the ArxivPaperProcessor implementation.")
-        
+        arxiv_processor = ArxivPaperProcessor(llm_client=client, model_name=model)
     except ValueError as e:
-        print(f"❌ Configuration Error: {str(e)}")
+        print(f"Configuration Error: {str(e)}")
         return {
             "workflow_successful": False,
             "error": str(e),
@@ -175,7 +157,7 @@ async def run_experiment_suggestion_workflow_nonstream(
         }
     except Exception as e:
         error_msg = f"Unexpected error during initialization: {str(e)}"
-        print(f"❌ {error_msg}")
+        print(f"ERROR: {error_msg}")
         return {
             "workflow_successful": False,
             "error": error_msg,
@@ -188,7 +170,7 @@ async def run_experiment_suggestion_workflow_nonstream(
     print(f"🔬 Experimental Results: {len(experimental_results) if experimental_results else 0} data points")
     print(f"🤖 Model: {model}")
     if file_path:
-        print(f"📁 File Input: {file_path}")
+        print(f"File Input: {file_path}")
     print("=" * 80)
 
     # Handle file input if provided
@@ -196,15 +178,15 @@ async def run_experiment_suggestion_workflow_nonstream(
     file_warnings: List[str] = []
     if file_path:
         try:
-            print(f"📖 Reading file: {file_path}")
+            print(f"Reading file: {file_path}")
             file_content, file_warnings = _load_text_file_safely(file_path)
             if file_content:
-                print(f"✅ File loaded successfully ({len(file_content[0])} characters)")
+                print(f"File loaded successfully ({len(file_content[0])} characters)")
         except FileNotFoundError:
-            print(f"❌ Error: File not found - {file_path}")
+            print(f"Error: File not found - {file_path}")
             raise
         except Exception as e:
-            print(f"❌ Error reading file: {str(e)}")
+            print(f"Error reading file: {str(e)}")
             raise
 
         for warning in file_warnings:
@@ -216,7 +198,7 @@ async def run_experiment_suggestion_workflow_nonstream(
     try:
         # Build the workflow graph
         workflow_graph = _build_analyze_and_suggest_experiment_graph()
-        print("✅ Workflow graph compiled successfully")
+        print("Workflow graph compiled successfully")
         
         # Initialize the state with all required fields
         initial_state = {
@@ -294,28 +276,28 @@ async def run_experiment_suggestion_workflow_nonstream(
         final_state = await workflow_graph.ainvoke(initial_state, config={"recursion_limit": 50})
         
         print("\n" + "=" * 80)
-        print("🎉 WORKFLOW COMPLETED SUCCESSFULLY!")
+        print("WORKFLOW COMPLETED SUCCESSFULLY!")
         print("=" * 80)
         
         # Extract and display key results
         if final_state.get("experiment_suggestions"):
-            print("✅ Experiment suggestions generated successfully")
+            print("Experiment suggestions generated successfully")
             suggestions = final_state.get("experiment_suggestions", "")
             if suggestions:
                 print(f"\n📋 EXPERIMENT SUGGESTIONS PREVIEW:")
                 print("-" * 40)
                 print(suggestions[:500] + "..." if len(suggestions) > 500 else suggestions)
         else:
-            print("⚠️ Experiment suggestions may be incomplete")
+            print("Experiment suggestions may be incomplete")
         
         # Display any errors
         if final_state.get("errors"):
-            print(f"\n⚠️ Errors encountered: {len(final_state['errors'])}")
+            print(f"\nErrors encountered: {len(final_state['errors'])}")
             for i, error in enumerate(final_state["errors"][-3:], 1):  # Show last 3 errors
                 print(f"  {i}. {error}")
         
         # Display workflow statistics
-        print(f"\n📊 WORKFLOW STATISTICS:")
+        print(f"\nWORKFLOW STATISTICS:")
         print(f"   - Papers found: {len(final_state.get('experiment_papers', []))}")
         print(f"   - Papers validated: {len(final_state.get('validated_papers', []))}")
         print(f"   - Search iterations: {final_state.get('experiment_search_iteration', 0)}")
@@ -324,7 +306,7 @@ async def run_experiment_suggestion_workflow_nonstream(
         return final_state
         
     except Exception as e:
-        print(f"\n❌ WORKFLOW FAILED: {str(e)}")
+        print(f"\nWORKFLOW FAILED: {str(e)}")
         print("Full error traceback:")
         traceback.print_exc()
         
@@ -360,45 +342,18 @@ async def run_experiment_suggestion_workflow(
     Returns:
         Dictionary containing the final workflow state with results
     """
-    # Move all imports and initialization inside the function
-    try:
-        import asyncio
-        import openai
-        from ..utils.arxiv_paper_utils import ArxivPaperProcessor
-    except ImportError as e:
-        error_msg = f"Failed to import required modules: {str(e)}. Please ensure all dependencies are installed."
-        print(f"❌ {error_msg}")
-        return {
-            "workflow_successful": False,
-            "error": error_msg,
-            "error_type": "ImportError",
-            "original_prompt": user_prompt
-        }
-    
-    try:
-        # Load configuration
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            raise ValueError("OPENAI_API_KEY not found in environment variables. Please ensure it is set.")
 
-        base_url = os.getenv("BASE_URL")
-        model = os.getenv("DEFAULT_MODEL") or "gemini/gemini-2.5-flash"
-        model_cheap = "gemini/gemini-2.5-flash-lite"
-        model_expensive = "gemini/gemini-2.5-pro"
+    try:
+        
+        try:
+            client, model = load_openai_client()
+        except ValueError as e:
+            raise ValueError(str(e))
 
         # Initialize dependencies
-        try:
-            client = openai.OpenAI(api_key=api_key, base_url=base_url)
-        except Exception as e:
-            raise ValueError(f"Failed to initialize OpenAI client: {str(e)}. Please check your API key and base URL configuration.")
-        
-        try:
-            arxiv_processor = ArxivPaperProcessor(llm_client=client, model_name=model_cheap)
-        except Exception as e:
-            raise ValueError(f"Failed to initialize ArxivPaperProcessor: {str(e)}. Please check the ArxivPaperProcessor implementation.")
-        
+        arxiv_processor = ArxivPaperProcessor(llm_client=client, model_name=model)
     except ValueError as e:
-        print(f"❌ Configuration Error: {str(e)}")
+        print(f"Configuration Error: {str(e)}")
         return {
             "workflow_successful": False,
             "error": str(e),
@@ -415,12 +370,12 @@ async def run_experiment_suggestion_workflow(
             "original_prompt": user_prompt
         }
     
-    print("🧪 Starting Experiment Suggestion Workflow...")
-    print(f"📝 User Prompt: {user_prompt}")
-    print(f"🔬 Experimental Results: {len(experimental_results) if experimental_results else 0} data points")
-    print(f"🤖 Model: {model}")
+    print("Starting Experiment Suggestion Workflow...")
+    print(f"User Prompt: {user_prompt}")
+    print(f"Experimental Results: {len(experimental_results) if experimental_results else 0} data points")
+    print(f"Model: {model}")
     if file_path:
-        print(f"📁 File Input: {file_path}")
+        print(f"File Input: {file_path}")
     print("=" * 80)
 
     # Handle file input if provided
@@ -448,7 +403,7 @@ async def run_experiment_suggestion_workflow(
     try:
         # Build the workflow graph
         workflow_graph = _build_analyze_and_suggest_experiment_graph()
-        print("✅ Workflow graph compiled successfully")
+        print("Workflow graph compiled successfully")
         
         # Initialize the state with all required fields
         initial_state = {
@@ -520,8 +475,8 @@ async def run_experiment_suggestion_workflow(
             "final_outputs": {}
         }
         
-        print("🔄 Running workflow...")
-        
+        print("Running workflow...")
+
         if not streaming:
             final_state = await workflow_graph.ainvoke(initial_state)
             return final_state.get("validate_experiments_tree_2", final_state)
@@ -551,7 +506,7 @@ async def run_experiment_suggestion_workflow(
         return _stream()
 
     except Exception as e:
-        print(f"\n❌ WORKFLOW FAILED: {str(e)}")
+        print(f"\nWORKFLOW FAILED: {str(e)}")
         print("Full error traceback:")
         traceback.print_exc()
         
@@ -563,35 +518,3 @@ async def run_experiment_suggestion_workflow(
             "original_prompt": user_prompt,
             "experimental_results": experimental_results
         }
-
-async def test_experiment_stream():
-    #import asyncio
-    from dotenv import load_dotenv
-    load_dotenv()  # Load environment variables from .env file if present
-    test_prompt = "I have completed initial experiments on image classification with CNNs. Need suggestions for follow-up experiments to improve model performance and generalization."
-    data_dir=r"C:\Users\Jacobs laptop\Downloads\AETHER Hackathon.xlsx"
-    final_result = None
-    async for result in await run_experiment_suggestion_workflow(test_prompt,file_path=data_dir, streaming=True):
-        final_result = result  # keep overwriting, so last one wins
-        
-    result = final_result
-    
-    # FOR NON STREAMING
-    #result = await run_model_suggestion_workflow("Find models for X-rays", streaming=False)
-    
-   
-    return result
-    
-    
-if __name__ == "__main__":
-    """
-    Main entry point for testing the workflow.
-    """
-    # Run test
-    import asyncio
-    from dotenv import load_dotenv
-    load_dotenv()  # Load environment variables from .env file if present
-    result = asyncio.run(test_experiment_stream())
-    print("Final result:", "Success" if result.get("experiment_suggestions") else "Failed")
-
-
