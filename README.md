@@ -157,15 +157,37 @@ async for update in await suggest_models(
 
 ### Research Planner 📋
 
-Given a domain task, this system generates a novel problem statement and then designs a comprehensive research plan for that problem.
+Given a research domain or broad topic, this system generates novel research problems, validates their significance and feasibility through web search, and creates comprehensive research plans with detailed methodologies, timelines, and resource requirements.
 
 #### General Usage
 
-blah blah
+```python
+from aero.research_planner import plan_research
+
+# Non-streaming
+result = await plan_research(
+    prompt="Develop efficient transformer architectures for real-time NLP",
+    streaming=False,
+)
+print(result["research_plan"])
+
+# Streaming
+async for update in await plan_research(
+    prompt="Investigate novel approaches to few-shot learning",
+    streaming=True,
+):
+    handle_stream(update)
+```
 
 #### Overall Workflow
 
-blah blah
+1. **Client Initialization**: Sets up OpenAI and Tavily clients for AI reasoning and web validation.
+2. **Problem Generation**: Creates specific, novel research problems from broad domain descriptions using AI analysis.
+3. **Problem Validation**: Validates research problems through comprehensive web search to ensure novelty and significance.
+4. **Feedback Processing**: Processes rejection feedback and iteratively refines problem statements for quality.
+5. **Research Plan Creation**: Develops detailed research plans including methodology, phases, timelines, and resource requirements.
+6. **Plan Critique & Refinement**: AI-driven quality assessment with iterative improvement based on critique feedback.
+7. **Plan Finalization**: Produces publication-ready research plans with proper structure, citations, and implementation details.
 
 ![Research Planner Workflow](diagrams/research_planner_flow.png)
 
@@ -256,15 +278,47 @@ result = await suggest_experiments_nostream(
 
 ### Report Writer 📑
 
-Given the research context and a set of experimental data, this system generates a complete report with integrated citations and additional context.
+Given research topics and experimental data, this system generates complete academic papers with integrated citations, proper formatting, and iterative quality refinement. It combines AI-driven content generation with web-sourced citations for publication-ready outputs.
 
 #### General Usage
 
-blah blah
+```python
+from aero.report_writer import write_paper
+
+# Basic usage
+result = await write_paper(
+    user_query="Write a paper about machine learning fundamentals",
+    experimental_data={"accuracy": 0.95, "f1_score": 0.92},
+    streaming=False,
+)
+print(result["formatted_paper"])
+
+# With uploaded files
+result = await write_paper(
+    user_query="Analyze my research data and write a paper",
+    file_paths=["./data/results.csv", "./reports/analysis.docx"],
+    target_venue="NeurIPS",
+    streaming=False,
+)
+
+# Streaming mode
+async for update in await write_paper(
+    user_query="Write about transformer efficiency techniques",
+    experimental_data={"latency_reduction": 0.3},
+    streaming=True,
+):
+    handle_stream(update)
+```
 
 #### Overall Workflow
 
-blah blah
+1. **Results Analysis**: Analyzes experimental data and research context to extract key findings and insights.
+2. **Paper Setup**: Generates comprehensive paper structure including sections, target audience, and formatting configuration.
+3. **Source Discovery**: Performs intelligent web searches using Tavily to find relevant citations and supporting literature.
+4. **Content Generation**: Creates complete paper content with proper academic writing, integrated citations, and structured sections.
+5. **Quality Critique**: AI-driven assessment of paper quality including coherence, depth, citation usage, and academic rigor.
+6. **Iterative Refinement**: Refines content based on critique feedback to improve quality and academic standards.
+7. **Paper Finalization**: Produces publication-ready papers with proper formatting, reference lists, and quality metrics.
 
 ![Report Writer Workflow](diagrams/report_writer_flow.png)
 
