@@ -55,10 +55,10 @@ def _build_analyze_and_suggest_experiment_graph() -> StateGraph:
     # Conditional edge after analysis validation - use next_node field
     workflow.add_conditional_edges(
         "validate_analysis",
-        _should_proceed_with_analysis,
+        lambda state: state.get("next_node", "decide_research_direction"),
         {
-            "decide_research_direction": "decide_research_direction",  # Analysis is valid, continue
-            "analyze_findings": "analyze_findings"  # Analysis needs improvement, iterate
+            "decide_research_direction": "decide_research_direction",
+            "analyze_findings": "analyze_findings"
         }
     )
     

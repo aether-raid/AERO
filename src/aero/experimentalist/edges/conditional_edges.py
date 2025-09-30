@@ -62,17 +62,22 @@ def _should_proceed_with_direction(state: ExperimentSuggestionState) -> str:
 
 def _should_proceed_with_analysis(state: ExperimentSuggestionState) -> str:
     """Determine whether to proceed with analysis or revise it."""
+    
     next_node = state.get("next_node", "decide_research_direction")
     analysis_iterations = state.get("analysis_iterations", [])
-    validation_result = state.get("analysis_validation_decision", "FAIL")
-
+    validation_result = state.get("analysis_validation_decision", "IDK")
+    _write_stream(f"DEBUG Analysis validation decision: {validation_result}")
+    _write_stream(f"DEBUG Analysis iterations so far: {len(analysis_iterations)}")
+    _write_stream(f"DEBUG Next node: {next_node}")
     # Safety check: After 3 iterations, force proceed to prevent infinite loops
     if len(analysis_iterations) >= 3:
         _write_stream("Maximum analysis iterations reached (3), forcing proceed to research direction...")
         return "decide_research_direction"
     elif validation_result == "PASS":
+        _write_stream("Analysis validated successfully, proceeding to research direction...")
         return "decide_research_direction"
     else:
+        _write_stream("Analysis validation failed, revising analysis...")
         return "analyze_findings"
 
     return next_node
