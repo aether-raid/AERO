@@ -67,6 +67,7 @@ def _build_model_suggestion_graph() -> StateGraph:
     return workflow.compile()
 
 
+
 async def run_model_suggestion_workflow_nonstream(
     user_prompt: str,
     uploaded_data: List[str] = None
@@ -96,7 +97,7 @@ async def run_model_suggestion_workflow_nonstream(
         # Initialize dependencies
         arxiv_processor = ArxivPaperProcessor(llm_client=client, model_name=model)
     except ValueError as e:
-        print(f"❌ Configuration Error: {str(e)}")
+        print(f"Configuration Error: {str(e)}")
         return {
             "workflow_successful": False,
             "error": str(e),
@@ -105,7 +106,7 @@ async def run_model_suggestion_workflow_nonstream(
         }
     except Exception as e:
         error_msg = f"Unexpected error during initialization: {str(e)}"
-        print(f"❌ {error_msg}")
+        print(f"ERROR: {error_msg}")
         return {
             "workflow_successful": False,
             "error": error_msg,
@@ -113,9 +114,9 @@ async def run_model_suggestion_workflow_nonstream(
             "original_prompt": user_prompt
         }
     
-    print("🚀 Starting Model Suggestion Workflow...")
-    print(f"📝 User Prompt: {user_prompt}")
-    print(f"🤖 Model: {model}")
+    print("Starting Model Suggestion Workflow...")
+    print(f"User Prompt: {user_prompt}")
+    print(f"Model: {model}")
     print("=" * 80)
     
     
@@ -124,7 +125,7 @@ async def run_model_suggestion_workflow_nonstream(
     try:
         # Build the workflow graph
         workflow_graph = _build_model_suggestion_graph()
-        print("✅ Workflow graph compiled successfully")
+        print("Workflow graph compiled successfully")
         
         # Initialize the state with all required fields
         initial_state = {
@@ -162,13 +163,13 @@ async def run_model_suggestion_workflow_nonstream(
             }
         }
         
-        print("🔄 Running workflow...")
+        print("Running workflow...")
         
         # Run the workflow
         final_state = await workflow_graph.ainvoke(initial_state)
         
         print("\n" + "=" * 80)
-        print("🎉 WORKFLOW COMPLETED SUCCESSFULLY!")
+        print("WORKFLOW COMPLETED SUCCESSFULLY!")
         print("=" * 80)
         
         # Extract and display key results
@@ -176,20 +177,20 @@ async def run_model_suggestion_workflow_nonstream(
             print("Model suggestions generated successfully")
             suggestions = final_state["model_suggestions"].get("model_suggestions", "")
             if suggestions:
-                print(f"\n📋 FINAL RECOMMENDATIONS:")
+                print(f"\nFINAL RECOMMENDATIONS:")
                 print("-" * 40)
                 print(suggestions[:500] + "..." if len(suggestions) > 500 else suggestions)
         else:
-            print("⚠️ Model suggestions may have failed or are incomplete")
+            print("Model suggestions may have failed or are incomplete")
         
         # Display any errors
         if final_state.get("errors"):
-            print(f"\n⚠️ Errors encountered: {len(final_state['errors'])}")
+            print(f"\nErrors encountered: {len(final_state['errors'])}")
             for i, error in enumerate(final_state["errors"][-3:], 1):  # Show last 3 errors
                 print(f"  {i}. {error}")
         
         # Display workflow statistics
-        print(f"\n📊 WORKFLOW STATISTICS:")
+        print(f"\nWORKFLOW STATISTICS:")
         print(f"   - Papers analyzed: {len(final_state.get('arxiv_results', {}).get('papers', []))}")
         print(f"   - Categories detected: {len(final_state.get('detected_categories', []))}")
         print(f"   - Search iterations: {final_state.get('search_iteration', 0)}")
@@ -198,7 +199,7 @@ async def run_model_suggestion_workflow_nonstream(
         return final_state
         
     except Exception as e:
-        print(f"\n❌ WORKFLOW FAILED: {str(e)}")
+        print(f"WORKFLOW FAILED: {str(e)}")
         print("Full error traceback:")
        
         traceback.print_exc()
@@ -289,12 +290,12 @@ async def run_model_suggestion_workflow(
         },
     }
 
-    # 🚀 Non-streaming mode
+    # Non-streaming mode
     if not streaming:
         final_state = await workflow_graph.ainvoke(initial_state)
         return final_state.get("critique_response", final_state)
 
-    # 🚀 Streaming mode
+    # Streaming mode
     async def _stream():
         final_data = None  # track last update
 
@@ -313,7 +314,7 @@ async def run_model_suggestion_workflow(
             yield data
             final_data = data
 
-        # ✅ After loop ends, yield final state only if it has "critique_response"
+        # After loop ends, yield final state only if it has "critique_response"
         if final_data and "critique_response" in final_data:
             yield final_data["critique_response"]
 

@@ -4,8 +4,8 @@ from langgraph.graph.message import add_messages
 from langchain_core.messages import BaseMessage
 import math
 from langgraph.config import get_stream_writer
-
-
+import re
+import inspect
 @dataclass
 class Evidence:
     snippet: str
@@ -113,7 +113,7 @@ def _write_stream(message: str, key: str = "status"):
         # Fallback: try to get stream from config (for testing compatibility)
         try:
             # This fallback is for test compatibility only
-            import inspect
+           
             frame = inspect.currentframe()
             while frame:
                 if 'config' in frame.f_locals and frame.f_locals['config']:
@@ -137,7 +137,7 @@ def _clean_text_for_utf8(text):
         return str(text)
     
     # Remove surrogate characters that cause UTF-8 encoding issues
-    import re
+    
     # Remove surrogate pairs (Unicode range U+D800-U+DFFF)
     text = re.sub(r'[\ud800-\udfff]', '', text)
     

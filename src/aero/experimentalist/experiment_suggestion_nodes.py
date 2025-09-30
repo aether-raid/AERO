@@ -148,7 +148,7 @@ async def run_experiment_suggestion_workflow_nonstream(
         # Initialize dependencies
         arxiv_processor = ArxivPaperProcessor(llm_client=client, model_name=model)
     except ValueError as e:
-        print(f"❌ Configuration Error: {str(e)}")
+        print(f"Configuration Error: {str(e)}")
         return {
             "workflow_successful": False,
             "error": str(e),
@@ -157,7 +157,7 @@ async def run_experiment_suggestion_workflow_nonstream(
         }
     except Exception as e:
         error_msg = f"Unexpected error during initialization: {str(e)}"
-        print(f"❌ {error_msg}")
+        print(f"ERROR: {error_msg}")
         return {
             "workflow_successful": False,
             "error": error_msg,
@@ -170,7 +170,7 @@ async def run_experiment_suggestion_workflow_nonstream(
     print(f"🔬 Experimental Results: {len(experimental_results) if experimental_results else 0} data points")
     print(f"🤖 Model: {model}")
     if file_path:
-        print(f"📁 File Input: {file_path}")
+        print(f"File Input: {file_path}")
     print("=" * 80)
 
     # Handle file input if provided
@@ -178,15 +178,15 @@ async def run_experiment_suggestion_workflow_nonstream(
     file_warnings: List[str] = []
     if file_path:
         try:
-            print(f"📖 Reading file: {file_path}")
+            print(f"Reading file: {file_path}")
             file_content, file_warnings = _load_text_file_safely(file_path)
             if file_content:
-                print(f"✅ File loaded successfully ({len(file_content[0])} characters)")
+                print(f"File loaded successfully ({len(file_content[0])} characters)")
         except FileNotFoundError:
-            print(f"❌ Error: File not found - {file_path}")
+            print(f"Error: File not found - {file_path}")
             raise
         except Exception as e:
-            print(f"❌ Error reading file: {str(e)}")
+            print(f"Error reading file: {str(e)}")
             raise
 
         for warning in file_warnings:
@@ -198,7 +198,7 @@ async def run_experiment_suggestion_workflow_nonstream(
     try:
         # Build the workflow graph
         workflow_graph = _build_analyze_and_suggest_experiment_graph()
-        print("✅ Workflow graph compiled successfully")
+        print("Workflow graph compiled successfully")
         
         # Initialize the state with all required fields
         initial_state = {
@@ -276,28 +276,28 @@ async def run_experiment_suggestion_workflow_nonstream(
         final_state = await workflow_graph.ainvoke(initial_state, config={"recursion_limit": 50})
         
         print("\n" + "=" * 80)
-        print("🎉 WORKFLOW COMPLETED SUCCESSFULLY!")
+        print("WORKFLOW COMPLETED SUCCESSFULLY!")
         print("=" * 80)
         
         # Extract and display key results
         if final_state.get("experiment_suggestions"):
-            print("✅ Experiment suggestions generated successfully")
+            print("Experiment suggestions generated successfully")
             suggestions = final_state.get("experiment_suggestions", "")
             if suggestions:
                 print(f"\n📋 EXPERIMENT SUGGESTIONS PREVIEW:")
                 print("-" * 40)
                 print(suggestions[:500] + "..." if len(suggestions) > 500 else suggestions)
         else:
-            print("⚠️ Experiment suggestions may be incomplete")
+            print("Experiment suggestions may be incomplete")
         
         # Display any errors
         if final_state.get("errors"):
-            print(f"\n⚠️ Errors encountered: {len(final_state['errors'])}")
+            print(f"\nErrors encountered: {len(final_state['errors'])}")
             for i, error in enumerate(final_state["errors"][-3:], 1):  # Show last 3 errors
                 print(f"  {i}. {error}")
         
         # Display workflow statistics
-        print(f"\n📊 WORKFLOW STATISTICS:")
+        print(f"\nWORKFLOW STATISTICS:")
         print(f"   - Papers found: {len(final_state.get('experiment_papers', []))}")
         print(f"   - Papers validated: {len(final_state.get('validated_papers', []))}")
         print(f"   - Search iterations: {final_state.get('experiment_search_iteration', 0)}")
@@ -306,7 +306,7 @@ async def run_experiment_suggestion_workflow_nonstream(
         return final_state
         
     except Exception as e:
-        print(f"\n❌ WORKFLOW FAILED: {str(e)}")
+        print(f"\nWORKFLOW FAILED: {str(e)}")
         print("Full error traceback:")
         traceback.print_exc()
         
@@ -403,7 +403,7 @@ async def run_experiment_suggestion_workflow(
     try:
         # Build the workflow graph
         workflow_graph = _build_analyze_and_suggest_experiment_graph()
-        print("✅ Workflow graph compiled successfully")
+        print("Workflow graph compiled successfully")
         
         # Initialize the state with all required fields
         initial_state = {
@@ -518,35 +518,3 @@ async def run_experiment_suggestion_workflow(
             "original_prompt": user_prompt,
             "experimental_results": experimental_results
         }
-
-async def test_experiment_stream():
-    #import asyncio
-    from dotenv import load_dotenv
-    load_dotenv()  # Load environment variables from .env file if present
-    test_prompt = "I have completed initial experiments on image classification with CNNs. Need suggestions for follow-up experiments to improve model performance and generalization."
-    data_dir=r"C:\Users\Jacobs laptop\Downloads\AETHER Hackathon.xlsx"
-    final_result = None
-    async for result in await run_experiment_suggestion_workflow(test_prompt,file_path=data_dir, streaming=True):
-        final_result = result  # keep overwriting, so last one wins
-        
-    result = final_result
-    
-    # FOR NON STREAMING
-    #result = await run_model_suggestion_workflow("Find models for X-rays", streaming=False)
-    
-   
-    return result
-    
-    
-if __name__ == "__main__":
-    """
-    Main entry point for testing the workflow.
-    """
-    # Run test
-    import asyncio
-    from dotenv import load_dotenv
-    load_dotenv()  # Load environment variables from .env file if present
-    result = asyncio.run(test_experiment_stream())
-    print("Final result:", "Success" if result.get("experiment_suggestions") else "Failed")
-
-
