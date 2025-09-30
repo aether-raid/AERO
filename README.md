@@ -1,4 +1,5 @@
 # AERO: Automated Exploration, Research & Orchestration – A Framework for Machine Learning Research
+> [Jacob Wong](https://www.linkedin.com/in/jacob-wong-160898274/), [Ethan Lau](https://www.linkedin.com/in/ethan-lau-yu-cheng/) and [Charmaine Chua](https://www.linkedin.com/in/charmaine-chua-3a9668274/)
 
 [![PyPI Latest Release](https://img.shields.io/pypi/v/aeroml.svg?logo=python&logoColor=white&color=blue)](https://pypi.org/project/aeroml/)
 [![GitHub Release Date](https://img.shields.io/github/release-date/aether-raid/aero?logo=github&label=latest%20release&color=blue)](https://github.com/aether-raid/aero/releases/latest)
@@ -38,6 +39,7 @@ These workflows are powered by [LangGraph](https://github.com/langchain-ai/langg
    * [Experimentalist](#experimentalist-)
    * [Report Writer](#report-writer-)
 3.  [References](#references)
+4.  [About the Team](#about-the-team)
 
 ## 🛠️ Installation and Set-Up
 
@@ -335,3 +337,22 @@ async for update in await write_paper(
 [5] Gottweis, J., Weng, W. H., Daryin, A., Tu, T., Palepu, A., Sirkovic, P., ... & Natarajan, V. (2025). Towards an AI co-scientist. _arXiv preprint arXiv:2502.18864_.
 
 [6] Schmidgall, S., Su, Y., Wang, Z., Sun, X., Wu, J., Yu, X., ... & Barsoum, E. (2025). Agent laboratory: Using llm agents as research assistants. _arXiv preprint arXiv:2501.04227._
+
+## About the Team
+
+AERO was developed by a team of AI Solutions Interns at [AETHER](https://github.com/aether-raid), the experimentations wing of [RAiD](https://rsaf-agile-inno-digital.defence.gov.sg/) focused on rapid prototyping and harnessing of technologies. This prototype was one of many developed for AETHER's internal Agentic AI Hackathon. The team includes:
+
+- [Jacob Wong](https://www.linkedin.com/in/jacob-wong-160898274/)
+- [Ethan Lau](https://www.linkedin.com/in/ethan-lau-yu-cheng/)
+- [Charmaine Chua](https://www.linkedin.com/in/charmaine-chua-3a9668274/)
+
+
+<p align="center">
+<a href="https://star-history.com/#aether-raid/modular-search">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=aether-raid/AERO&type=Date&theme=dark" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=aether-raid/AERO&type=Date" />
+    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=aether-raid/AERO&type=Date" />
+  </picture>
+</a>
+</p>
