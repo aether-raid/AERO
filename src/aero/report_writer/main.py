@@ -154,16 +154,52 @@ def _generate_reference_list(sources: List[Dict[str, Any]]) -> str:
 
     return "## References\n\n" + "\n\n".join(references)
 
-from .results_analysis import _analyze_results_node
-from .paper_setup import _setup_paper_node
-from .sources import _find_supporting_sources_node
-from .generate_content import _generate_content_node
-from .critique_and_refinement import _critique_paper_node
-from .finalize_paper import _finalize_paper_node
-from .critique_and_refinement import _determine_paper_refinement_path
-from .file_extraction import extract_files_from_paths, extract_files_from_bytes
+def _initialize_clients_in_state(state: PaperWritingState) -> PaperWritingState:
+    """Initialize clients and store them in state for workflow use."""
+    try:
+        # Initialize OpenAI client
+        api_key = os.getenv("OPENAI_API_KEY")
+        base_url = os.getenv("BASE_URL")
+        model = os.getenv("MODEL") or "gemini/gemini-2.5-flash"
+        
+        if api_key:
+            import openai
+            client = openai.OpenAI(
+                api_key=api_key,
+                base_url=base_url
+            )
+            state["client"] = client
+            state["model"] = model
+            _write_stream("AI model connected successfully")
+        else:
+            state["errors"] = state.get("errors", []) + ["OpenAI API key not configured"]
+            _write_stream("AI model configuration missing")
+            
+        # Initialize Tavily client
+        tavily_key = os.getenv("TAVILY_API_KEY")
+        if tavily_key:
+            tavily_client = TavilyClient(api_key=tavily_key)
+            state["tavily_client"] = tavily_client
+            _write_stream("Web search service connected")
+        else:
+            state["errors"] = state.get("errors", []) + ["Tavily API key not configured"]
+            _write_stream("Web search unavailable - API key not configured")
+            
+    except Exception as e:
+        error_msg = f"Client initialization failed: {str(e)}"
+        state["errors"] = state.get("errors", []) + [error_msg]
+        _write_stream(f"Client setup error: {error_msg}")
+        
+    return state
 
-from utils.llm_client import load_openai_client  
+from aero.report_writer.results_analysis import _analyze_results_node
+from aero.report_writer.paper_setup import _setup_paper_node
+from aero.report_writer.sources import _find_supporting_sources_node
+from aero.report_writer.generate_content import _generate_content_node
+from aero.report_writer.critique_and_refinement import _critique_paper_node
+from aero.report_writer.finalize_paper import _finalize_paper_node
+from aero.report_writer.critique_and_refinement import _determine_paper_refinement_path
+from aero.report_writer.file_extraction import extract_files_from_paths, extract_files_from_bytes
 
 # ==================================================================================
 # WORKFLOW GRAPH BUILDER

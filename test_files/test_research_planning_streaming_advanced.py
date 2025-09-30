@@ -15,14 +15,14 @@ from dotenv import load_dotenv
 
 load_dotenv()
 # Add the src directory to the path so we can import aero
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 async def test_research_planning_streaming():
     """Test the research planning streaming workflow with a sample prompt."""
 
     try:
         # Import the streaming workflow function
-        from research_planner.main import plan_research
+        from aero.research_planner.main import plan_research
 
         # Sample prompt for testing
         test_prompt = "Develop a comprehensive research plan for investigating the effectiveness of transformer-based models in natural language processing applications."

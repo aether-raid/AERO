@@ -15,14 +15,14 @@ from dotenv import load_dotenv
 
 load_dotenv()
 # Add the src directory to the path so we can import aero
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 async def test_paper_writing_streaming():
     """Test the paper writing streaming workflow with a sample prompt."""
 
     try:
         # Import the streaming workflow function
-        from report_writer.main import write_paper
+        from aero.report_writer.main import write_paper
 
         # Sample prompt for testing
         test_prompt = "Write a comprehensive paper about machine learning fundamentals, covering supervised learning, unsupervised learning, and deep learning approaches."
