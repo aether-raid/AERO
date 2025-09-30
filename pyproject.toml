@@ -1,6 +1,6 @@
 [project]
 name = "aeroml"
-version = "0.1.0"
+version = "1.0.0"
 description = "AERO: Automated Exploration, Research & Orchestration – A Framework for Machine Learning Research"
 readme = "README.md"
 authors = [
